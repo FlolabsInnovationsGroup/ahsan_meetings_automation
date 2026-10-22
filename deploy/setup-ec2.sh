@@ -10,7 +10,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${DATA_DIR:-$REPO_DIR/data}"
 RETENTION_DAYS="${RETENTION_DAYS:-3}"
-SWAP_SIZE_GB="${SWAP_SIZE_GB:-8}"
+SWAP_SIZE_GB="${SWAP_SIZE_GB:-4}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run with sudo: sudo bash deploy/setup-ec2.sh" >&2
@@ -37,8 +37,10 @@ if [[ -n "${SUDO_USER:-}" ]]; then
 fi
 
 echo "==> Swap"
-MEM_GB=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
-if [[ "$MEM_GB" -lt 8 ]] && ! swapon --show | grep -q /swapfile; then
+MEM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
+MEM_GB=$(( (MEM_MB + 512) / 1024 ))
+# An "8 GB" instance reports ~7.6 GB, hence the 7000 MB threshold.
+if [[ "$MEM_MB" -lt 7000 ]] && ! swapon --show | grep -q /swapfile; then
   fallocate -l "${SWAP_SIZE_GB}G" /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
