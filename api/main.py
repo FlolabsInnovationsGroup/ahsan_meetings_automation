@@ -43,6 +43,12 @@ async def index() -> str:
     return (WEB_DIR / "index.html").read_text(encoding="utf-8")
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy() -> str:
+    """Public privacy policy (linked from the Google OAuth consent screen)."""
+    return (WEB_DIR / "privacy.html").read_text(encoding="utf-8")
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     """Liveness probe for the container healthcheck."""

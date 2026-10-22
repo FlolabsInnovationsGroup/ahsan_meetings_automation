@@ -119,3 +119,11 @@ def test_startup_fails_jobs_interrupted_by_restart():
 
     assert fetched.status_code == 200
     assert fetched.json()["status"] == JobStatus.FAILED.value
+
+
+def test_privacy_page_is_served():
+    client = TestClient(api_main.app)
+    response = client.get("/privacy")
+    assert response.status_code == 200
+    assert "Privacy Policy" in response.text
+    assert "YouTube API Services" in response.text

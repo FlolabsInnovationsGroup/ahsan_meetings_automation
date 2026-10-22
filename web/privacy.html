@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Privacy Policy · FloLabs Highlight Cutter</title>
+<style>
+  body { margin: 0; background: #e8e3d3; color: #211f1a; font: 16px/1.65 -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 20px 64px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 28px 0 6px; }
+  p, li { margin: 0 0 10px; }
+  .muted { color: #6f6a5c; font-size: 14px; }
+  a { color: #2e4c6d; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="muted">FloLabs Highlight Cutter · operated by FloLabs Innovations Group · last updated October 23, 2026</p>
+
+  <p>FloLabs Highlight Cutter is an internal tool used by FloLabs Innovations Group to trim recordings of
+  its own meetings and publish them to the FloLabs YouTube channel. Access is limited to FloLabs team
+  members with a password.</p>
+
+  <h2>What the tool processes</h2>
+  <ul>
+    <li>Meeting recordings and their transcripts that a team member uploads.</li>
+    <li>The trimmed video and the list of cuts the tool produces.</li>
+  </ul>
+
+  <h2>How it is used</h2>
+  <ul>
+    <li>Transcript text is sent to Anthropic's Claude API, which decides which parts of the meeting to keep.</li>
+    <li>When a team member chooses to publish, the trimmed video is uploaded to the FloLabs YouTube channel
+      using the YouTube API Services, with the title, description and visibility that team member chose.</li>
+  </ul>
+
+  <h2>YouTube API Services</h2>
+  <p>This tool uses YouTube API Services. By using it you agree to the
+    <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>. Google's handling of data is described
+    in the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</p>
+  <p>The tool only requests permission to upload videos to, and read the name of, the connected FloLabs channel.
+    It stores one access token for that channel on the FloLabs server, readable only by the tool. Access can be
+    revoked at any time from the Google account's
+    <a href="https://myaccount.google.com/connections">third-party connections</a> page, or with "Disconnect" in the tool.</p>
+
+  <h2>Storage and deletion</h2>
+  <ul>
+    <li>Recordings, transcripts and trimmed videos are stored on FloLabs' own server (Amazon Web Services, Frankfurt).</li>
+    <li>They are deleted from the server right after a successful upload to YouTube, and in any case within 3 days.</li>
+    <li>No data is sold or shared with anyone other than the services named above.</li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>Questions or deletion requests: <a href="mailto:social.flomadlabs@gmail.com">social.flomadlabs@gmail.com</a></p>
+</main>
+</body>
+</html>
