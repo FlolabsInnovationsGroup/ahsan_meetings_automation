@@ -22,7 +22,7 @@ jobs:
         run: |
           pip install "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
             "pydantic-settings>=2.3" "python-multipart>=0.0.9" "google-genai>=0.3" \
-            yt-dlp google-api-python-client google-auth-oauthlib "pytest>=8.2" "httpx>=0.27" "ruff>=0.6"
+            yt-dlp anthropic google-api-python-client google-auth-oauthlib "pytest>=8.2" "httpx>=0.27" "ruff>=0.6"
 
       - name: Lint
         run: ruff check .

@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     hf_token: str = ""
+
+    # Which LLM makes the keep/remove decisions: "gemini" or "anthropic".
+    llm_provider: str = "gemini"
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5-5"
+    anthropic_max_tokens: int = 16000
+
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
     # Segments are batched into calls of at most this size so a single response

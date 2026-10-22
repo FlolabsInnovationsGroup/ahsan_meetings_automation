@@ -15,7 +15,8 @@ Gemini API (and YouTube, for URL jobs) is called from outside.
 ## What you need before starting
 
 - An AWS account with permission to create EC2 instances, security groups and Elastic IPs.
-- `GEMINI_API_KEY`.
+- An LLM key for the keep/cut decisions: `ANTHROPIC_API_KEY` (default,
+  `LLM_PROVIDER=anthropic`) or `GEMINI_API_KEY` (`LLM_PROVIDER=gemini`).
 - `HF_TOKEN` (only if you will process recordings **without** an attached
   `.vtt`/`.srt` transcript; see README for the 3 gated models to accept).
 - A domain or subdomain you can point at the server (for example
@@ -97,7 +98,7 @@ ssh -i your-key.pem ubuntu@ELASTIC_IP
 cd ahsan_meetings_automation
 
 cp .env.example .env
-nano .env                       # GEMINI_API_KEY, HF_TOKEN, YouTube settings (see below). Keep FFMPEG_BIN=ffmpeg
+nano .env                       # LLM_PROVIDER + its key, HF_TOKEN, YouTube settings. Keep FFMPEG_BIN=ffmpeg
 chmod 600 .env
 
 cp deploy/caddy.env.example deploy/caddy.env
