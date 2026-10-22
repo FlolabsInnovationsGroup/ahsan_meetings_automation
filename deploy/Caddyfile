@@ -9,8 +9,10 @@
 
 	# The API has no authentication of its own, so everything sits behind
 	# a password. n8n or scripts can send the same credentials as a
-	# standard "Authorization: Basic ..." header.
-	basic_auth {
+	# standard "Authorization: Basic ..." header. Only the privacy policy
+	# is public: Google requires it on the OAuth consent screen.
+	@protected not path /privacy
+	basic_auth @protected {
 		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
 	}
 
