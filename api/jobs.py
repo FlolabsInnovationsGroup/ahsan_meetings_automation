@@ -3,7 +3,7 @@ import os
 import threading
 
 from core.config import get_settings
-from core.models import JobRecord
+from core.models import JobRecord, JobStatus
 
 
 class JobStore:
@@ -41,6 +41,32 @@ class JobStore:
         with self._lock:
             self._cache[job_id] = job
         return job
+
+    def fail_interrupted(self) -> int:
+        """Mark jobs left mid-pipeline by a previous process as FAILED.
+
+        Jobs run as in-process BackgroundTasks, so a restart (deploy, crash,
+        container restart) abandons any running job. Without this, its job.json
+        stays at e.g. "transcribing" forever and the UI polls it endlessly.
+        Call once at startup, before any new job is accepted.
+        """
+        terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC}
+        jobs_dir = get_settings().jobs_dir
+        if not jobs_dir.exists():
+            return 0
+        count = 0
+        for path in jobs_dir.glob("*/job.json"):
+            try:
+                job = JobRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+            if job.status in terminal:
+                continue
+            job.status = JobStatus.FAILED
+            job.error = "Interrupted by a server restart. Please submit the recording again."
+            self.update(job)
+            count += 1
+        return count
 
     def _persist(self, job: JobRecord) -> None:
         path = self._path(job.job_id)

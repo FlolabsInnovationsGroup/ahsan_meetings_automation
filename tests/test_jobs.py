@@ -93,3 +93,33 @@ def test_concurrent_updates_do_not_corrupt_or_lose_the_record():
     final = JobStore().get(job.job_id)
     assert final is not None
     assert final.status in statuses
+
+
+def test_fail_interrupted_marks_only_in_progress_jobs_failed():
+    """After a restart, jobs abandoned mid-pipeline must not stay stuck in a
+    running status forever; finished jobs must be left untouched."""
+    store = JobStore()
+    store.create(_job(job_id="running", status=JobStatus.TRANSCRIBING))
+    store.create(_job(job_id="queued", status=JobStatus.QUEUED))
+    store.create(_job(job_id="done", status=JobStatus.DONE))
+    store.create(_job(job_id="desync", status=JobStatus.SKIPPED_DESYNC))
+
+    fresh = JobStore()  # simulates the new process after a restart
+    assert fresh.fail_interrupted() == 2
+
+    reread = JobStore()
+    assert reread.get("running").status == JobStatus.FAILED
+    assert "restart" in reread.get("running").error
+    assert reread.get("queued").status == JobStatus.FAILED
+    assert reread.get("done").status == JobStatus.DONE
+    assert reread.get("desync").status == JobStatus.SKIPPED_DESYNC
+
+
+def test_fail_interrupted_skips_unreadable_job_files():
+    store = JobStore()
+    store.create(_job(job_id="ok", status=JobStatus.SLICING))
+    bad = store._path("corrupt")
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("{not json", encoding="utf-8")
+
+    assert JobStore().fail_interrupted() == 1

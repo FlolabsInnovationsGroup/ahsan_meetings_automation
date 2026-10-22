@@ -1,0 +1,4 @@
+# Shell scripts run on Linux servers: always LF, even when checked out on Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+deploy/Caddyfile text eol=lf

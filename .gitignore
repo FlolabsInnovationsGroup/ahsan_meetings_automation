@@ -10,3 +10,7 @@ storage/jobs/*
 .pytest_cache/
 *.egg-info/
 .ruff_cache/
+
+# Deployment
+data/
+deploy/caddy.env

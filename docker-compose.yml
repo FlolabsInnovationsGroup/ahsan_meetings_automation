@@ -1,0 +1,52 @@
+# Production stack: the API plus Caddy (automatic HTTPS + password protection).
+# See DEPLOY.md. Run from the repo root on the server:
+#   docker compose up -d --build
+
+services:
+  app:
+    build: .
+    image: highlight-cutter:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      STORAGE_DIR: /data
+    volumes:
+      # Uploaded videos, job state, outputs. A host folder (not a named volume)
+      # so deploy/cleanup.sh can prune old jobs from the host.
+      - ${DATA_DIR:-./data}:/data
+      # Downloaded model weights (1-2 GB). Survives rebuilds.
+      - model-cache:/home/app/.cache
+    # Not published on the host: only Caddy can reach it.
+    expose:
+      - "8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    env_file: deploy/caddy.env
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  model-cache:
+  caddy-data:
+  caddy-config:

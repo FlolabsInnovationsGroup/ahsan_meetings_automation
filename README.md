@@ -116,6 +116,10 @@ the result). Or drive it directly:
 n8n (or any orchestrator) calls this API over HTTP per section 6 of the spec
 — it should not run ffmpeg itself.
 
+## Deploying
+
+See [DEPLOY.md](DEPLOY.md) for the AWS setup (EC2 + Docker + Caddy with HTTPS and a password).
+
 ## Tests
 
 ```bash

@@ -98,3 +98,24 @@ def test_index_serves_html():
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "Highlight Cutter" in response.text
+
+
+def test_healthz():
+    client = TestClient(api_main.app)
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_startup_fails_jobs_interrupted_by_restart():
+    from api.jobs import JobStore
+    from core.models import JobRecord
+
+    JobStore().create(JobRecord(job_id="stuck", status=JobStatus.DECIDING, source_path="x.mp4"))
+    api_main.job_store._cache.pop("stuck", None)
+
+    with TestClient(api_main.app) as client:  # context manager runs the lifespan
+        fetched = client.get("/jobs/stuck")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == JobStatus.FAILED.value

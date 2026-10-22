@@ -1,11 +1,12 @@
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from core.logging import configure_logging
+from core.logging import configure_logging, get_logger
 from core.models import EditMode, JobRecord, JobStatus
 from ingest.store import store_transcript, store_video
 from pipeline import run_pipeline, run_youtube_pipeline
@@ -13,8 +14,18 @@ from pipeline import run_pipeline, run_youtube_pipeline
 from .jobs import job_store
 
 configure_logging()
+logger = get_logger(__name__)
 
-app = FastAPI(title="Meeting Crosstalk Remover / Highlight Cutter")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    interrupted = job_store.fail_interrupted()
+    if interrupted:
+        logger.warning("marked %d interrupted job(s) as failed after restart", interrupted)
+    yield
+
+
+app = FastAPI(title="Meeting Crosstalk Remover / Highlight Cutter", lifespan=lifespan)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -27,6 +38,12 @@ class YoutubeJobRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
     return (WEB_DIR / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    """Liveness probe for the container healthcheck."""
+    return {"status": "ok"}
 
 
 @app.post("/jobs", response_model=JobRecord)
