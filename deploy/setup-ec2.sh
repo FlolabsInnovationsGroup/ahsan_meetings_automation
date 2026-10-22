@@ -9,7 +9,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${DATA_DIR:-$REPO_DIR/data}"
-RETENTION_DAYS="${RETENTION_DAYS:-14}"
+RETENTION_DAYS="${RETENTION_DAYS:-3}"
 SWAP_SIZE_GB="${SWAP_SIZE_GB:-8}"
 
 if [[ $EUID -ne 0 ]]; then

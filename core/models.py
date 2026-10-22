@@ -63,6 +63,10 @@ EditMode = Literal["crosstalk", "highlights"]
 
 TranscriptSource = Literal["asr", "youtube_captions", "uploaded_transcript"]
 
+YoutubeStatus = Literal["uploading", "published", "failed"]
+
+YoutubePrivacy = Literal["private", "unlisted", "public"]
+
 
 class JobRecord(BaseModel):
     job_id: str
@@ -84,3 +88,13 @@ class JobRecord(BaseModel):
     edl_path: str | None = None
     transcript_path: str | None = None
     clean_transcript_path: str | None = None
+    # Publishing the finished cut to YouTube (publish/youtube.py).
+    youtube_status: YoutubeStatus | None = None
+    youtube_progress: int = 0
+    youtube_video_id: str | None = None
+    youtube_url: str | None = None
+    youtube_error: str | None = None
+    # True once the job's videos/transcripts were removed from the server
+    # (after publishing, or on explicit request). job.json itself is kept so
+    # the YouTube link stays visible.
+    files_deleted: bool = False

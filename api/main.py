@@ -1,15 +1,18 @@
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
 from core.logging import configure_logging, get_logger
-from core.models import EditMode, JobRecord, JobStatus
+from core.models import EditMode, JobRecord, JobStatus, YoutubePrivacy
 from ingest.store import store_transcript, store_video
 from pipeline import run_pipeline, run_youtube_pipeline
+from publish import delete_job_files, youtube
+from publish.youtube import YoutubeNotConnectedError
 
 from .jobs import job_store
 
@@ -122,6 +125,98 @@ async def get_job_transcript(job_id: str, clean: bool = True) -> FileResponse:
     if not path:
         raise HTTPException(status_code=404, detail="transcript not available")
     return FileResponse(path, media_type="application/json")
+
+
+class PublishRequest(BaseModel):
+    # YouTube's own limits: 100 characters for titles, 5000 bytes for descriptions.
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=5000)
+    privacy: YoutubePrivacy = "private"
+    delete_after: bool = True
+
+
+@app.post("/jobs/{job_id}/publish", response_model=JobRecord)
+async def publish_to_youtube(job_id: str, body: PublishRequest, background_tasks: BackgroundTasks) -> JobRecord:
+    job = _require_done(job_id)
+    if job.files_deleted or not job.output_video_path:
+        raise HTTPException(status_code=409, detail="the video was already removed from the server")
+    if job.youtube_status == "uploading":
+        raise HTTPException(status_code=409, detail="already uploading")
+    if not youtube.youtube_status()["connected"]:
+        raise HTTPException(status_code=409, detail="no YouTube channel connected yet")
+    title = body.title.strip()
+    if not title or "<" in title or ">" in title:
+        # YouTube rejects titles containing angle brackets.
+        raise HTTPException(status_code=400, detail="title must not be empty or contain < or >")
+
+    job.youtube_status = "uploading"
+    job.youtube_progress = 0
+    job.youtube_error = None
+    job_store.update(job)
+    background_tasks.add_task(
+        youtube.publish_job, job, job_store.update, title, body.description, body.privacy, body.delete_after
+    )
+    return job
+
+
+@app.delete("/jobs/{job_id}/files", response_model=JobRecord)
+async def delete_files(job_id: str) -> JobRecord:
+    """Remove a finished job's videos and transcripts from the server, keep its record."""
+    job = _require_finished(job_id)
+    delete_job_files(job)
+    job_store.update(job)
+    return job
+
+
+@app.delete("/jobs/{job_id}", status_code=204)
+async def delete_job(job_id: str) -> Response:
+    """Remove a finished job completely (files and record)."""
+    job = _require_finished(job_id)
+    delete_job_files(job)
+    job_store.delete(job_id)
+    return Response(status_code=204)
+
+
+@app.get("/youtube/status")
+async def get_youtube_status() -> dict:
+    return youtube.youtube_status()
+
+
+@app.get("/youtube/connect")
+async def youtube_connect(return_to: str = "/") -> RedirectResponse:
+    try:
+        url = youtube.start_connect(return_to)
+    except YoutubeNotConnectedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/youtube/callback")
+async def youtube_callback(state: str = "", code: str = "", error: str = "") -> RedirectResponse:
+    if error:
+        return RedirectResponse(f"/?youtube_error={quote(error)}", status_code=302)
+    try:
+        return_to = youtube.finish_connect(state, code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(return_to, status_code=302)
+
+
+@app.post("/youtube/disconnect")
+async def youtube_disconnect() -> dict:
+    youtube.disconnect()
+    return youtube.youtube_status()
+
+
+def _require_finished(job_id: str) -> JobRecord:
+    job = job_store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status not in (JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC):
+        raise HTTPException(status_code=409, detail="job is still processing")
+    if job.youtube_status == "uploading":
+        raise HTTPException(status_code=409, detail="job is uploading to YouTube")
+    return job
 
 
 def _require_done(job_id: str) -> JobRecord:

@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import threading
 
 from core.config import get_settings
@@ -60,13 +61,25 @@ class JobStore:
                 job = JobRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 continue
-            if job.status in terminal:
+            if job.status not in terminal:
+                job.status = JobStatus.FAILED
+                job.error = "Interrupted by a server restart. Please submit the recording again."
+            elif job.youtube_status == "uploading":
+                # The cut itself is fine; only the upload was cut off, so it
+                # can simply be published again.
+                job.youtube_status = "failed"
+                job.youtube_error = "Upload interrupted by a server restart. Please publish again."
+            else:
                 continue
-            job.status = JobStatus.FAILED
-            job.error = "Interrupted by a server restart. Please submit the recording again."
             self.update(job)
             count += 1
         return count
+
+    def delete(self, job_id: str) -> None:
+        """Forget a job entirely: drop it from the cache and remove its folder."""
+        with self._lock:
+            self._cache.pop(job_id, None)
+        shutil.rmtree(self._path(job_id).parent, ignore_errors=True)
 
     def _persist(self, job: JobRecord) -> None:
         path = self._path(job.job_id)

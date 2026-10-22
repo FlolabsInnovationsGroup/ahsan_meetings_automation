@@ -39,7 +39,7 @@ AWS console > **EC2 > Launch instance**:
 | AMI | Ubuntu Server 24.04 LTS (x86_64) |
 | Instance type | `t3.large` (2 vCPU, 8 GB RAM). `t3.medium` (4 GB) also works: the setup script adds swap, WhisperX just runs slower |
 | Key pair | Create one, download the `.pem`, keep it safe |
-| Storage | 60 GB **gp3** (videos are large; raise if you keep many) |
+| Storage | 30 GB **gp3**. Recordings are deleted once published, so the disk only holds the system, the Docker image, model weights and the meetings currently in progress. EBS volumes can be enlarged later without downtime, never shrunk |
 
 Network settings > **Create security group** with these inbound rules:
 
@@ -86,9 +86,9 @@ exit            # log out and back in so docker works without sudo
 ```
 
 `setup-ec2.sh` installs Docker, adds swap if RAM < 8 GB, creates `data/`
-owned by the container user, schedules a daily cleanup of jobs older than
-14 days (`sudo RETENTION_DAYS=30 bash deploy/setup-ec2.sh` to change it),
-and turns on automatic security updates.
+owned by the container user, schedules a daily cleanup of anything older
+than 3 days that was never published (`sudo RETENTION_DAYS=7 bash
+deploy/setup-ec2.sh` to change it), and turns on automatic security updates.
 
 ## 6. Configure secrets
 
@@ -97,7 +97,7 @@ ssh -i your-key.pem ubuntu@ELASTIC_IP
 cd ahsan_meetings_automation
 
 cp .env.example .env
-nano .env                       # GEMINI_API_KEY, HF_TOKEN. Keep FFMPEG_BIN=ffmpeg (not a Windows path)
+nano .env                       # GEMINI_API_KEY, HF_TOKEN, YouTube settings (see below). Keep FFMPEG_BIN=ffmpeg
 chmod 600 .env
 
 cp deploy/caddy.env.example deploy/caddy.env
@@ -123,6 +123,64 @@ Open `https://YOUR_DOMAIN`, log in with the user and password from step 6.
 
 The first job that runs WhisperX downloads 1-2 GB of model weights; later
 jobs reuse them from the `model-cache` volume.
+
+## Publishing to YouTube
+
+When a cut is done, the page shows **Publish to YouTube**: title,
+description, visibility (Private by default), and "Remove from server after
+upload" (on by default). After a successful upload the recording, the cut
+and the transcripts are deleted from the server; only the small job record
+with the YouTube link stays.
+
+The server uploads with its own long-lived access to the company channel,
+set up once. Anyone who knows the site password can publish to the channel,
+so share that password only with people allowed to post.
+
+### One-time setup (about 15 minutes)
+
+Use the Google account that owns or manages the company YouTube channel.
+
+1. **Google Cloud project.** console.cloud.google.com > project picker >
+   **New project**, name it `flolabs-highlight-cutter`.
+2. **Enable the API.** APIs & Services > Library > **YouTube Data API v3**
+   > Enable.
+3. **Consent screen.** Google Auth Platform (or "OAuth consent screen"):
+   - If the channel's Google account belongs to your Google Workspace
+     domain, choose **Internal**. No Google review needed.
+   - Otherwise choose **External**, then set the publishing status to
+     **In production**. Leave it in "Testing" and the connection silently
+     expires every 7 days. Google shows an "unverified app" warning during
+     the one-time sign-in; continue via "Advanced".
+4. **OAuth client.** Credentials > Create credentials > **OAuth client ID**
+   > Application type **Web application** > Authorized redirect URIs:
+   `https://YOUR_DOMAIN/youtube/callback`. Copy the client ID and secret.
+   Google needs a real domain here; an `sslip.io` name may be rejected.
+5. **Server.** Add to `.env` and recreate the app container:
+   ```bash
+   YOUTUBE_CLIENT_ID=...apps.googleusercontent.com
+   YOUTUBE_CLIENT_SECRET=...
+   PUBLIC_BASE_URL=https://YOUR_DOMAIN
+   ```
+   ```bash
+   docker compose up -d
+   ```
+6. **Connect.** Open the site, finish a cut, click **Connect YouTube
+   channel**, sign in, pick the company channel if Google asks which one,
+   and allow access. The page shows "Channel: ..." when it worked.
+
+The access token is stored in `data/youtube_token.json` (readable only by
+the app). "Disconnect" on the page removes it.
+
+### Limits to know
+
+- Google's quota allows roughly 100 uploads per day per project, plenty
+  for meetings.
+- Google used to lock videos uploaded through unaudited API projects to
+  Private. Its current documentation says this no longer applies. Check the
+  first upload: if YouTube Studio shows it locked to Private, request an API
+  audit for the project (YouTube API Services > audit form).
+- If uploads start failing with "connection expired", reconnect the channel
+  from the page.
 
 ## Calling it from n8n or scripts
 
@@ -159,6 +217,6 @@ restart"), so redeploy when nobody is processing a recording.
   data-center IPs. Uploading files is not affected.
 - **One shared password.** Fine for an internal tool. Per-user accounts
   would need an auth layer in the app or in front of it.
-- **No backups of `data/`.** Outputs are re-creatable from the original
-  recordings and are pruned after the retention window anyway. If you need
-  them kept, enable EBS snapshots via Amazon Data Lifecycle Manager.
+- **No backups of `data/`.** By design: recordings live on YouTube once
+  published and are removed from the server. If the YouTube token file is
+  lost, just reconnect the channel.

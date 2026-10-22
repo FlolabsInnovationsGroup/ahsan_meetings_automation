@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Deletes uploads, transcripts and job folders older than RETENTION_DAYS.
-# Installed as a daily cron job by deploy/setup-ec2.sh. Without it the disk
-# fills up: every source video and every output video is kept forever.
+# Installed as a daily cron job by deploy/setup-ec2.sh. Recordings are
+# normally removed right after they are published to YouTube; this is the
+# safety net for jobs that were never published or whose upload failed.
 set -euo pipefail
 
 DATA_DIR="${DATA_DIR:?DATA_DIR must be set}"
-RETENTION_DAYS="${RETENTION_DAYS:-14}"
+RETENTION_DAYS="${RETENTION_DAYS:-3}"
 
 echo "$(date -Is) pruning files older than ${RETENTION_DAYS} days in ${DATA_DIR}"
 

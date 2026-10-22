@@ -112,6 +112,13 @@ the result). Or drive it directly:
 - `GET /jobs/{job_id}/edl` — the Edit Decision List used to produce it.
 - `GET /jobs/{job_id}/transcript?clean=true` — transcript remapped onto the
   trimmed timeline (`clean=false` for the original, untrimmed transcript).
+- `POST /jobs/{job_id}/publish` — JSON `{"title", "description", "privacy":
+  "private"|"unlisted"|"public", "delete_after": true}`: uploads the cut to
+  the connected YouTube channel, then removes the job's files from the server.
+- `DELETE /jobs/{job_id}/files` — remove a job's videos/transcripts, keep its
+  record. `DELETE /jobs/{job_id}` — remove the job completely.
+- `GET /youtube/status`, `GET /youtube/connect`, `POST /youtube/disconnect` —
+  one-time connection to the company channel (see DEPLOY.md).
 
 n8n (or any orchestrator) calls this API over HTTP per section 6 of the spec
 — it should not run ffmpeg itself.
