@@ -18,3 +18,7 @@ branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
 .gitignore
+
+# Local-only credentials (SSH key, full .env copy). Never commit.
+secrets/
+*.pem
