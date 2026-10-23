@@ -503,6 +503,7 @@ python3 deploy/zoom-check.py
 | restart للـ app | `docker compose restart app` |
 | تطبّق تغيير في `.env` أو `caddy.env` | `docker compose up -d --force-recreate app` (أو `caddy`) |
 | تشوف الديسك | `df -h / && du -sh data/*` |
+| تفضّي مكان (كل build بيسيب cache ممكن يوصل كام جيجا) | `docker image prune -f && docker builder prune -f && df -h /` |
 | سجل المسح الأوتوماتيك | `cat /var/log/highlight-cutter-cleanup.log` |
 | تختبر Zoom | `python3 deploy/zoom-check.py` |
 

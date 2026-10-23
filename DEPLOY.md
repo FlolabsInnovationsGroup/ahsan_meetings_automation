@@ -247,6 +247,7 @@ Remove someone: `sed -i '/ <name>$/d' ~/.ssh/authorized_keys`.
 | App logs | `docker compose logs -f app` |
 | Restart | `docker compose restart app` |
 | Disk usage | `df -h / && du -sh data/*` |
+| Free space (each build leaves GBs of cache) | `docker image prune -f && docker builder prune -f && df -h /` |
 | Cleanup log | `cat /var/log/highlight-cutter-cleanup.log` |
 
 Restarting or redeploying while a job is running abandons that job. On
