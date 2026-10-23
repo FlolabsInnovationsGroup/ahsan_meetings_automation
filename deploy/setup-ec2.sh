@@ -4,7 +4,8 @@
 #   sudo bash deploy/setup-ec2.sh
 #
 # Installs Docker, adds swap if the machine has less than 8 GB RAM, prepares
-# the data folder and schedules the daily cleanup job. Safe to re-run.
+# the data folder, schedules the daily cleanup job, locks SSH to keys only
+# (with fail2ban) and turns on security updates. Safe to re-run.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -65,6 +66,32 @@ cat > /etc/cron.d/highlight-cutter-cleanup <<EOF
 30 3 * * * root DATA_DIR=$DATA_DIR RETENTION_DAYS=$RETENTION_DAYS $REPO_DIR/deploy/cleanup.sh >> /var/log/highlight-cutter-cleanup.log 2>&1
 EOF
 chmod 644 /etc/cron.d/highlight-cutter-cleanup
+
+echo "==> SSH: keys only, and ban IPs that keep guessing"
+# Port 22 may be open to anywhere (each person gets their own key in
+# ~/.ssh/authorized_keys), so passwords must never be accepted.
+cat > /etc/ssh/sshd_config.d/00-keys-only.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+# Ubuntu 24.04 starts sshd on demand (ssh.socket), so the privilege
+# separation dir may not exist yet and "sshd -t" would fail without it.
+mkdir -p /run/sshd
+sshd -t
+systemctl try-reload-or-restart ssh
+# Fresh package lists: the first fail2ban build for 24.04 crashed on Python 3.12.
+apt-get update
+apt-get install -y fail2ban
+cat > /etc/fail2ban/jail.d/sshd.local <<'EOF'
+[sshd]
+enabled = true
+maxretry = 5
+findtime = 10m
+bantime = 1h
+EOF
+systemctl enable fail2ban
+systemctl restart fail2ban
 
 echo "==> Automatic security updates"
 apt-get install -y unattended-upgrades

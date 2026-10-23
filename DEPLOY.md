@@ -46,7 +46,7 @@ Network settings > **Create security group** with these inbound rules:
 
 | Type | Port | Source |
 |---|---|---|
-| SSH | 22 | **My IP** only (never 0.0.0.0/0) |
+| SSH | 22 | **My IP** to start (see "Team SSH access" to open it safely for a team) |
 | HTTP | 80 | Anywhere (needed for the certificate and the redirect to HTTPS) |
 | HTTPS | 443 | Anywhere |
 
@@ -212,6 +212,32 @@ curl -u flolabs:PASSWORD -F file=@meeting.mp4 -F transcript=@meeting.vtt \
 ```
 
 In n8n: HTTP Request node > Authentication > Basic Auth.
+
+## Team SSH access
+
+To let people in from anywhere without chasing their changing IPs, open SSH to
+everyone and rely on keys: the server accepts no passwords. Never share the
+`.pem`; each person gets their own key so access can be removed one by one.
+
+Once:
+
+1. On the server first (setup-ec2.sh turns off passwords and root login and
+   installs fail2ban; safe to re-run):
+
+```bash
+cd ~/ahsan_meetings_automation && git pull
+sudo bash deploy/setup-ec2.sh
+sudo sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin) '   # all "no"
+sudo fail2ban-client status sshd
+```
+
+2. Only then: EC2 > Security Groups > inbound SSH rule > Source **Anywhere-IPv4**.
+
+Per person: they run `ssh-keygen -t ed25519 -C "<name>"` and send you the
+`~/.ssh/id_ed25519.pub` line (public, safe to send). You add it with
+`echo "<line>" >> ~/.ssh/authorized_keys`; they connect with
+`ssh ubuntu@<ELASTIC_IP>`. List access: `cut -d' ' -f3- ~/.ssh/authorized_keys`.
+Remove someone: `sed -i '/ <name>$/d' ~/.ssh/authorized_keys`.
 
 ## Day-to-day operations
 
