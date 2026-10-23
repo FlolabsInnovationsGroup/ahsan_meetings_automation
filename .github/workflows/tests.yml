@@ -59,11 +59,16 @@ jobs:
             exit 0
           fi
           install -m 700 -d ~/.ssh
-          # Secrets pasted from a terminal often carry \r or trailing spaces.
-          printf '%s\n' "$SSH_KEY" | tr -d '\r' | sed 's/[[:space:]]*$//' > ~/.ssh/deploy
+          # The key is stored base64 on one line (multi-line keys get mangled
+          # when copied out of a terminal). A plain BEGIN...END key works too.
+          if printf '%s' "$SSH_KEY" | grep -q -- '-----BEGIN'; then
+            printf '%s\n' "$SSH_KEY" | tr -d '\r' | sed 's/[[:space:]]*$//' > ~/.ssh/deploy
+          else
+            printf '%s' "$SSH_KEY" | tr -d ' \r\n\t' | base64 -d > ~/.ssh/deploy || true
+          fi
           chmod 600 ~/.ssh/deploy
           if ! ssh-keygen -y -f ~/.ssh/deploy > /dev/null; then
-            echo "::error::DEPLOY_SSH_KEY isn't a valid private key. Copy it again, from the -----BEGIN line to the -----END line."
+            echo "::error::DEPLOY_SSH_KEY isn't a valid key. On the server run: base64 -w0 ~/.ssh/github_actions_deploy; and paste that one line as the secret."
             exit 1
           fi
           # Pinned server key: refuse to talk to anything pretending to be it.
