@@ -130,6 +130,7 @@ n8n (or any orchestrator) calls this API over HTTP per section 6 of the spec
 ## Deploying
 
 See [DEPLOY.md](DEPLOY.md) for the AWS setup (EC2 + Docker + Caddy with HTTPS and a password).
+A step-by-step Arabic guide covering how the project is built and how it was deployed is in [docs/BUILD_AND_DEPLOY_GUIDE_AR.md](docs/BUILD_AND_DEPLOY_GUIDE_AR.md).
 
 ## Tests
 
