@@ -61,7 +61,7 @@ class JobStatus(str, Enum):
 
 EditMode = Literal["crosstalk", "highlights"]
 
-TranscriptSource = Literal["asr", "youtube_captions", "uploaded_transcript"]
+TranscriptSource = Literal["asr", "youtube_captions", "uploaded_transcript", "zoom_transcript"]
 
 YoutubeStatus = Literal["uploading", "published", "failed"]
 
@@ -74,6 +74,11 @@ class JobRecord(BaseModel):
     mode: EditMode = "highlights"
     source_path: str = ""
     source_url: str | None = None
+    # Set for meetings imported from the company Zoom account (ingest/zoom.py).
+    zoom_meeting_uuid: str | None = None
+    # Human name of the source (e.g. the Zoom meeting topic and date), used
+    # as the default YouTube title.
+    source_title: str | None = None
     native_transcript_path: str | None = None
     transcript_source: TranscriptSource = "asr"
     # Real, measured progress within the current status (e.g. segments judged so

@@ -30,6 +30,12 @@ class Settings(BaseSettings):
 
     storage_dir: Path = Path("./storage")
 
+    # Importing recordings from the company Zoom account (ingest/zoom.py).
+    zoom_account_id: str = ""
+    zoom_client_id: str = ""
+    zoom_client_secret: str = ""
+    zoom_user: str = "me"
+
     # Publishing to the company YouTube channel (publish/youtube.py). Client
     # ID/secret come from a Google Cloud "Web application" OAuth client whose
     # authorized redirect URI is {public_base_url}/youtube/callback.

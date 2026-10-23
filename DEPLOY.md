@@ -183,6 +183,25 @@ the app). "Disconnect" on the page removes it.
 - If uploads start failing with "connection expired", reconnect the channel
   from the page.
 
+## Importing from Zoom
+
+The "From Zoom" tab lists the cloud recordings of the company Zoom account and
+imports one with its Zoom transcript (no WhisperX, low CPU).
+
+1. marketplace.zoom.us > Develop > **Server-to-Server OAuth** app, activated.
+2. Scopes: `cloud_recording:read:list_user_recordings:admin` and
+   `cloud_recording:read:recording:admin`.
+3. In `.env`: `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`.
+   Optional `ZOOM_USER` (default `me`, the account owner) to list another
+   user's recordings by email.
+4. Check it from the repo folder: `python3 deploy/zoom-check.py`, then
+   `docker compose up -d` to load the new values.
+
+Only meetings with a finished MP4 and a transcript can be picked. Turn on
+**Create audio transcript** under Zoom Settings > Recording > Cloud recording so new meetings get one.
+Nothing is deleted from Zoom; the copy on this server is removed after
+publishing, like any other job.
+
 ## Calling it from n8n or scripts
 
 Same API as in the README, plus the password:

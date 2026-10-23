@@ -112,6 +112,42 @@
     outline: 2px solid var(--blue);
     outline-offset: 2px;
   }
+  .zoom-bar { display: flex; gap: 10px; align-items: center; }
+  .zoom-bar .cut-slot { flex: 1; cursor: text; min-height: 40px; padding: 8px 12px; }
+  .zoom-list {
+    margin-top: 10px;
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    background: var(--bond);
+  }
+  .zoom-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    width: 100%;
+    padding: 9px 12px;
+    border: none;
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    font-family: 'IBM Plex Sans';
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .zoom-item:last-child { border-bottom: none; }
+  .zoom-item:hover:not(:disabled) { background: var(--blue-wash); }
+  .zoom-item.selected { background: var(--red-wash); box-shadow: inset 3px 0 0 var(--red); }
+  .zoom-item:disabled { color: var(--ink-muted); cursor: not-allowed; }
+  .zoom-item .topic { font-weight: 500; overflow-wrap: anywhere; }
+  .zoom-item .meta { color: var(--ink-muted); font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
+  .zoom-empty { padding: 14px 12px; color: var(--ink-muted); font-size: 12.5px; }
+  @media (max-width: 560px) {
+    .zoom-item { flex-direction: column; gap: 2px; }
+    .zoom-item .meta { white-space: normal; }
+  }
   .source-panel { display: none; }
   .source-panel.active { display: block; }
 
@@ -357,14 +393,26 @@
         </div>
         <div class="rule"></div>
 
-        <p class="prompt">Paste a link, or drop a file.</p>
+        <p class="prompt">Pick a Zoom meeting, paste a link, or drop a file.</p>
 
         <div class="source-tabs">
-          <button type="button" class="source-tab active" data-source="youtube">Paste a link</button>
+          <button type="button" class="source-tab active" data-source="zoom">From Zoom</button>
+          <button type="button" class="source-tab" data-source="youtube">Paste a link</button>
           <button type="button" class="source-tab" data-source="upload">Drop a file</button>
         </div>
 
-        <div class="source-panel active" id="youtubePanel">
+        <div class="source-panel active" id="zoomPanel">
+          <div class="zoom-bar">
+            <div class="cut-slot">
+              <input type="text" id="zoomFilter" placeholder="Filter by meeting name or date…" aria-label="Filter Zoom meetings" />
+            </div>
+            <button type="button" class="linklike" id="zoomRefresh">Refresh</button>
+          </div>
+          <div class="zoom-list" id="zoomList" role="listbox" aria-label="Zoom recordings"><div class="zoom-empty">Loading Zoom recordings…</div></div>
+          <p class="hint">Cloud recordings from the last 30 days. Zoom's own transcript is used, so there's no transcription step. Meetings Zoom hasn't finished processing, or without a transcript, are greyed out.</p>
+        </div>
+
+        <div class="source-panel" id="youtubePanel">
           <div class="cut-slot">
             <input type="text" id="url" placeholder="youtube.com/watch?v=…" />
           </div>
@@ -494,11 +542,14 @@ const TRANSCRIPT_SOURCE_LABELS = {
   asr: "Transcribed from scratch with WhisperX.",
   youtube_captions: "Reused YouTube's own captions — skipped transcription.",
   uploaded_transcript: "Reused your uploaded transcript — skipped transcription.",
+  zoom_transcript: "Reused Zoom's own transcript — skipped transcription.",
 };
 let activeSteps = STEPS_WITH_DOWNLOAD;
 
 let selectedMode = "highlights";
-let selectedSource = "youtube";
+let selectedSource = "zoom";
+let selectedMeeting = null;
+let zoomMeetings = [];
 let selectedFile = null;
 let selectedTranscript = null;
 let pollTimer = null;
@@ -511,6 +562,9 @@ const transcriptInput = document.getElementById("transcriptFile");
 const transcriptDrop = document.getElementById("transcriptDrop");
 const transcriptLabelEl = document.getElementById("transcriptLabel");
 const youtubePanel = document.getElementById("youtubePanel");
+const zoomPanel = document.getElementById("zoomPanel");
+const zoomList = document.getElementById("zoomList");
+const zoomFilter = document.getElementById("zoomFilter");
 const uploadPanel = document.getElementById("uploadPanel");
 const submitBtn = document.getElementById("submitBtn");
 const errorBox = document.getElementById("errorBox");
@@ -534,7 +588,9 @@ const markedTranscriptEl = document.getElementById("markedTranscript");
 const TRANSCRIPT_PLACEHOLDER = "Already have a transcript? Attach it to skip transcribing (.vtt, .srt)";
 
 function updateSlug() {
-  if (selectedSource === "upload" && selectedFile) {
+  if (selectedSource === "zoom" && selectedMeeting) {
+    slugEl.textContent = meetingTitle(selectedMeeting);
+  } else if (selectedSource === "upload" && selectedFile) {
     slugEl.textContent = selectedFile.name;
   } else if (selectedSource === "youtube" && urlInput.value.trim()) {
     slugEl.textContent = urlInput.value.trim();
@@ -557,6 +613,7 @@ document.querySelectorAll(".source-tab").forEach((tab) => {
     tab.classList.add("active");
     selectedSource = tab.dataset.source;
     youtubePanel.classList.toggle("active", selectedSource === "youtube");
+    zoomPanel.classList.toggle("active", selectedSource === "zoom");
     uploadPanel.classList.toggle("active", selectedSource === "upload");
     clearError();
     updateSlug();
@@ -564,6 +621,85 @@ document.querySelectorAll(".source-tab").forEach((tab) => {
 });
 
 urlInput.addEventListener("input", updateSlug);
+
+// ---- Importing from Zoom -------------------------------------------------
+
+function meetingDate(m) {
+  return m.start_time ? m.start_time.slice(0, 10) : "";
+}
+
+function meetingTitle(m) {
+  return `${m.topic} (${meetingDate(m)})`.replace(/[<>]/g, "").slice(0, 100);
+}
+
+function meetingMeta(m) {
+  const when = m.start_time ? new Date(m.start_time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+  const parts = [when];
+  if (m.duration_min) parts.push(`${m.duration_min} min`);
+  if (m.processing) parts.push("Zoom still processing");
+  else if (!m.has_video) parts.push("no video");
+  else if (!m.transcript_type) parts.push("no transcript");
+  else if (m.transcript_type === "CC") parts.push("captions only");
+  return parts.join(" · ");
+}
+
+function renderZoomList() {
+  const q = zoomFilter.value.trim().toLowerCase();
+  const shown = zoomMeetings.filter(
+    (m) => !q || m.topic.toLowerCase().includes(q) || (m.start_time || "").includes(q)
+  );
+  zoomList.innerHTML = "";
+  if (!shown.length) {
+    zoomList.innerHTML = `<div class="zoom-empty">${zoomMeetings.length ? "No meeting matches that filter." : "No cloud recordings in the last 30 days."}</div>`;
+    return;
+  }
+  shown.forEach((m) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "zoom-item" + (selectedMeeting && selectedMeeting.uuid === m.uuid ? " selected" : "");
+    btn.disabled = !m.ready;
+    btn.setAttribute("role", "option");
+    const topic = document.createElement("span");
+    topic.className = "topic";
+    topic.textContent = m.topic;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = meetingMeta(m);
+    btn.append(topic, meta);
+    btn.addEventListener("click", () => {
+      selectedMeeting = m;
+      clearError();
+      updateSlug();
+      renderZoomList();
+    });
+    zoomList.appendChild(btn);
+  });
+}
+
+async function loadZoom() {
+  zoomList.innerHTML = '<div class="zoom-empty">Loading Zoom recordings…</div>';
+  try {
+    const res = await fetch("/zoom/recordings");
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || res.statusText);
+    if (!body.configured) {
+      zoomList.innerHTML = '<div class="zoom-empty">Zoom isn\'t connected on this server yet (ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET in .env).</div>';
+      return;
+    }
+    zoomMeetings = body.meetings || [];
+    renderZoomList();
+  } catch (e) {
+    zoomList.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "zoom-empty";
+    note.textContent = "Couldn't load Zoom recordings: " + e.message;
+    zoomList.appendChild(note);
+  }
+}
+
+zoomFilter.addEventListener("input", renderZoomList);
+document.getElementById("zoomRefresh").addEventListener("click", loadZoom);
+loadZoom();
 
 function setSelectedFile(file) {
   selectedFile = file || null;
@@ -706,7 +842,20 @@ async function renderMarkedTranscript(jobId) {
 async function submit() {
   let request;
 
-  if (selectedSource === "youtube") {
+  if (selectedSource === "zoom") {
+    if (!selectedMeeting) {
+      showError("Pick a meeting from the list first.");
+      return;
+    }
+    activeSteps = STEPS_WITH_DOWNLOAD;
+    const meeting = selectedMeeting;
+    request = () =>
+      fetch("/jobs/zoom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meeting_uuid: meeting.uuid, mode: selectedMode, title: meetingTitle(meeting) }),
+      });
+  } else if (selectedSource === "youtube") {
     const url = urlInput.value.trim();
     if (!url) {
       showError("Paste a YouTube URL first.");
@@ -798,6 +947,7 @@ async function poll(jobId) {
     return;
   }
 
+  activeSteps = job.zoom_meeting_uuid || job.source_url ? STEPS_WITH_DOWNLOAD : STEPS_NO_DOWNLOAD;
   renderSteps(job.status);
   renderTranscriptSource(job);
   renderStageProgress(job);
@@ -833,7 +983,7 @@ function showYtBlock(id) {
 }
 
 function defaultTitle() {
-  if (selectedFile) return selectedFile.name.replace(/\.[^.]+$/, "").slice(0, 100);
+  if (selectedSource === "upload" && selectedFile) return selectedFile.name.replace(/\.[^.]+$/, "").slice(0, 100);
   const today = new Date().toISOString().slice(0, 10);
   return `Meeting ${today}`;
 }
@@ -895,7 +1045,7 @@ async function renderPublish(job) {
 
   document.getElementById("ytChannel").textContent = status.channel_title || "(unnamed channel)";
   const titleEl = document.getElementById("ytTitle");
-  if (!titleEl.value) titleEl.value = defaultTitle();
+  if (!titleEl.value) titleEl.value = job.source_title || defaultTitle();
   showYtBlock("ytForm");
   if (job.youtube_status === "failed" && job.youtube_error) {
     const note = document.createElement("div");

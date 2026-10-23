@@ -9,8 +9,9 @@ from pydantic import BaseModel, Field
 
 from core.logging import configure_logging, get_logger
 from core.models import EditMode, JobRecord, JobStatus, YoutubePrivacy
+from ingest import zoom
 from ingest.store import store_transcript, store_video
-from pipeline import run_pipeline, run_youtube_pipeline
+from pipeline import run_pipeline, run_youtube_pipeline, run_zoom_pipeline
 from publish import delete_job_files, youtube
 from publish.youtube import YoutubeNotConnectedError
 
@@ -36,6 +37,12 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 class YoutubeJobRequest(BaseModel):
     url: str
     mode: EditMode = "highlights"
+
+
+class ZoomJobRequest(BaseModel):
+    meeting_uuid: str = Field(min_length=1, max_length=128)
+    mode: EditMode = "highlights"
+    title: str = Field(default="", max_length=200)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,6 +104,35 @@ async def create_youtube_job(background_tasks: BackgroundTasks, body: YoutubeJob
     job_store.create(job)
 
     background_tasks.add_task(run_youtube_pipeline, job, job_store.update, url)
+    return job
+
+
+@app.get("/zoom/recordings")
+def zoom_recordings(days: int = 30) -> dict:
+    """Recorded meetings in the company Zoom account (sync: runs in a worker thread)."""
+    if not zoom.is_configured():
+        return {"configured": False, "meetings": []}
+    try:
+        meetings = zoom.list_recordings(days=days)
+    except zoom.ZoomError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"configured": True, "meetings": meetings}
+
+
+@app.post("/jobs/zoom", response_model=JobRecord)
+async def create_zoom_job(background_tasks: BackgroundTasks, body: ZoomJobRequest) -> JobRecord:
+    if not zoom.is_configured():
+        raise HTTPException(status_code=409, detail="Zoom isn't set up on this server (ZOOM_* in .env)")
+    job = JobRecord(
+        job_id=uuid.uuid4().hex,
+        status=JobStatus.QUEUED,
+        mode=body.mode,
+        zoom_meeting_uuid=body.meeting_uuid,
+        # YouTube rejects < and > in titles.
+        source_title=body.title.replace("<", "").replace(">", "").strip()[:100] or None,
+    )
+    job_store.create(job)
+    background_tasks.add_task(run_zoom_pipeline, job, job_store.update)
     return job
 
 
