@@ -497,7 +497,7 @@ python3 deploy/zoom-check.py
 
 | عاوز | الأمر |
 |---|---|
-| تنزّل نسخة جديدة من الكود | `git pull && docker compose up -d --build` |
+| تنزّل نسخة جديدة من الكود | بيحصل لوحده بعد كل push. بإيدك: `bash deploy/auto-update.sh` |
 | تشوف لوجز الـ app | `docker compose logs -f app` (و Ctrl+C للخروج) |
 | تشوف حالة الخدمات | `docker compose ps` |
 | restart للـ app | `docker compose restart app` |
@@ -523,11 +523,44 @@ git commit -m "وصف التعديل"
 git push
 ```
 
-GitHub بيشغّل الاختبارات لوحده على كل push (تاب Actions). بعدها على السيرفر:
+GitHub بيشغّل الاختبارات لوحده على كل push (تاب Actions)، ولو عدّت بيحدّث السيرفر لوحده (شوف "التحديث الأوتوماتيك" تحت). من غير التحديث الأوتوماتيك، حدّث بإيدك على السيرفر:
 
 ```bash
-cd ~/ahsan_meetings_automation && git pull && docker compose up -d --build
+cd ~/ahsan_meetings_automation && bash deploy/auto-update.sh
 ```
+
+### التحديث الأوتوماتيك
+
+أي push على `main` بيحدّث السيرفر لوحده، بس لو الاختبارات عدّت. الخطوات اللي بتحصل:
+
+1. GitHub بيشغّل الاختبارات (job اسمها `test`).
+2. لو عدّت، job اسمها `deploy` بتدخل السيرفر وتشغّل `deploy/auto-update.sh`.
+3. السكريبت بيستنى لحد ما مفيش ميتنج بيتقص أو بيترفع على يوتيوب (لحد 45 دقيقة)، وبعدين بيعمل `git pull` و `docker compose up -d --build`، وبيستنى الـ app يبقى healthy.
+4. لو حاجة فشلت، الـ job بتبقى حمرا في تاب Actions، واللوج كامل فيها. وكمان في `~/ahsan_meetings_automation/auto-update.log` على السيرفر.
+
+مفتاح GitHub مقفول على السكريبت ده بس: مايقدرش يفتح shell ولا يشغّل أي أمر تاني.
+
+**الإعداد (مرة واحدة)، على السيرفر:**
+
+```bash
+ssh-keygen -t ed25519 -N "" -C "github-actions" -f ~/.ssh/github_actions_deploy
+echo "restrict,command=\"$HOME/ahsan_meetings_automation/deploy/auto-update.sh\" $(cat ~/.ssh/github_actions_deploy.pub)" >> ~/.ssh/authorized_keys
+echo "===== DEPLOY_SSH_KEY ====="; cat ~/.ssh/github_actions_deploy
+echo "===== DEPLOY_HOST_KEY ====="; cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+في GitHub: الريبو > Settings > Secrets and variables > Actions > New repository secret. اعمل اتنين:
+
+| الاسم | القيمة |
+|---|---|
+| `DEPLOY_SSH_KEY` | كل اللي تحت `DEPLOY_SSH_KEY`، من `-----BEGIN` لحد `-----END OPENSSH PRIVATE KEY-----` |
+| `DEPLOY_HOST_KEY` | السطر اللي تحت `DEPLOY_HOST_KEY` (بيبدأ بـ `ssh-ed25519`) |
+
+بعدها امسح المفتاح الخاص من السيرفر (النسخة اللي في GitHub كفاية): `rm ~/.ssh/github_actions_deploy`
+
+**توقفه:** امسح الـ secret `DEPLOY_SSH_KEY` من GitHub، أو `sed -i '/ github-actions$/d' ~/.ssh/authorized_keys` على السيرفر.
+
+**تحدّث بإيدك** (مثلاً لو التحديث الأوتوماتيك وقف لأن ميتنج طوّل): `bash deploy/auto-update.sh`
 
 ⚠️ ما تعملش `git push --force` على `main`. لو حد عمله، السيرفر هيقول `divergent branches` (شوف الجدول تحت).
 
