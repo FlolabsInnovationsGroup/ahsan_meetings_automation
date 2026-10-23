@@ -32,3 +32,36 @@ jobs:
 
       - name: Check shell scripts
         run: shellcheck deploy/*.sh
+
+  # After the tests pass on main, update the live server. The SSH key in the
+  # DEPLOY_SSH_KEY secret can only run deploy/auto-update.sh there (it's
+  # locked to that script in the server's authorized_keys). Without the
+  # secrets this job does nothing, so forks and PRs are unaffected.
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Waits up to 45 min for running meetings, then the build itself.
+    timeout-minutes: 75
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: 3.126.252.9
+    steps:
+      - name: Update the server
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$HOST_KEY" ]; then
+            echo "::notice::DEPLOY_SSH_KEY / DEPLOY_HOST_KEY not set, skipping the server update."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          # Pinned server key: refuse to talk to anything pretending to be it.
+          echo "$DEPLOY_HOST $HOST_KEY" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
+            "ubuntu@$DEPLOY_HOST" update

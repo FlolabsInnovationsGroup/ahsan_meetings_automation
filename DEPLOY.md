@@ -213,6 +213,33 @@ curl -u flolabs:PASSWORD -F file=@meeting.mp4 -F transcript=@meeting.vtt \
 
 In n8n: HTTP Request node > Authentication > Basic Auth.
 
+## Automatic updates from GitHub
+
+Every push to `main` updates the server once the tests pass: the `deploy` job
+in `.github/workflows/tests.yml` SSHes in and runs `deploy/auto-update.sh`,
+which waits (up to 45 min) for running jobs and YouTube uploads to finish,
+pulls, rebuilds and waits for the app to be healthy. Log:
+`~/ahsan_meetings_automation/auto-update.log`. The GitHub key is locked to
+that script (`restrict,command=...`), so it can't open a shell.
+
+One-time setup on the server:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C "github-actions" -f ~/.ssh/github_actions_deploy
+echo "restrict,command=\"$HOME/ahsan_meetings_automation/deploy/auto-update.sh\" $(cat ~/.ssh/github_actions_deploy.pub)" >> ~/.ssh/authorized_keys
+echo "===== DEPLOY_SSH_KEY ====="; cat ~/.ssh/github_actions_deploy
+echo "===== DEPLOY_HOST_KEY ====="; cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+Then in GitHub > Settings > Secrets and variables > Actions, add
+`DEPLOY_SSH_KEY` (the whole private key, BEGIN to END lines) and
+`DEPLOY_HOST_KEY` (the `ssh-ed25519 ...` line). Afterwards delete the private
+key from the server: `rm ~/.ssh/github_actions_deploy`.
+
+Turn it off by deleting the `DEPLOY_SSH_KEY` secret, or on the server:
+`sed -i '/ github-actions$/d' ~/.ssh/authorized_keys`. Update by hand any time
+with `bash deploy/auto-update.sh`.
+
 ## Team SSH access
 
 To let people in from anywhere without chasing their changing IPs, open SSH to
@@ -243,7 +270,7 @@ Remove someone: `sed -i '/ <name>$/d' ~/.ssh/authorized_keys`.
 
 | Task | Command (in the repo folder on the server) |
 |---|---|
-| Deploy a new version | `git pull && docker compose up -d --build` |
+| Deploy a new version | automatic after each push to main; by hand: `bash deploy/auto-update.sh` |
 | App logs | `docker compose logs -f app` |
 | Restart | `docker compose restart app` |
 | Disk usage | `df -h / && du -sh data/*` |

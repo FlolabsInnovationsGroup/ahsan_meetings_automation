@@ -22,3 +22,5 @@ temp_interactive_push.bat
 # Local-only credentials (SSH key, full .env copy). Never commit.
 secrets/
 *.pem
+auto-update.log
+.auto-update.lock
