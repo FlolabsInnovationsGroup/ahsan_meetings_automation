@@ -545,7 +545,7 @@ cd ~/ahsan_meetings_automation && bash deploy/auto-update.sh
 ```bash
 ssh-keygen -t ed25519 -N "" -C "github-actions" -f ~/.ssh/github_actions_deploy
 echo "restrict,command=\"$HOME/ahsan_meetings_automation/deploy/auto-update.sh\" $(cat ~/.ssh/github_actions_deploy.pub)" >> ~/.ssh/authorized_keys
-echo "===== DEPLOY_SSH_KEY ====="; cat ~/.ssh/github_actions_deploy
+echo "===== DEPLOY_SSH_KEY ====="; base64 -w0 ~/.ssh/github_actions_deploy; echo
 echo "===== DEPLOY_HOST_KEY ====="; cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
@@ -553,7 +553,7 @@ echo "===== DEPLOY_HOST_KEY ====="; cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_ke
 
 | الاسم | القيمة |
 |---|---|
-| `DEPLOY_SSH_KEY` | كل اللي تحت `DEPLOY_SSH_KEY`، من `-----BEGIN` لحد `-----END OPENSSH PRIVATE KEY-----` |
+| `DEPLOY_SSH_KEY` | السطر الطويل اللي تحت `DEPLOY_SSH_KEY` (سطر واحد، المفتاح متحوّل base64 عشان النسخ ما يبوظهوش) |
 | `DEPLOY_HOST_KEY` | السطر اللي تحت `DEPLOY_HOST_KEY` (بيبدأ بـ `ssh-ed25519`) |
 
 بعدها امسح المفتاح الخاص من السيرفر (النسخة اللي في GitHub كفاية): `rm ~/.ssh/github_actions_deploy`
