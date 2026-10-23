@@ -5,6 +5,7 @@ pydantic-settings>=2.3
 python-multipart>=0.0.9
 google-genai>=0.3
 anthropic>=0.70
+httpx>=0.27
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
 yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git

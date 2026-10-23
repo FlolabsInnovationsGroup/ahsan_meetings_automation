@@ -6,6 +6,7 @@ from core.logging import get_logger
 from core.models import JobRecord, JobStatus
 from decide import build_segments, get_decisions
 from edl import build_edl
+from ingest import zoom
 from ingest.validate import AVSyncError, validate_video
 from ingest.youtube import download_youtube
 from slice.pipeline import render_output
@@ -63,7 +64,7 @@ def run_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
         if job.native_transcript_path:
             native = load_uploaded_transcript(Path(job.native_transcript_path))
             if native is not None:
-                job.transcript_source = "uploaded_transcript"
+                job.transcript_source = "zoom_transcript" if job.zoom_meeting_uuid else "uploaded_transcript"
         if native is None and job.source_url:
             native = fetch_youtube_transcript(job.source_url)
             if native is not None:
@@ -155,5 +156,24 @@ def run_youtube_pipeline(job: JobRecord, update: "callable[[JobRecord], None]", 
         return
 
     job.source_path = str(path)
+    update(job)
+    run_pipeline(job, update)
+
+
+def run_zoom_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
+    """Download a meeting's MP4 and Zoom transcript, then run the normal pipeline."""
+    job.status = JobStatus.DOWNLOADING
+    update(job)
+    try:
+        video_path, transcript_path, _ = zoom.download_meeting(job.zoom_meeting_uuid)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("job %s: zoom download failed: %s", job.job_id, exc)
+        job.status = JobStatus.FAILED
+        job.error = str(exc)
+        update(job)
+        return
+
+    job.source_path = str(video_path)
+    job.native_transcript_path = str(transcript_path)
     update(job)
     run_pipeline(job, update)

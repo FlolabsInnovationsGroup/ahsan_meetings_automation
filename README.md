@@ -33,6 +33,10 @@ instead and skips WhisperX (ASR + alignment + diarization) entirely:
   preferred over auto-generated ones) via `transcribe/native.py`, fetched
   through `yt-dlp`. If a usable English track exists, it's parsed and used
   directly; otherwise the pipeline transcribes the video itself as before.
+- **From the company Zoom account** — the "From Zoom" tab lists cloud
+  recordings (`GET /zoom/recordings`); `POST /jobs/zoom {meeting_uuid, mode}`
+  downloads the MP4 plus Zoom's own transcript (closed captions as a fallback)
+  and skips WhisperX. Needs the `ZOOM_*` settings, see DEPLOY.md.
 - **Direct uploads (e.g. Zoom)** — attach a transcript when creating the job:
   `POST /jobs` accepts an optional `transcript` file field (`.vtt` or `.srt`
   — this is exactly what Zoom's cloud recordings export as
@@ -42,7 +46,7 @@ instead and skips WhisperX (ASR + alignment + diarization) entirely:
 Either way, if no transcript is available — or it fails to parse — the
 pipeline transparently falls back to self-hosted WhisperX transcription. A
 job's `transcript_source` field (`asr` | `youtube_captions` |
-`uploaded_transcript`) reports which path was actually used; the web UI shows
+`uploaded_transcript` | `zoom_transcript`) reports which path was actually used; the web UI shows
 this once a job passes the transcribing stage.
 
 **Caveat for crosstalk/"Light cleanup" mode:** platform transcripts are a
