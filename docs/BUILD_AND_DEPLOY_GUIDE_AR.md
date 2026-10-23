@@ -227,7 +227,7 @@ Billing and Cost Management > Budgets > Create budget. اختار Monthly cost b
 | AMI | Ubuntu Server 24.04 LTS، x86 | مش 26.04 (جديدة وممكن Docker ما يدعمهاش)، ومش Ubuntu Pro (بفلوس زيادة) |
 | Instance type | `t3.large` (2 vCPU، 8 GiB) | `t3.micro` مش هتكفي حتى البناء |
 | Key pair | Create new، ED25519، `.pem` | احفظ الملف في مكان ثابت. لو ضاع مش هتعرف تدخل السيرفر |
-| SSH | Source: **My IP** | عمره ما يبقى Anywhere |
+| SSH | Source: **My IP** | في الأول بس. لما فريق يشتغل عليه، شوف خطوة 11 (ج) |
 | HTTP و HTTPS | ✅ الاتنين | HTTP لازم عشان شهادة Let's Encrypt |
 | Storage | 30 GiB، gp3 | تقدر تكبّره بعدين، بس ما تقدرش تصغّره |
 | Encrypted | Encrypted، KMS key: `(default) aws/ebs` | من السهم اللي جنب Volume 1 |
@@ -272,6 +272,54 @@ ssh -o ServerAliveInterval=30 -i $k ubuntu@3.126.252.9
 ```
 
 أول مرة هيسأل yes/no، اكتب `yes`. لما يظهر `ubuntu@ip-...:~$` تبقى جوه السيرفر.
+
+### ج) فريق: SSH مفتوح، وكل واحد بمفتاحه
+
+لو أكتر من شخص هيدخل السيرفر من أماكن مختلفة، الـ IP بتاعهم بيتغير، وتحديث الـ Security Group كل شوية متعب. الحل إن SSH يبقى مفتوح للكل، والحماية تبقى بالمفتاح: السيرفر مش بيقبل باسوردات خالص، فمحدش يدخل غير اللي مفتاحه متضاف.
+
+**القاعدة:** الـ `.pem` بتاع صاحب السيرفر ما يتبعتش لحد. كل شخص بيعمل مفتاح خاص بيه، وصاحب السيرفر بيضيفه. لو حد ساب المشروع، مفتاحه بيتشال لوحده من غير ما حد تاني يتأثر.
+
+**مرة واحدة:**
+
+1. **على السيرفر الأول:** سكريبت الإعداد بيقفل الباسوردات ودخول root، وبيسطّب fail2ban (بيبلوك أي IP بيغلط 5 مرات في 10 دقايق لمدة ساعة). آمن إنك تشغّله تاني:
+
+```bash
+cd ~/ahsan_meetings_automation && git pull
+sudo bash deploy/setup-ec2.sh
+sudo sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin) '
+sudo fail2ban-client status sshd
+```
+
+التالت لازم يطبع `no` قدام التلاتة، والرابع لازم يطبع `Status for the jail: sshd`. لو أي واحد فيهم مختلف، ما تكملش.
+
+2. **بعدها بس:** EC2 > Security Groups > الـ group بتاع السيرفر > Edit inbound rules > rule الـ SSH > Source: **Anywhere-IPv4** (`0.0.0.0/0`) > Save.
+
+**لكل شخص جديد:**
+
+هو على جهازه (PowerShell أو Terminal)، مرة واحدة:
+
+```powershell
+ssh-keygen -t ed25519 -C "اسمه"
+type $HOME\.ssh\id_ed25519.pub
+```
+
+(على Mac أو Linux: `cat ~/.ssh/id_ed25519.pub`.) يبعتلك السطر اللي بيبدأ بـ `ssh-ed25519`. ده المفتاح العام، مش سر، يتبعت عادي.
+
+إنت على السيرفر:
+
+```bash
+echo "<السطر اللي بعته>" >> ~/.ssh/authorized_keys
+```
+
+وهو يدخل بـ:
+
+```bash
+ssh -o ServerAliveInterval=30 ubuntu@3.126.252.9
+```
+
+**تشوف مين ليه دخول:** `cut -d' ' -f3- ~/.ssh/authorized_keys` (أول سطر هو مفتاح الـ `.pem` بتاعك، ما تمسحهوش).
+
+**تشيل حد:** `sed -i '/ اسمه$/d' ~/.ssh/authorized_keys` وبعدين اتأكد بأمر "مين ليه دخول".
 
 ## 12. تجهيز السيرفر
 
@@ -489,7 +537,8 @@ cd ~/ahsan_meetings_automation && git pull && docker compose up -d --build
 | `ssh is not recognized` | PowerShell نسخة (x86) | Windows PowerShell العادي، أو `C:\Windows\Sysnative\OpenSSH\ssh.exe` |
 | `UNPROTECTED PRIVATE KEY FILE` | يوزر تاني عنده صلاحية على الـ `.pem` | أوامر `icacls` في خطوة 11 |
 | Connection reset بعد شوية | الاتصال قاعد من غير استخدام | ادخل بـ `-o ServerAliveInterval=30`. اللي شغال بـ `nohup` مش بيقف |
-| Connection timed out في SSH | الـ IP بتاع النت عندك اتغير | EC2 > Security Groups > حدّث rule الـ SSH لـ My IP |
+| Connection timed out في SSH | الـ SSH مقفول على IP معين، والـ IP بتاعك اتغير | خلي rule الـ SSH على Anywhere زي خطوة 11 (ج)، أو حدّثها لـ My IP |
+| `Permission denied (publickey)` | المفتاح بتاعك مش متضاف على السيرفر، أو بتستخدم مفتاح غلط | ابعت ملف `.pub` لصاحب السيرفر يضيفه |
 | `docker: permission denied` | لسه ما خرجتش ودخلت بعد سكريبت الإعداد | `exit` وادخل تاني |
 | swap اتعمل 8 جيجا | السيرفر بيبلّغ عن 7.6 جيجا رامات | اتصلح في السكريبت |
 | اللصق في السيرفر مش بيعمل حاجة | ما اتضغطش Enter | كليك يمين للصق، وبعدين Enter |
@@ -508,7 +557,7 @@ cd ~/ahsan_meetings_automation && git pull && docker compose up -d --build
 
 ### Checklist أمان
 
-- [ ] الـ SSH مفتوح لـ My IP بس
+- [ ] الـ SSH يا مفتوح لـ My IP بس، يا مفتوح للكل بشرط: باسوردات مقفولة + fail2ban شغال + كل شخص بمفتاحه
 - [ ] الديسك Encrypted
 - [ ] الـ app مش ظاهر على الإنترنت مباشرة، Caddy بس اللي يوصله
 - [ ] الموقع كله ورا باسورد، ما عدا `/privacy`
