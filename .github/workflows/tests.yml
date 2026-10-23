@@ -59,9 +59,28 @@ jobs:
             exit 0
           fi
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
+          # Secrets pasted from a terminal often carry \r or trailing spaces.
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' | sed 's/[[:space:]]*$//' > ~/.ssh/deploy
           chmod 600 ~/.ssh/deploy
+          if ! ssh-keygen -y -f ~/.ssh/deploy > /dev/null; then
+            echo "::error::DEPLOY_SSH_KEY isn't a valid private key. Copy it again, from the -----BEGIN line to the -----END line."
+            exit 1
+          fi
           # Pinned server key: refuse to talk to anything pretending to be it.
-          echo "$DEPLOY_HOST $HOST_KEY" > ~/.ssh/known_hosts
+          host_key="$(printf '%s' "$HOST_KEY" | tr -d '\r\n' | awk '{print $1, $2}')"
+          case "$host_key" in
+            "ssh-ed25519 "?*) ;;
+            *) echo "::error::DEPLOY_HOST_KEY should be one line starting with ssh-ed25519."; exit 1 ;;
+          esac
+          echo "$DEPLOY_HOST $host_key" > ~/.ssh/known_hosts
+          set +e
           ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
-            "ubuntu@$DEPLOY_HOST" update
+            -o ConnectTimeout=20 "ubuntu@$DEPLOY_HOST" update 2> >(tee ssh.err >&2)
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            # Surface the reason as an annotation (shown on the run page).
+            reason="$(grep -m1 -iE 'denied|verification|refused|timed out|no route|invalid|error|still|healthy' ssh.err || true)"
+            echo "::error::Server update failed (exit $code): ${reason:-see the log above}"
+            exit "$code"
+          fi
