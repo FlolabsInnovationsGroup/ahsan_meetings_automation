@@ -14,3 +14,7 @@ storage/jobs/*
 # Deployment
 data/
 deploy/caddy.env
+
+# Local-only credentials (SSH key, full .env copy). Never commit.
+secrets/
+*.pem
