@@ -513,7 +513,8 @@ def _parse_time(raw: str | None) -> datetime | None:
     if not raw:
         return None
     try:
-        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        # the replace stays: Python 3.10's fromisoformat can't read a trailing "Z"
+        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))  # noqa: FURB162
     except ValueError:
         return None
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)

@@ -210,7 +210,8 @@ def _zoom_day(start: str, zone_name: str | None) -> date | None:
     """Zoom's start_time ("2026-10-04T20:30:00Z") as the day it was where the
     meeting happened (2026-10-05 in Karachi), not the UTC day."""
     try:
-        return _local_day(datetime.fromisoformat(start.replace("Z", "+00:00")), _zone(zone_name))
+        # the replace stays: Python 3.10's fromisoformat can't read a trailing "Z"
+        return _local_day(datetime.fromisoformat(start.replace("Z", "+00:00")), _zone(zone_name))  # noqa: FURB162
     except ValueError:
         m = re.match(r"(\d{4})-(\d{2})-(\d{2})", start)
         try:

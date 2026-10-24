@@ -389,7 +389,7 @@ def test_bundle_and_artifacts_are_served_by_name_only(monkeypatch):
     # the owner's names: Final_<Meeting>_<date>.zip / ..._Youtube.mp4, the
     # date being the day the job was created (no date in the title), on the
     # team's clock (settings.local_timezone), not UTC
-    day = datetime.fromisoformat(done["created_at"].replace("Z", "+00:00")).astimezone(
+    day = datetime.fromisoformat(done["created_at"].replace("Z", "+00:00")).astimezone(  # noqa: FURB162
         ZoneInfo("Asia/Karachi")).date().isoformat()
 
     bundle = client.get(f"/jobs/{job_id}/bundle")
