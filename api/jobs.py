@@ -1,10 +1,21 @@
 import json
 import os
-import shutil
+import re
 import threading
+from datetime import UTC, datetime
 
 from core.config import get_settings
-from core.models import JobRecord, JobStatus
+from core.models import JobRecord
+
+# Job ids are uuid4 hex (or short test/fixture names). Anything else must never
+# be joined onto jobs_dir: on Windows "<id>." and "<id> " open the same folder
+# as "<id>" (so a lookup would find a running job under a name the queue does
+# not know), and a URL-decoded "\" is a path separator.
+_JOB_ID_RE = re.compile(r"[0-9a-zA-Z_-]{1,64}")
+
+
+def is_valid_job_id(job_id: str) -> bool:
+    return _JOB_ID_RE.fullmatch(job_id) is not None
 
 
 class JobStore:
@@ -17,22 +28,39 @@ class JobStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cache: dict[str, JobRecord] = {}
+        # Jobs whose folder was deleted: late updates from a finishing worker
+        # must not recreate the folder.
+        self._deleted: set[str] = set()
 
     def _path(self, job_id: str):
         return get_settings().jobs_dir / job_id / "job.json"
 
     def create(self, job: JobRecord) -> None:
         with self._lock:
+            now = datetime.now(UTC)
+            if job.created_at is None:
+                job.created_at = now
+            job.updated_at = now
+            self._deleted.discard(job.job_id)
             self._cache[job.job_id] = job
             self._persist(job)
 
     def update(self, job: JobRecord) -> None:
         with self._lock:
+            if job.job_id in self._deleted:
+                return
+            job.updated_at = datetime.now(UTC)
+            if job.created_at is None:
+                job.created_at = job.updated_at
             self._cache[job.job_id] = job
             self._persist(job)
 
     def get(self, job_id: str) -> JobRecord | None:
+        if not is_valid_job_id(job_id):
+            return None
         with self._lock:
+            if job_id in self._deleted:
+                return None
             if job_id in self._cache:
                 return self._cache[job_id]
         path = self._path(job_id)
@@ -43,43 +71,20 @@ class JobStore:
             self._cache[job_id] = job
         return job
 
-    def fail_interrupted(self) -> int:
-        """Mark jobs left mid-pipeline by a previous process as FAILED.
-
-        Jobs run as in-process BackgroundTasks, so a restart (deploy, crash,
-        container restart) abandons any running job. Without this, its job.json
-        stays at e.g. "transcribing" forever and the UI polls it endlessly.
-        Call once at startup, before any new job is accepted.
-        """
-        terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC}
-        jobs_dir = get_settings().jobs_dir
-        if not jobs_dir.exists():
-            return 0
-        count = 0
-        for path in jobs_dir.glob("*/job.json"):
-            try:
-                job = JobRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                continue
-            if job.status not in terminal:
-                job.status = JobStatus.FAILED
-                job.error = "Interrupted by a server restart. Please submit the recording again."
-            elif job.youtube_status == "uploading":
-                # The cut itself is fine; only the upload was cut off, so it
-                # can simply be published again.
-                job.youtube_status = "failed"
-                job.youtube_error = "Upload interrupted by a server restart. Please publish again."
-            else:
-                continue
-            self.update(job)
-            count += 1
-        return count
-
-    def delete(self, job_id: str) -> None:
-        """Forget a job entirely: drop it from the cache and remove its folder."""
+    def forget(self, job_id: str) -> None:
+        """Drop a job from the cache and ignore any later updates to it (its
+        folder is being deleted)."""
         with self._lock:
             self._cache.pop(job_id, None)
-        shutil.rmtree(self._path(job_id).parent, ignore_errors=True)
+            self._deleted.add(job_id)
+
+    def list_ids(self) -> list[str]:
+        jobs_dir = get_settings().jobs_dir
+        if not jobs_dir.exists():
+            return []
+        with self._lock:
+            deleted = set(self._deleted)
+        return [p.parent.name for p in jobs_dir.glob("*/job.json") if p.parent.name not in deleted]
 
     def _persist(self, job: JobRecord) -> None:
         path = self._path(job.job_id)

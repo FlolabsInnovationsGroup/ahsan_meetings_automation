@@ -27,6 +27,21 @@ def test_get_returns_none_for_unknown_job():
     assert store.get("does-not-exist") is None
 
 
+def test_get_ignores_ids_that_are_not_plain_job_ids():
+    """On Windows "job-1." and "job-1 " open job-1's folder, and "..\\" climbs
+    out of jobs/: such ids must never be looked up on disk."""
+    from api.jobs import is_valid_job_id
+
+    store_a = JobStore()
+    store_a.create(_job())
+    store_b = JobStore()  # disk path, not the cache
+    for odd in ("job-1.", "job-1 ", "..\\jobs\\job-1", "../jobs/job-1", "", "a" * 65, "job-1\n"):
+        assert not is_valid_job_id(odd), repr(odd)
+        assert store_b.get(odd) is None, repr(odd)
+    assert store_b.get("job-1") is not None
+    assert is_valid_job_id("7b93aa4cd7ef436895213e6fff9365a3") and is_valid_job_id("stuck_job-2")
+
+
 def test_persist_is_atomic_no_leftover_tmp_file():
     """A crash mid-write must never leave readers looking at a half-written
     job.json. Writing succeeds via a temp file + atomic rename, so no `.tmp`
@@ -95,31 +110,18 @@ def test_concurrent_updates_do_not_corrupt_or_lose_the_record():
     assert final.status in statuses
 
 
-def test_fail_interrupted_marks_only_in_progress_jobs_failed():
-    """After a restart, jobs abandoned mid-pipeline must not stay stuck in a
-    running status forever; finished jobs must be left untouched."""
+def test_created_at_is_set_once_and_updated_at_moves():
     store = JobStore()
-    store.create(_job(job_id="running", status=JobStatus.TRANSCRIBING))
-    store.create(_job(job_id="queued", status=JobStatus.QUEUED))
-    store.create(_job(job_id="done", status=JobStatus.DONE))
-    store.create(_job(job_id="desync", status=JobStatus.SKIPPED_DESYNC))
+    job = _job()
+    store.create(job)
+    created = job.created_at
+    first_update = job.updated_at
+    assert created is not None and first_update is not None
 
-    fresh = JobStore()  # simulates the new process after a restart
-    assert fresh.fail_interrupted() == 2
+    job.status = JobStatus.DONE
+    store.update(job)
+    assert job.created_at == created
+    assert job.updated_at >= first_update
 
-    reread = JobStore()
-    assert reread.get("running").status == JobStatus.FAILED
-    assert "restart" in reread.get("running").error
-    assert reread.get("queued").status == JobStatus.FAILED
-    assert reread.get("done").status == JobStatus.DONE
-    assert reread.get("desync").status == JobStatus.SKIPPED_DESYNC
-
-
-def test_fail_interrupted_skips_unreadable_job_files():
-    store = JobStore()
-    store.create(_job(job_id="ok", status=JobStatus.SLICING))
-    bad = store._path("corrupt")
-    bad.parent.mkdir(parents=True, exist_ok=True)
-    bad.write_text("{not json", encoding="utf-8")
-
-    assert JobStore().fail_interrupted() == 1
+    reread = JobStore().get(job.job_id)
+    assert reread.created_at == created
