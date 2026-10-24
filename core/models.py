@@ -282,6 +282,24 @@ ErrorCode = Literal[
 ]
 
 
+YoutubeStatus = Literal["queued", "uploading", "published", "failed"]
+
+YoutubePrivacy = Literal["private", "unlisted", "public"]
+
+
+class YoutubeUpload(BaseModel):
+    """One short on the channel. The full video keeps flat `youtube_*` fields
+    on the JobRecord (older job.json files have them)."""
+
+    status: YoutubeStatus = "queued"
+    progress: int = 0
+    # the title it was uploaded with (the full video's Shorts list repeats it)
+    title: str = ""
+    video_id: str | None = None
+    url: str | None = None
+    error: str | None = None
+
+
 class JobRecord(BaseModel):
     job_id: str
     status: JobStatus = JobStatus.QUEUED
@@ -345,3 +363,25 @@ class JobRecord(BaseModel):
     updated_at: datetime | None = None
     # Computed on read by the API: running but no heartbeat for stale_after_s.
     stale: bool = False
+    # Publishing to the company YouTube channel (publish/). The full video has
+    # the flat youtube_* fields; each short has an entry in youtube_shorts,
+    # keyed by its number (1 = shorts/short_01.mp4).
+    youtube_status: YoutubeStatus | None = None
+    youtube_progress: int = 0
+    youtube_video_id: str | None = None
+    youtube_url: str | None = None
+    youtube_error: str | None = None
+    youtube_shorts: dict[int, YoutubeUpload] = Field(default_factory=dict)
+    # The shorts whose links are in the full video's description on YouTube.
+    youtube_listed_shorts: list[int] = Field(default_factory=list)
+    # True once the job's videos/transcripts were removed from the server
+    # (after publishing, or on explicit request). job.json itself is kept so
+    # the YouTube links stay visible.
+    files_deleted: bool = False
+
+    @property
+    def youtube_busy(self) -> bool:
+        """An upload is waiting or running: the job must not be deleted, and
+        the service must not restart, until it ends."""
+        waiting = ("queued", "uploading")
+        return self.youtube_status in waiting or any(s.status in waiting for s in self.youtube_shorts.values())

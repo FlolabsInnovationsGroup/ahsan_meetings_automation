@@ -1,9 +1,12 @@
-"""Publish finished cuts to the company YouTube channel.
+"""The company YouTube channel: connecting it and uploading one video.
 
 One-time setup: an admin opens /youtube/connect, signs in with the Google
 account that manages the channel and approves access. The resulting refresh
 token is stored on the server (storage_dir/youtube_token.json, mode 600) and
-every later upload uses it, so nobody else needs channel credentials.
+every later upload uses it, so nobody else needs channel credentials. Only
+the upload permission is requested (and read access to the channel's name).
+
+What gets uploaded, in which order, and with which words is publish/run.py.
 
 Google libraries are imported lazily so the rest of the service and the test
 suite run without them.
@@ -18,9 +21,7 @@ from pathlib import Path
 
 from core.config import get_settings
 from core.logging import get_logger
-from core.models import JobRecord, YoutubePrivacy
-
-from .cleanup import delete_job_files
+from core.models import YoutubePrivacy
 
 logger = get_logger(__name__)
 
@@ -118,6 +119,14 @@ def start_connect(return_to: str | None = None) -> str:
             del _pending[key]
         _pending[state] = (now, flow.code_verifier, _safe_return_to(return_to))
     return url
+
+
+def cancel_connect(state: str) -> str:
+    """Forget a sign-in the admin turned down at Google. Returns where to send
+    the browser back to (the page they started from)."""
+    with _pending_lock:
+        pending = _pending.pop(state, None)
+    return pending[2] if pending is not None else "/app"
 
 
 def finish_connect(state: str, code: str) -> str:
@@ -222,46 +231,7 @@ def upload_video(
     return response["id"]
 
 
-def publish_job(
-    job: JobRecord,
-    update: "callable[[JobRecord], None]",
-    title: str,
-    description: str,
-    privacy: YoutubePrivacy,
-    delete_after: bool,
-) -> None:
-    """Background task: upload the job's output, then optionally delete its files."""
-    try:
-        video_id = upload_video(
-            Path(job.output_video_path),
-            title,
-            description,
-            privacy,
-            on_progress=lambda pct: _set_progress(job, update, pct),
-        )
-    except Exception as exc:  # reported to the user via the job record
-        logger.exception("job %s: YouTube upload failed", job.job_id)
-        job.youtube_status = "failed"
-        job.youtube_error = _friendly_error(exc)
-        update(job)
-        return
-
-    job.youtube_video_id = video_id
-    job.youtube_url = f"https://youtu.be/{video_id}"
-    job.youtube_status = "published"
-    job.youtube_progress = 100
-    job.youtube_error = None
-    if delete_after:
-        delete_job_files(job)
-    update(job)
-
-
-def _set_progress(job: JobRecord, update, pct: int) -> None:
-    job.youtube_progress = max(0, min(99, pct))
-    update(job)
-
-
-def _friendly_error(exc: Exception) -> str:
+def friendly_error(exc: Exception) -> str:
     text = str(exc)
     if "quotaExceeded" in text or "uploadLimitExceeded" in text:
         return "YouTube upload limit reached for today. Try again tomorrow."
@@ -270,3 +240,15 @@ def _friendly_error(exc: Exception) -> str:
     if isinstance(exc, YoutubeNotConnectedError):
         return str(exc)
     return f"Upload failed: {text[:300]}"
+
+
+def is_account_wide_error(exc: Exception) -> bool:
+    """The channel or project itself refused (not connected, token revoked,
+    quota or upload limit, no permission): every further upload in the same
+    run would fail the same way, so the run stops instead of trying them."""
+    if isinstance(exc, YoutubeNotConnectedError) or type(exc).__name__ == "RefreshError":
+        return True
+    if getattr(getattr(exc, "resp", None), "status", None) in (401, 403):
+        return True
+    text = str(exc)
+    return any(marker in text for marker in ("quotaExceeded", "uploadLimitExceeded", "invalid_grant"))

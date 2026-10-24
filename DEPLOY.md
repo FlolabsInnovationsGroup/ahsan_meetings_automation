@@ -127,11 +127,18 @@ jobs reuse them from the `model-cache` volume.
 
 ## Publishing to YouTube
 
-When a cut is done, the page shows **Publish to YouTube**: title,
-description, visibility (Private by default), and "Remove from server after
-upload" (on by default). After a successful upload the recording, the cut
-and the transcripts are deleted from the server; only the small job record
-with the YouTube link stays.
+When a cut is done, the page shows **Publish to YouTube**. Choose the full
+video, any of its shorts, or both; edit each title and description; pick the
+visibility (Private by default). The shorts go up first, each saying where
+its clip plays in the full video ("This clip starts at 01:50 in the full
+video."), then the full video goes up with its chapters and a list of the
+shorts with links. Shorts can also be posted alone.
+
+"Remove the files from the server once everything is published" is on by
+default: after the full video and every short are on the channel, the
+recording, the cut, the shorts, the zip and the transcripts are deleted from
+the server; only the small job record with the YouTube links stays. Nothing is
+deleted while something is still to post or failed.
 
 The server uploads with its own long-lived access to the company channel,
 set up once. Anyone who knows the site password can publish to the channel,
@@ -174,8 +181,19 @@ the app). "Disconnect" on the page removes it.
 
 ### Limits to know
 
-- Google's quota allows roughly 100 uploads per day per project, plenty
-  for meetings.
+- Google's quota allows roughly 100 uploads per day per project. A meeting is
+  one upload for the full video plus one per short (4 by default), plenty.
+- A short is an ordinary upload: YouTube treats a video as a Short when it is
+  vertical or square and up to 3 minutes, and ours are 1080x1920 and at most
+  60 seconds. Nothing else marks it.
+- The app only asks Google for permission to upload (and to read the channel's
+  name), so it cannot edit a video after uploading it. That is why the shorts
+  go first: the full video's description is written once, with their links in
+  it. A short posted after the full video is not in that list; the page shows
+  the list to paste into the description in YouTube Studio.
+- Links in a Short's own description are not clickable (YouTube turned that
+  off in 2023). To give a Short a clickable link, set its "Related video" to
+  the full video in YouTube Studio; the API cannot do that.
 - Google used to lock videos uploaded through unaudited API projects to
   Private. Its current documentation says this no longer applies. Check the
   first upload: if YouTube Studio shows it locked to Private, request an API

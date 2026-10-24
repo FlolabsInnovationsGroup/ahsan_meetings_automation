@@ -132,6 +132,13 @@ class Settings(BaseSettings):
 
     storage_dir: Path = Path("./storage")
 
+    # Publishing to the company YouTube channel (publish/youtube.py). Client
+    # ID/secret come from a Google Cloud "Web application" OAuth client whose
+    # authorized redirect URI is {public_base_url}/youtube/callback.
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
+    public_base_url: str = ""
+
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
 

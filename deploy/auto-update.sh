@@ -74,18 +74,27 @@ main() {
   exit 1
 }
 
-# Prints how many jobs are still being processed or uploaded to YouTube.
+# Prints how many jobs are still being processed or uploaded to YouTube (the
+# full video or any of its shorts). A job is done with once it reaches one of
+# the `finished` statuses (core/models.py TERMINAL_STATUSES; a test keeps the
+# two lists equal), so a stage added later is waited for without editing this.
 busy_jobs() {
   python3 - "$1" <<'PY'
 import json, pathlib, sys
-active = {"queued", "downloading", "transcribing", "deciding", "building_edl", "slicing"}
+finished = {"done", "failed", "skipped_desync", "cancelled", "decided"}
+uploading = {"queued", "uploading"}
 count = 0
 for path in pathlib.Path(sys.argv[1]).glob("*/job.json"):
     try:
         job = json.loads(path.read_text())
     except (OSError, ValueError):
         continue
-    if job.get("status") in active or job.get("youtube_status") == "uploading":
+    shorts = job.get("youtube_shorts") or {}
+    busy_upload = job.get("youtube_status") in uploading or any(
+        isinstance(s, dict) and s.get("status") in uploading for s in shorts.values()
+    )
+    status = job.get("status")
+    if (status and status not in finished) or busy_upload:
         count += 1
 print(count)
 PY
