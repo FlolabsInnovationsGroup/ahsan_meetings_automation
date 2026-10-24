@@ -11,16 +11,11 @@ storage/jobs/*
 *.egg-info/
 .ruff_cache/
 
-# Deployment
-data/
-deploy/caddy.env
-branch_structure.json
-temp_auto_push.bat
-temp_interactive_push.bat
-.gitignore
-
-# Local-only credentials (SSH key, full .env copy). Never commit.
-secrets/
-*.pem
-auto-update.log
-.auto-update.lock
+# prompt-tuning eval: real meeting transcripts, labels, results and the report
+# quote internal meetings -- keep them out of git (the harness code is tracked)
+tools/prompt_eval/raw/
+tools/prompt_eval/datasets/
+tools/prompt_eval/results/
+tools/prompt_eval/REPORT.md
+tools/prompt_eval/spend_ledger.json
+cookies.txt
