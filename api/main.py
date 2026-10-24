@@ -7,26 +7,36 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache, partial
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, UploadFile
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    RedirectResponse,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import publish
 from core.config import get_settings
 from core.errors import PipelineError
 from core.logging import configure_logging, get_logger
-from core.models import TERMINAL_STATUSES, JobOptions, JobRecord, JobStatus
+from core.models import (
+    TERMINAL_STATUSES,
+    JobOptions,
+    JobRecord,
+    JobStatus,
+    YoutubePrivacy,
+)
 from core.naming import FINAL_KEY, download_stem
 from core.proc import run_checked
 from core.version import PIPELINE_VERSION
 from ingest import zoom
 from ingest.store import store_transcript, store_video, title_from_filename
 from pipeline import run_pipeline, run_youtube_pipeline, run_zoom_pipeline
+from publish import youtube
 
 from .auth import ApiKeyMiddleware, auth_enabled
 from .jobs import is_valid_job_id, job_store
@@ -87,6 +97,34 @@ class ZoomJobRequest(BaseModel):
     # the meeting INSTANCE uuid from the recordings list or Zoom's webhook
     meeting_uuid: str
     options: JobOptions = JobOptions()
+
+
+class PublishShortRequest(BaseModel):
+    index: int = Field(ge=1, le=99)  # 1 = shorts/short_01.mp4
+    # left out = the suggested title / description (GET /jobs/{id}/publish)
+    title: str | None = Field(default=None, max_length=100)
+    description: str | None = None
+
+
+class PublishRequest(BaseModel):
+    """What to put on the channel. Leave `title` out to post only shorts. A
+    title or description left out is the suggested one. The shorts go up first,
+    then the full video, whose description then lists the shorts."""
+
+    # YouTube's own limits: 100 characters for titles, 5000 bytes for descriptions
+    # (checked in publish/describe.py).
+    title: str | None = Field(default=None, max_length=100)
+    description: str | None = None
+    privacy: YoutubePrivacy = "private"
+    # Remove the files from the server once the full video and every short
+    # are on the channel (never earlier, never after a failure).
+    delete_after: bool = True
+    shorts: list[PublishShortRequest] = Field(default_factory=list, max_length=20)
+
+
+# Serialises "is anything uploading?" with starting an upload, and deleting a
+# job's files with both, so two clicks can't start the same upload twice.
+_publish_lock = threading.Lock()
 
 
 # The recordings picker lists at most this many days per request (every 30
@@ -180,6 +218,12 @@ async def index() -> str:
 @app.get("/app", response_class=HTMLResponse)
 async def app_page() -> str:
     return (WEB_DIR / "app.html").read_text(encoding="utf-8")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy() -> str:
+    """Public privacy policy (linked from the Google OAuth consent screen)."""
+    return (WEB_DIR / "privacy.html").read_text(encoding="utf-8")
 
 
 @app.get("/styles.css")
@@ -450,6 +494,11 @@ async def delete_job(job_id: str, force: bool = False):
     job = _get_job_or_404(job_id)
     if is_protected(job_id):
         raise HTTPException(status_code=409, detail={"error_code": "protected", "message": "job has a .keep marker"})
+    if job.youtube_busy:
+        raise HTTPException(
+            status_code=409,
+            detail={"error_code": "uploading", "message": "job is uploading to YouTube; try again when it has finished"},
+        )
 
     if job.status not in TERMINAL_STATUSES and job_queue.contains(job_id):
         if job_queue.running_job_id == job_id:
@@ -562,6 +611,117 @@ async def get_job_transcript(job_id: str, clean: bool = True) -> FileResponse:
     if not path:
         raise HTTPException(status_code=404, detail="transcript not available")
     return FileResponse(path, media_type="application/json")
+
+
+# ------------------------------------------------------------------ YouTube
+
+# Statuses whose files may be removed while the record stays (a decided job
+# is still waiting for "Render now").
+_FILES_REMOVABLE = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.CANCELLED})
+
+
+@app.get("/youtube/status")
+async def get_youtube_status() -> dict:
+    """Is publishing set up, and to which channel."""
+    return youtube.youtube_status()
+
+
+@app.get("/youtube/connect")
+def youtube_connect(return_to: str = "/app") -> RedirectResponse:
+    """Send the admin to Google to approve access to the company channel."""
+    try:
+        url = youtube.start_connect(return_to)
+    except publish.YoutubeNotConnectedError as exc:  # not configured
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/youtube/callback")
+def youtube_callback(state: str = "", code: str = "", error: str = "") -> RedirectResponse:
+    """Where Google sends the browser back to (public, see api/auth.py)."""
+    if error:
+        back = youtube.cancel_connect(state)
+        return RedirectResponse(_with_param(back, "youtube_error", error[:200]), status_code=302)
+    try:
+        return_to = youtube.finish_connect(state, code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("YouTube sign-in failed")
+        message = f"Could not connect the channel: {exc}"[:200]
+        return RedirectResponse(_with_param("/app", "youtube_error", message), status_code=302)
+    return RedirectResponse(return_to, status_code=302)
+
+
+@app.post("/youtube/disconnect")
+def youtube_disconnect() -> dict:
+    """Forget the channel. Refused while an upload runs: it would lose its
+    credentials half way and take the rest of the run down with it."""
+    for job_id in job_store.list_ids():
+        try:
+            job = job_store.get(job_id)
+        except Exception as exc:  # noqa: BLE001 — one unreadable job.json must not block disconnecting
+            logger.warning("skipping unreadable job %s while checking for uploads: %s", job_id, exc)
+            continue
+        if job is not None and job.youtube_busy:
+            raise HTTPException(status_code=409, detail="An upload is running. Disconnect when it has finished.")
+    youtube.disconnect()
+    return youtube.youtube_status()
+
+
+@app.get("/jobs/{job_id}/publish")
+def get_publish_options(job_id: str) -> dict:
+    """What the publish panel shows: the channel, and for the full video and
+    each short its suggested title and description, the time the short plays
+    in the full video, whether its file is still there, and where it stands."""
+    return publish.publish_options(_require_done(job_id))
+
+
+@app.post("/jobs/{job_id}/publish", response_model=JobRecord)
+def publish_to_youtube(job_id: str, body: PublishRequest, background_tasks: BackgroundTasks) -> JobRecord:
+    """Upload shorts, the full video, or both (the shorts first, so the full
+    video's description can list them). Returns at once; each upload's state
+    is on the job (`youtube_shorts`, `youtube_status`) while it runs."""
+    with _publish_lock:
+        job = _require_done(job_id)
+        try:
+            plan = publish.build_plan(
+                job,
+                title=body.title,
+                description=body.description,
+                privacy=body.privacy,
+                shorts=[(s.index, s.title, s.description) for s in body.shorts],
+                delete_after=body.delete_after,
+            )
+        except publish.PublishRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        publish.prepare(job, plan)
+        job_store.update(job)
+    background_tasks.add_task(publish.publish_job, job, job_store.update, plan)
+    return job
+
+
+@app.delete("/jobs/{job_id}/files", response_model=JobRecord)
+def delete_files(job_id: str) -> JobRecord:
+    """Remove a finished job's videos, zip and transcripts from the server and
+    keep its record, with the YouTube links."""
+    with _publish_lock:
+        job = _get_job_or_404(job_id)
+        if job.status not in _FILES_REMOVABLE:
+            raise HTTPException(status_code=409, detail=f"job is not finished (status={job.status.value})")
+        if job.youtube_busy:
+            raise HTTPException(status_code=409, detail="job is uploading to YouTube")
+        if is_protected(job_id):
+            raise HTTPException(
+                status_code=409, detail={"error_code": "protected", "message": "job has a .keep marker"}
+            )
+        publish.delete_job_files(job)
+        job_store.update(job)
+    return job
+
+
+def _with_param(path: str, key: str, value: str) -> str:
+    return f"{path}{'&' if '?' in path else '?'}{key}={quote(value)}"
 
 
 _MEDIA_TYPES = {

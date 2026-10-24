@@ -310,6 +310,54 @@
     background: none; border: 1.5px solid var(--ink); padding: 4px 10px; cursor: pointer;
   }
 
+  .publish-wrap { display: none; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .publish-wrap.visible { display: block; }
+  .yt-connect {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px;
+    font-family: 'IBM Plex Sans'; font-size: 12.5px; color: var(--ink-muted); line-height: 1.5;
+  }
+  a.small-btn { text-decoration: none; display: inline-block; }
+  .yt-form { display: none; }
+  .yt-form.visible { display: block; }
+  .yt-field {
+    display: flex; flex-direction: column; gap: 4px; max-width: 360px; margin-bottom: 12px;
+    font-family: 'IBM Plex Sans'; font-size: 11.5px; color: var(--ink-muted);
+  }
+  .yt-field select {
+    background: var(--bond-dim); border: 1.5px dashed var(--ink-muted); padding: 8px 10px;
+    color: var(--ink); font-family: 'IBM Plex Sans'; font-size: 13px;
+  }
+  .yt-list { border: 1px solid var(--line); }
+  .yt-row { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .yt-row:last-child { border-bottom: none; }
+  .yt-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap; }
+  .yt-pick {
+    display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+    font-family: 'IBM Plex Sans'; font-size: 13px; font-weight: 600; color: var(--ink);
+  }
+  .yt-pick input { accent-color: var(--red); width: 15px; height: 15px; align-self: center; }
+  .yt-pick small { font-weight: 400; color: var(--ink-muted); font-size: 11.5px; }
+  .yt-chip { font-family: 'Courier Prime', monospace; font-size: 11.5px; color: var(--ink-muted); }
+  .yt-chip.live, .yt-chip.done { color: var(--blue); }
+  .yt-chip.bad { color: var(--red); }
+  .yt-row input[type="text"], .yt-row textarea {
+    width: 100%; margin-top: 8px; padding: 7px 9px; background: var(--bond-dim);
+    border: 1.5px dashed var(--ink-muted); color: var(--ink); font-family: 'IBM Plex Sans'; font-size: 13px;
+  }
+  .yt-row textarea { min-height: 104px; resize: vertical; font-size: 12.5px; line-height: 1.5; }
+  .yt-row input:disabled, .yt-row textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+  .yt-row details summary { margin-top: 8px; cursor: pointer; font-family: 'IBM Plex Sans'; font-size: 12px; color: var(--ink-muted); }
+  .yt-row .yt-error { margin: 6px 0 0; font-size: 12px; color: var(--red); }
+  .yt-row .yt-note { margin: 6px 0 0; font-size: 11.5px; color: var(--ink-muted); line-height: 1.5; }
+  .yt-block { display: none; margin-top: 18px; }
+  .yt-block.visible { display: block; }
+  .yt-block textarea {
+    width: 100%; min-height: 96px; resize: vertical; padding: 8px; background: var(--bond);
+    border: 1px solid var(--line); font-family: 'Courier Prime', monospace; font-size: 13px;
+  }
+  .yt-more { margin-top: 14px; display: none; }
+  .yt-more.visible { display: block; }
+
   .marked-transcript-wrap { display: none; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
   .marked-transcript-wrap.visible { display: block; }
   .marked-transcript-label {
@@ -452,6 +500,36 @@
             <p class="marked-transcript-legend">Paste these lines into the video description.</p>
             <textarea id="chaptersText" readonly></textarea>
             <button type="button" class="copy-btn" id="copyChapters">Copy</button>
+          </div>
+          <div class="publish-wrap" id="publishWrap">
+            <p class="marked-transcript-label">Publish to YouTube</p>
+            <p class="marked-transcript-legend" id="publishLegend"></p>
+            <div class="yt-connect" id="ytConnect"></div>
+            <div class="yt-form" id="ytForm">
+              <label class="yt-field" for="ytPrivacy">Visibility
+                <select id="ytPrivacy">
+                  <option value="private">Private (only you)</option>
+                  <option value="unlisted">Unlisted (anyone with the link)</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+              <div class="yt-list" id="ytList"></div>
+              <label class="opt" for="ytDelete">
+                <input type="checkbox" id="ytDelete" checked />
+                <span>Remove the files from the server once everything is published <small>(the links stay)</small></span>
+              </label>
+              <button class="submit" id="ytPublishBtn" type="button">Publish</button>
+              <div class="error-note" id="ytError" role="alert"></div>
+              <div class="yt-block" id="ytBlock">
+                <p class="marked-transcript-label">Shorts list for the full video</p>
+                <p class="marked-transcript-legend">The full video went up before some of its shorts, so its description doesn't list them all. In YouTube Studio, open the video, then Details, and put this list at the end of the description (replace the old Shorts list if there is one).</p>
+                <textarea id="ytBlockText" readonly></textarea>
+                <button type="button" class="copy-btn" id="ytCopyBlock">Copy</button>
+              </div>
+              <div class="yt-more" id="ytMore">
+                <button type="button" class="small-btn" id="ytRemoveFiles">Remove the files from the server now</button>
+              </div>
+            </div>
           </div>
           <div class="marked-transcript-wrap" id="markedTranscriptWrap">
             <p class="marked-transcript-label">What made the cut</p>
@@ -871,6 +949,7 @@ async function launch(request) {
   markedTranscriptWrap.classList.remove("visible");
   picksEl.classList.remove("visible");
   chaptersWrap.classList.remove("visible");
+  resetPublish();
   renderWarnings([]);
   statusPanel.classList.add("visible");
   transcriptNote.style.display = "none";
@@ -1135,6 +1214,7 @@ async function poll(jobId) {
     renderMarkedTranscript(jobId);
     renderPicks(jobId, false);
     renderChapters(jobId);
+    loadPublish(jobId);
     return;
   }
 
@@ -1338,10 +1418,438 @@ document.getElementById("copyChapters").addEventListener("click", async () => {
   }
 });
 
+// ------------------------------------------------------- YouTube publishing
+// The panel under the results. The server (publish/run.py) does the uploading,
+// shorts first and then the full video; this page sends the chosen words and
+// follows each upload's state on the job.
+
+const publishWrap = document.getElementById("publishWrap");
+const publishLegend = document.getElementById("publishLegend");
+const ytConnect = document.getElementById("ytConnect");
+const ytForm = document.getElementById("ytForm");
+const ytPrivacy = document.getElementById("ytPrivacy");
+const ytList = document.getElementById("ytList");
+const ytDelete = document.getElementById("ytDelete");
+const ytPublishBtn = document.getElementById("ytPublishBtn");
+const ytError = document.getElementById("ytError");
+const ytBlock = document.getElementById("ytBlock");
+const ytBlockText = document.getElementById("ytBlockText");
+const ytMore = document.getElementById("ytMore");
+
+const UPLOAD_WAITING = ["queued", "uploading"];
+let publishOptions = null; // the last GET /jobs/{id}/publish, kept current while uploading
+let publishRows = []; // one per video that can be published: { key, kind, index, check, title, desc, ... }
+let publishTimer = null;
+let ytDisconnectBtn = null;
+// Bumped whenever the panel is reset (a new job starts), so a request that was
+// already in flight for the old job can tell its answer is stale.
+let publishGen = 0;
+let youtubeSignInError = ""; // /youtube/callback sends ?youtube_error=… when the sign-in failed
+
+function resetPublish() {
+  publishGen += 1;
+  if (publishTimer) clearTimeout(publishTimer);
+  publishTimer = null;
+  publishOptions = null;
+  publishRows = [];
+  publishWrap.classList.remove("visible");
+  clearYtError();
+}
+
+function showYtError(message) {
+  ytError.textContent = message;
+  ytError.classList.add("visible");
+}
+
+function clearYtError() {
+  ytError.textContent = "";
+  ytError.classList.remove("visible");
+}
+
+async function loadPublish(jobId) {
+  const gen = publishGen;
+  let res, body;
+  try {
+    res = await fetch(`/jobs/${jobId}/publish`);
+    body = res.ok ? await res.json() : null;
+  } catch (e) {
+    return; // the panel is optional: the results stand without it
+  }
+  if (gen !== publishGen) return; // another job was started meanwhile
+  if (!body) {
+    publishWrap.classList.remove("visible");
+    return;
+  }
+  publishOptions = body;
+  buildPublish(jobId);
+  if (publishOptions.busy) watchPublish(jobId);
+}
+
+function buildPublish(jobId) {
+  const o = publishOptions;
+  // What was typed or ticked before a rebuild. Text is kept only where the
+  // person edited it: an untouched row takes the server's new suggestion
+  // (e.g. a short's description gains the link once the full video is online).
+  const drafts = {};
+  publishRows.forEach((r) => {
+    drafts[r.key] = { checked: r.check.checked, dirty: r.dirty, title: r.title.value, desc: r.desc.value };
+  });
+
+  publishWrap.classList.add("visible");
+  publishLegend.textContent = o.files_deleted
+    ? "The files were removed from the server. The YouTube links stay here."
+    : "Shorts go up first, then the full video, whose description lists the shorts.";
+  renderConnect(jobId);
+
+  ytList.textContent = "";
+  publishRows = [];
+  const posted = o.full.status === "published" || o.shorts.some((s) => s.status === "published");
+  if (o.full.available || o.full.status) {
+    addPublishRow("full", "full", o.full, {
+      label: "Full video",
+      note: "The list of the shorts is added to this description when it is uploaded.",
+    });
+  }
+  o.shorts.forEach((s) => {
+    if (!s.available && !s.status) return;
+    addPublishRow(`short:${s.index}`, "short", s, {
+      label: `Short ${s.index}`,
+      index: s.index,
+      meta: s.at ? `starts at ${s.at} in the full video` : s.available ? "not in the cleaned meeting" : "",
+    });
+  });
+  publishRows.forEach((r) => {
+    const d = drafts[r.key];
+    if (d && r.item.status !== "published") {
+      r.check.checked = d.checked;
+      if (d.dirty) {
+        r.title.value = d.title;
+        r.desc.value = d.desc;
+        r.dirty = true;
+      }
+    } else {
+      r.check.checked = !!r.item.available && r.item.status !== "published"; // everything left is ticked
+    }
+  });
+
+  const connected = o.youtube.configured && o.youtube.connected;
+  ytForm.classList.toggle("visible", publishRows.length > 0 && (connected || posted));
+  ytBlockText.value = o.shorts_block || "";
+  ytBlock.classList.toggle("visible", !!o.shorts_block);
+  refreshPublishRows();
+}
+
+function renderConnect(jobId) {
+  const yt = publishOptions.youtube;
+  ytConnect.textContent = "";
+  ytDisconnectBtn = null;
+  const text = document.createElement("span");
+  ytConnect.appendChild(text);
+  if (!yt.configured) {
+    text.textContent = "Publishing to YouTube isn't set up on this server yet: add YOUTUBE_CLIENT_ID, " +
+      "YOUTUBE_CLIENT_SECRET and PUBLIC_BASE_URL to .env and restart (see DEPLOY.md).";
+  } else if (!yt.connected) {
+    text.textContent = "The company YouTube channel isn't connected yet.";
+    const link = document.createElement("a");
+    link.className = "small-btn";
+    link.textContent = "Connect the YouTube channel";
+    link.href = "/youtube/connect?return_to=" + encodeURIComponent("/app?job=" + jobId);
+    ytConnect.appendChild(link);
+    if (youtubeSignInError) {
+      const note = document.createElement("div");
+      note.className = "error-note visible";
+      note.style.flexBasis = "100%";
+      note.textContent = "YouTube sign-in: " + youtubeSignInError;
+      ytConnect.appendChild(note);
+    }
+  } else {
+    youtubeSignInError = "";
+    text.textContent = "Channel: " + (yt.channel_title || "connected");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "small-btn";
+    btn.textContent = "Disconnect";
+    btn.disabled = !!publishOptions.busy;
+    btn.addEventListener("click", async () => {
+      let res;
+      try {
+        res = await fetch("/youtube/disconnect", { method: "POST" });
+      } catch (e) {
+        /* the reload below shows the truth */
+      }
+      if (res && res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        showError(detailText(body) || "Couldn't disconnect right now.");
+        return;
+      }
+      loadPublish(jobId);
+    });
+    ytConnect.appendChild(btn);
+    ytDisconnectBtn = btn;
+  }
+}
+
+function addPublishRow(key, kind, item, opts) {
+  const row = document.createElement("div");
+  row.className = "yt-row";
+  const head = document.createElement("div");
+  head.className = "yt-row-head";
+  const pick = document.createElement("label");
+  pick.className = "yt-pick";
+  const check = document.createElement("input");
+  check.type = "checkbox";
+  check.addEventListener("change", updatePublishButton);
+  const name = document.createElement("span");
+  name.textContent = opts.label;
+  pick.append(check, name);
+  if (opts.meta) {
+    const meta = document.createElement("small");
+    meta.textContent = opts.meta;
+    pick.appendChild(meta);
+  }
+  const chip = document.createElement("span");
+  chip.className = "yt-chip";
+  head.append(pick, chip);
+
+  const title = document.createElement("input");
+  title.type = "text";
+  title.maxLength = 100;
+  title.value = item.title || "";
+  title.setAttribute("aria-label", `Title of ${opts.label.toLowerCase()}`);
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "Description";
+  const desc = document.createElement("textarea");
+  desc.value = item.description || "";
+  desc.setAttribute("aria-label", `Description of ${opts.label.toLowerCase()}`);
+  details.append(summary, desc);
+  const err = document.createElement("p");
+  err.className = "yt-error";
+  row.append(head, title, details);
+  if (opts.note) {
+    const note = document.createElement("p");
+    note.className = "yt-note";
+    note.textContent = opts.note;
+    details.appendChild(note);
+  }
+  row.appendChild(err);
+  ytList.appendChild(row);
+  const entry = { key, kind, index: opts.index, item, check, title, desc, details, chip, err, dirty: false };
+  const markEdited = () => { entry.dirty = true; };
+  title.addEventListener("input", markEdited);
+  desc.addEventListener("input", markEdited);
+  publishRows.push(entry);
+}
+
+// Brings every row in line with publishOptions without rebuilding it, so
+// what the person typed survives the progress updates.
+function refreshPublishRows() {
+  const o = publishOptions;
+  const canEdit = o.youtube.configured && o.youtube.connected && !o.files_deleted && !o.busy;
+  publishRows.forEach((r) => {
+    const item = r.kind === "full" ? o.full : o.shorts.find((s) => s.index === r.index);
+    r.item = item;
+    const posted = item.status === "published";
+    const editable = canEdit && item.available && !posted;
+    r.check.disabled = !editable;
+    if (posted) r.check.checked = false;
+    r.title.disabled = r.desc.disabled = !editable;
+    r.title.hidden = r.details.hidden = posted || !item.available;
+    setChip(r, item);
+  });
+  ytMore.classList.toggle("visible", !o.files_deleted && !o.busy);
+  if (ytDisconnectBtn) ytDisconnectBtn.disabled = !!o.busy; // the server refuses it mid-upload too
+  updatePublishButton();
+}
+
+function setChip(r, item) {
+  r.chip.className = "yt-chip";
+  r.chip.textContent = "";
+  if (item.status === "published") {
+    r.chip.classList.add("done");
+    r.chip.append("posted");
+    if (typeof item.url === "string" && /^https:\/\//.test(item.url)) {
+      r.chip.append(" · ");
+      addLink(r.chip, item.url, "view on YouTube", { newTab: true });
+    }
+  } else if (item.status === "uploading") {
+    r.chip.classList.add("live");
+    r.chip.textContent = `uploading ${item.progress || 0}%`;
+  } else if (item.status === "queued") {
+    r.chip.classList.add("live");
+    r.chip.textContent = "waiting";
+  } else if (item.status === "failed") {
+    r.chip.classList.add("bad");
+    r.chip.textContent = "failed";
+  } else if (!item.available) {
+    r.chip.textContent = "file no longer on the server";
+  }
+  r.err.textContent = item.status === "failed" && item.error ? item.error : "";
+  r.err.hidden = !r.err.textContent;
+}
+
+function pickedRows() {
+  return publishRows.filter((r) => !r.check.disabled && r.check.checked);
+}
+
+function updatePublishButton() {
+  const o = publishOptions;
+  if (!o) return;
+  const canPublish = o.youtube.configured && o.youtube.connected && !o.files_deleted;
+  const anyLeft = publishRows.some((r) => r.item.available && r.item.status !== "published");
+  ytPublishBtn.style.display = canPublish && anyLeft ? "block" : "none";
+  ytDelete.closest("label").style.display = canPublish && anyLeft ? "" : "none";
+  const n = pickedRows().length;
+  ytPublishBtn.disabled = !!o.busy || n === 0;
+  ytPublishBtn.textContent = o.busy ? "Publishing…" : n === 0 ? "Choose what to publish"
+    : `Publish ${n} video${n === 1 ? "" : "s"}`;
+  ytPrivacy.disabled = !!o.busy;
+  ytDelete.disabled = !!o.busy;
+}
+
+async function publishNow() {
+  const picked = pickedRows();
+  if (!currentJobId || !picked.length) return;
+  clearYtError();
+  const body = { privacy: ytPrivacy.value, delete_after: ytDelete.checked, shorts: [] };
+  picked.forEach((r) => {
+    if (r.kind === "full") {
+      body.title = r.title.value;
+      body.description = r.desc.value;
+    } else {
+      body.shorts.push({ index: r.index, title: r.title.value, description: r.desc.value });
+    }
+  });
+  ytPublishBtn.disabled = true;
+  const gen = publishGen;
+  const jobId = currentJobId;
+  let res, data;
+  try {
+    res = await fetch(`/jobs/${jobId}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    if (gen !== publishGen) return;
+    showYtError("Can't reach the server: " + e.message);
+    updatePublishButton();
+    return;
+  }
+  if (gen !== publishGen) return; // another job was started meanwhile
+  if (!res.ok) {
+    showYtError(detailText(data) || "Couldn't start publishing.");
+    updatePublishButton();
+    return;
+  }
+  applyJobToPublish(data);
+  watchPublish(jobId);
+}
+
+// Follows the uploads on the job record until none is waiting or running.
+function watchPublish(jobId) {
+  if (publishTimer) clearTimeout(publishTimer);
+  const gen = publishGen;
+  let failures = 0;
+  const tick = async () => {
+    if (gen !== publishGen) return;
+    let job;
+    try {
+      const res = await fetch(`/jobs/${jobId}`);
+      if (res.status === 404) {
+        publishTimer = null;
+        showYtError("This job was removed from the server.");
+        return;
+      }
+      if (!res.ok) throw new Error(res.statusText);
+      job = await res.json();
+    } catch (e) {
+      if (gen !== publishGen) return;
+      failures += 1;
+      if (failures < 5) {
+        publishTimer = setTimeout(tick, 4000); // a blip: keep following
+      } else {
+        publishTimer = null;
+        showYtError("Lost the connection to the server. Reload the page to see how the upload went.");
+      }
+      return;
+    }
+    if (gen !== publishGen) return; // another job was started meanwhile
+    failures = 0;
+    applyJobToPublish(job);
+    if (publishOptions && publishOptions.busy) {
+      publishTimer = setTimeout(tick, 2000);
+      return;
+    }
+    publishTimer = null;
+    renderResults(job); // the files may have been removed after the last upload
+    loadPublish(jobId);
+  };
+  tick();
+}
+
+function applyJobToPublish(job) {
+  const o = publishOptions;
+  if (!o) return;
+  const states = job.youtube_shorts || {};
+  Object.assign(o.full, {
+    status: job.youtube_status, progress: job.youtube_progress, url: job.youtube_url, error: job.youtube_error,
+  });
+  o.shorts.forEach((s) => {
+    const st = states[String(s.index)] || {};
+    Object.assign(s, { status: st.status || null, progress: st.progress || 0, url: st.url || null, error: st.error || null });
+  });
+  o.files_deleted = !!job.files_deleted;
+  o.busy = UPLOAD_WAITING.includes(job.youtube_status) || Object.values(states).some((st) => UPLOAD_WAITING.includes(st.status));
+  refreshPublishRows();
+}
+
+ytPublishBtn.addEventListener("click", publishNow);
+
+document.getElementById("ytCopyBlock").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(ytBlockText.value);
+  } catch (e) {
+    ytBlockText.select();
+  }
+});
+
+document.getElementById("ytRemoveFiles").addEventListener("click", async () => {
+  if (!currentJobId) return;
+  if (!window.confirm("Remove this job's videos, zip and transcripts from the server? The YouTube links stay.")) return;
+  clearYtError();
+  const gen = publishGen;
+  const jobId = currentJobId;
+  let res, data;
+  try {
+    res = await fetch(`/jobs/${jobId}/files`, { method: "DELETE" });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    if (gen === publishGen) showYtError("Can't reach the server: " + e.message);
+    return;
+  }
+  if (gen !== publishGen) return; // another job was started meanwhile
+  if (!res.ok) {
+    showYtError(detailText(data) || "Couldn't remove the files.");
+    return;
+  }
+  renderResults(data);
+  loadPublish(jobId);
+});
+
 submitBtn.addEventListener("click", submit);
 urlInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") submit();
 });
+(function readSignInError() {
+  const params = new URLSearchParams(window.location.search);
+  youtubeSignInError = params.get("youtube_error") || "";
+  if (!youtubeSignInError) return;
+  params.delete("youtube_error");
+  const rest = params.toString();
+  try { history.replaceState(null, "", rest ? `?${rest}` : window.location.pathname); } catch (e) { /* not important */ }
+})();
 resumeFromUrl();
 </script>
 </body>

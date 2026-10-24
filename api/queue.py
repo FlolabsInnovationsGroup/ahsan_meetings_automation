@@ -26,6 +26,7 @@ from core.errors import JobCancelled, JobTimedOut
 from core.logging import get_logger
 from core.models import TERMINAL_STATUSES, JobRecord, JobStatus
 from core.proc import set_poll_hook
+from publish.run import fail_interrupted_uploads
 
 from .jobs import JobStore, is_valid_job_id
 
@@ -284,8 +285,10 @@ def _owned_download(store: JobStore, job_id: str) -> Path | None:
 
 def reconcile_on_startup(store: JobStore) -> dict[str, int]:
     """Anything a previous process left non-terminal can never finish: mark it
-    failed/interrupted (retryable) and drop its temp files. Then apply the
-    retention policy (0 = keep everything)."""
+    failed/interrupted (retryable) and drop its temp files. A finished job
+    whose YouTube upload was cut off keeps its result; only the upload is
+    marked failed, so it can be published again. Then apply the retention
+    policy (0 = keep everything)."""
     settings = get_settings()
     interrupted = swept = 0
     for job_id in store.list_ids():
@@ -305,6 +308,13 @@ def reconcile_on_startup(store: JobStore) -> dict[str, int]:
             job.error = f"the service stopped while this job was {previous}; submit it again"
             store.update(job)
             shutil.rmtree(settings.jobs_dir / job_id / "tmp", ignore_errors=True)
+            interrupted += 1
+            continue
+        if job.youtube_busy:
+            fail_interrupted_uploads(job)
+            store.update(job)  # also restarts its retention clock: it can be published again
+            # a video unpacked from the zip for the upload that was cut off
+            shutil.rmtree(settings.jobs_dir / job_id / "publish_tmp", ignore_errors=True)
             interrupted += 1
             continue
         if settings.job_retention_hours > 0 and not is_protected(job_id):

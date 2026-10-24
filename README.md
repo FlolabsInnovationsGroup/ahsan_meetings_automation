@@ -260,6 +260,42 @@ intro & outro" box (`options.intro_outro`, or the `intro_outro` form field
 for uploads). `INTRO_OUTRO_DIR`, `INTRO_FILE` and `OUTRO_FILE` point
 elsewhere (relative paths are inside the project folder).
 
+### Publishing to YouTube (the final video and its shorts)
+
+A finished job's page has a **Publish to YouTube** panel (set up once, see
+[DEPLOY.md](DEPLOY.md#publishing-to-youtube)). Choose the full video, any of
+the shorts, or both, edit each title and description, pick the visibility
+(private by default) and publish. The shorts go up first and the full video
+last, so the full video's description can list them:
+
+- **A short's description** says where its clip plays in the full video
+  ("This clip starts at 01:50 in the full video."), worked out through the
+  render manifest, and links to that moment (`…?t=110`) when the full video is
+  already on the channel. A clip the cleanup cut entirely gets no time.
+- **The full video's description** is its chapters, then "Shorts from this
+  meeting:" with a link to each short. Those lines never start with a time, so
+  YouTube can't mistake them for chapters.
+- **A short posted after the full video** can't be added to its description:
+  the app only has Google's upload permission, which can't edit a video. The
+  page shows the list to paste into the description in YouTube Studio.
+- **Every video is its own upload** with its own state on the job
+  (`youtube_status`/`youtube_url` for the full video, `youtube_shorts` for the
+  shorts). One failing doesn't stop the others; a quota or sign-in problem
+  stops the run. A failed one can be tried again alone, a published one is
+  never uploaded twice.
+- **Remove the files from the server once everything is published** (on by
+  default) deletes the recording, cut, shorts, zip and transcripts after the
+  full video and every short are on the channel. The job record with the links
+  stays. With only the zip on disk (`SERVE_INDIVIDUAL_ARTIFACTS=false`), each
+  video is unpacked from it just for its upload.
+
+| Route | What it does |
+|---|---|
+| `GET /youtube/status`, `/youtube/connect`, `/youtube/callback`, `POST /youtube/disconnect` | connect the company channel (once) |
+| `GET /jobs/{id}/publish` | suggested titles and descriptions, the time each short plays in the full video, what can still be uploaded and its state |
+| `POST /jobs/{id}/publish` | `{"title", "description", "privacy", "delete_after", "shorts": [{"index", "title", "description"}]}`; leave `title` out to post only shorts; anything left out is the suggestion |
+| `DELETE /jobs/{id}/files` | remove the files, keep the record |
+
 ## Tests
 
 ```bash
