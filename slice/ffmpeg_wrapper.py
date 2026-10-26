@@ -16,15 +16,19 @@ regression job. Cut points are whole source frames:
 * audio is cut from a timestamp-normalised 48 kHz FLAC by sample count, with
   cumulative sample boundaries so the total is exact even at 29.97 fps.
 
-Filter graphs are written to a file and passed with `-/filter_complex` (the
-old `-filter_complex_script` flag no longer exists in ffmpeg 9, and long
-graphs would hit the Windows command-line limit).
+Filter graphs are written to a file (long graphs would hit the command-line
+limit) and read with `-/filter_complex <file>` on ffmpeg 7 and newer, or the
+older `-filter_complex_script <file>` below 7: the old flag was deprecated in
+7.0 and is gone in 8.0, and the new one does not exist before 7.0 (the Docker
+image's Debian 12 ships ffmpeg 5.1). See `filter_graph_args`.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 
 from core.config import get_settings
@@ -46,6 +50,39 @@ MICRO_FADE_SAMPLES = 960  # 20 ms
 
 def ffmpeg_bin() -> str:
     return get_settings().ffmpeg_bin
+
+
+# First ffmpeg that reads an option's value from a file with `-/<option>`.
+FILE_OPTION_FROM_MAJOR = 7
+
+
+def parse_ffmpeg_major(version_output: str) -> int | None:
+    """The major version on the first line of `ffmpeg -version`:
+    "5.1.9-0+deb12u1" -> 5, "n7.1-3-g1ab2c3" -> 7, "9.0.1-full_build-..." -> 9.
+    None for a git build ("N-117234-g...") or anything unrecognisable."""
+    match = re.search(r"ffmpeg version n?(\d+)\.\d", version_output or "")
+    return int(match.group(1)) if match else None
+
+
+@lru_cache(maxsize=8)
+def ffmpeg_major(binary: str) -> int | None:
+    """Major version of this ffmpeg binary (asked once per binary), or None
+    when it can't be told. A missing or broken ffmpeg fails properly, with
+    its own message, at its first real use."""
+    try:
+        output = run_checked([binary, "-hide_banner", "-version"], timeout=15).stdout
+    except Exception:  # noqa: BLE001
+        return None
+    return parse_ffmpeg_major(output)
+
+
+def filter_graph_args(graph_path: Path) -> list[str]:
+    """The arguments that make ffmpeg read its filter graph from `graph_path`:
+    `-/filter_complex` on ffmpeg 7+ (and when the version is unknown, which
+    means a recent git build), `-filter_complex_script` on older ones."""
+    major = ffmpeg_major(ffmpeg_bin())
+    old = major is not None and major < FILE_OPTION_FROM_MAJOR
+    return ["-filter_complex_script" if old else "-/filter_complex", str(graph_path)]
 
 
 # --------------------------------------------------------------------- video
@@ -121,7 +158,7 @@ def build_video_part_cmd(
     cmd = [ffmpeg_bin(), *BASE_ARGS]
     for span in part.inputs:
         cmd += video_input_args(src, span, fps)
-    cmd += ["-/filter_complex", str(graph_path), "-map", "[vout]", "-an", *video_args(fps),
+    cmd += [*filter_graph_args(graph_path), "-map", "[vout]", "-an", *video_args(fps),
             "-frames:v", str(part.frames), str(dest)]
     return cmd
 
@@ -232,7 +269,7 @@ def build_audio_chunk_cmd(flac: Path, pieces: list[AudioPiece], graph_path: Path
         cmd += args
         pres.append(pre)
     graph_path.write_text(build_audio_graph(pieces, pres), encoding="utf-8")
-    cmd += ["-/filter_complex", str(graph_path), "-map", "[aout]", "-c:a", "flac", "-ar", str(AUDIO_RATE), str(dest)]
+    cmd += [*filter_graph_args(graph_path), "-map", "[aout]", "-c:a", "flac", "-ar", str(AUDIO_RATE), str(dest)]
     return cmd
 
 
@@ -254,7 +291,7 @@ def encode_aac(chunks: list[Path], dest: Path, graph_path: Path, content_s: floa
     else:
         graph_path.write_text("".join(f"[{k}:a]" for k in range(len(chunks))) +
                               f"concat=n={len(chunks)}:v=0:a=1[aout]", encoding="utf-8")
-        cmd += ["-/filter_complex", str(graph_path), "-map", "[aout]"]
+        cmd += [*filter_graph_args(graph_path), "-map", "[aout]"]
     cmd += [*AUDIO_ARGS, "-vn", str(dest)]
     run_checked(cmd, timeout=ffmpeg_timeout(content_s / 10.0))
 
@@ -339,7 +376,7 @@ def build_card_graph(*, fps: Fraction, width: int, height: int, frames: int, fon
 
 def render_card_video(dest: Path, graph: str, graph_path: Path, fps: Fraction, frames: int) -> None:
     graph_path.write_text(graph, encoding="utf-8")
-    cmd = [ffmpeg_bin(), *BASE_ARGS, "-/filter_complex", str(graph_path), "-map", "[vout]", "-an",
+    cmd = [ffmpeg_bin(), *BASE_ARGS, *filter_graph_args(graph_path), "-map", "[vout]", "-an",
            *video_args(fps), "-frames:v", str(frames), str(dest)]
     run_checked(cmd, timeout=ffmpeg_timeout(float(Fraction(frames) / fps)))
 
@@ -371,7 +408,7 @@ def build_clip_graph(*, fps: Fraction, width: int, height: int, frames: int, col
 
 def render_clip_video(src: Path, dest: Path, graph: str, graph_path: Path, fps: Fraction, frames: int) -> None:
     graph_path.write_text(graph, encoding="utf-8")
-    cmd = [ffmpeg_bin(), *BASE_ARGS, "-i", str(src), "-/filter_complex", str(graph_path), "-map", "[vout]", "-an",
+    cmd = [ffmpeg_bin(), *BASE_ARGS, "-i", str(src), *filter_graph_args(graph_path), "-map", "[vout]", "-an",
            *video_args(fps), "-frames:v", str(frames), str(dest)]
     # decoding a 1080p60 clip costs more than its length suggests
     run_checked(cmd, timeout=ffmpeg_timeout(4.0 * float(Fraction(frames) / fps)))
@@ -426,7 +463,7 @@ def render_short(src: Path, flac: Path, span: InputSpan, piece: AudioPiece, grap
     graph_path.write_text(graph, encoding="utf-8")
     audio_args, _ = audio_input_args(flac, piece)
     cmd = [ffmpeg_bin(), *BASE_ARGS, *video_input_args(src, span, fps), *audio_args,
-           "-/filter_complex", str(graph_path), "-map", "[vout]", "-map", "[aout]",
+           *filter_graph_args(graph_path), "-map", "[vout]", "-map", "[aout]",
            *video_args(fps), *AUDIO_ARGS, "-frames:v", str(span.frames), "-movflags", "+faststart", str(dest)]
     # a 1080x1920 blur+overlay encode is ~3-4x the work of a 720p piece
     run_checked(cmd, timeout=ffmpeg_timeout(4.0 * float(Fraction(span.frames) / fps)))
