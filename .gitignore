@@ -19,3 +19,18 @@ tools/prompt_eval/results/
 tools/prompt_eval/REPORT.md
 tools/prompt_eval/spend_ledger.json
 cookies.txt
+
+# Deployment (server-side files; restored after the 5fe88e1 merge dropped them)
+data/
+deploy/caddy.env
+auto-update.log
+.auto-update.lock
+.env.*
+!.env.example
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+
+# Local-only credentials (SSH key, full .env copy). Never commit.
+secrets/
+*.pem
