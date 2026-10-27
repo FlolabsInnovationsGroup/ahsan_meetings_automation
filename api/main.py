@@ -812,6 +812,76 @@ async def render_decided_job(job_id: str):
     return job
 
 
+# ------------------------------------------------------------------ server storage
+
+# What "Clear old jobs" may delete: finished jobs. A job stopped at the AI's
+# picks (DECIDED) still waits for "Render now", so it stays.
+_CLEARABLE = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.CANCELLED})
+
+
+def _clearable_jobs() -> list[JobRecord]:
+    """Finished jobs the side panel's "Clear old jobs" deletes: never one that
+    runs or waits in the queue, uploads, has a .keep marker, or that the
+    autopilot is still processing or posting."""
+    in_use = {m.job_id for m in autopilot_store.read().meetings.values()
+              if m.state in ("processing", "posting") and m.job_id}
+    found = []
+    for job_id in job_store.list_ids():
+        job = _safe_get_job(job_id)
+        if (job is None or job.status not in _CLEARABLE or job.youtube_busy or job_queue.contains(job_id)
+                or is_protected(job_id) or job_id in in_use):
+            continue
+        found.append(job)
+    return found
+
+
+def _folder_bytes(folder: Path) -> int:
+    total = 0
+    for path in folder.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+@app.get("/storage")
+def get_storage() -> dict:
+    """Free disk space on the server, and what "Clear old jobs" would delete."""
+    settings = get_settings()
+    jobs = _clearable_jobs()
+    try:
+        free = shutil.disk_usage(settings.storage_dir).free
+    except OSError:
+        free = None
+    return {
+        "disk_free_bytes": free,
+        "old_jobs": len(jobs),
+        "old_jobs_bytes": sum(_folder_bytes(settings.jobs_dir / job.job_id) for job in jobs),
+    }
+
+
+@app.post("/storage/clear-jobs")
+def clear_old_jobs() -> dict:
+    """Delete every finished job: its videos, zip, transcripts and record.
+    What went to YouTube stays in the posted list (data/state), so nothing
+    can be posted twice afterwards."""
+    settings = get_settings()
+    deleted = freed = 0
+    # under the publish lock: no upload can start on a job while it goes
+    with _publish_lock:
+        for job in _clearable_jobs():
+            folder = settings.jobs_dir / job.job_id
+            size = _folder_bytes(folder)
+            delete_job_files(job_store, job.job_id)
+            if not folder.exists():
+                deleted += 1
+                freed += size
+    logger.info("cleared %d old job(s), %.2f GB", deleted, freed / 1024**3)
+    return {"deleted": deleted, "freed_bytes": freed, **get_storage()}
+
+
 @app.get("/jobs")
 async def list_jobs(limit: int = 50) -> list[dict]:
     """Job history, newest first (ids, status, timestamps, error codes)."""

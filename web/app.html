@@ -660,6 +660,8 @@
       </div>
       <p class="side-sub">Posted</p>
       <div id="postedList"><p class="side-empty">Loading…</p></div>
+      <p class="side-sub">Server storage</p>
+      <div class="ap-status" id="storageBox"><p class="side-empty">Loading…</p></div>
     </aside>
     </div>
   </div>
@@ -2149,6 +2151,8 @@ async function loadSide() {
     if (ap) renderAutopilot(ap);
     const posted = await fetch("/posted").then((r) => (r.ok ? r.json() : null)).catch(() => null);
     if (posted) renderPosted(posted);
+    const storage = await fetch("/storage").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (storage) renderStorage(storage);
   } finally {
     sideLoading = false;
   }
@@ -2338,6 +2342,51 @@ function renderPosted(data) {
     postedList.appendChild(sideEl("p", "side-empty",
       `…and ${meetings.length - SIDE_MAX_MEETINGS} older meetings (all in data/state/posted.jsonl on the server).`));
   }
+}
+
+const storageBox = document.getElementById("storageBox");
+let storageNote = ""; // what the last "Clear old jobs" did
+
+function sizeText(bytes) {
+  if (bytes === null || bytes === undefined) return "unknown";
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+function renderStorage(s) {
+  storageBox.textContent = "";
+  storageBox.appendChild(sideEl("div", "", `${sizeText(s.disk_free_bytes)} free on the server.`));
+  storageBox.appendChild(sideEl("div", "muted", s.old_jobs
+    ? `${s.old_jobs} finished job${s.old_jobs === 1 ? "" : "s"} use ${sizeText(s.old_jobs_bytes)}.`
+    : "No finished jobs to clear."));
+  if (storageNote) storageBox.appendChild(sideEl("div", "muted", storageNote));
+  if (!s.old_jobs) return;
+  const btn = sideEl("button", "small-btn", "Clear old jobs");
+  btn.type = "button";
+  btn.style.marginTop = "8px";
+  btn.addEventListener("click", async () => {
+    if (!window.confirm(`Delete ${s.old_jobs} finished job${s.old_jobs === 1 ? "" : "s"} `
+      + `(${sizeText(s.old_jobs_bytes)})? Their videos, zips and records go; what is on YouTube `
+      + "stays in the posted list. Running jobs and uploads are never touched.")) return;
+    btn.disabled = true;
+    btn.textContent = "Clearing…";
+    clearError();
+    let res, body;
+    try {
+      res = await fetch("/storage/clear-jobs", { method: "POST" });
+      body = await res.json().catch(() => ({}));
+    } catch (e) {
+      showError("Can't reach the server: " + e.message);
+      loadSide();
+      return;
+    }
+    if (!res.ok) {
+      showError(detailText(body) || "Couldn't clear the old jobs.");
+    } else {
+      storageNote = `Cleared ${body.deleted} job${body.deleted === 1 ? "" : "s"}, freed ${sizeText(body.freed_bytes)}.`;
+    }
+    loadSide();
+  });
+  storageBox.appendChild(btn);
 }
 
 setInterval(() => {
