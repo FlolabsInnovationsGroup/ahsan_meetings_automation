@@ -67,6 +67,8 @@ REQUIRED_SCOPES = (
     "cloud_recording:read:list_recording_files:admin",
     "cloud_recording:read:recording:admin",
 )
+# Optional: lets the autopilot read the hosts' meeting schedule.
+SCHEDULE_SCOPE = "meeting:read:list_meetings:admin"
 NOT_CONFIGURED = "Zoom is not configured (fill ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET in .env)"
 
 TOKEN_EARLY_REFRESH_S = 300
@@ -259,6 +261,23 @@ class ZoomClient:
     def get_meeting(self, uuid: str) -> dict:
         """One meeting instance's recording files (always by instance UUID)."""
         return self._get_json(f"/meetings/{encode_uuid(uuid)}/recordings", f"recording {uuid}")
+
+    def list_upcoming_meetings(self, host_email: str) -> list[dict]:
+        """The host's scheduled meetings that haven't happened yet (topic,
+        start_time, duration in minutes). Needs the app scope
+        meeting:read:list_meetings:admin (SCHEDULE_SCOPE); only the autopilot
+        uses it, to look for a recording right after a meeting ends."""
+        path = f"/users/{quote(host_email.strip(), safe='@')}/meetings"
+        meetings, page_token = [], ""
+        while True:
+            params = {"type": "upcoming", "page_size": 300}
+            if page_token:
+                params["next_page_token"] = page_token
+            data = self._get_json(path, f"scheduled meetings of {host_email}", params)
+            meetings += [m for m in data.get("meetings") or [] if isinstance(m, dict)]
+            page_token = data.get("next_page_token") or ""
+            if not page_token:
+                return meetings
 
     # ------------------------------------------------------------- downloads
     def download_file(

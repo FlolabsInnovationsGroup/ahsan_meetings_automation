@@ -20,6 +20,7 @@ from core.models import (
     RenderPiece,
     YoutubeUpload,
 )
+from ledger import uploads
 from publish import delete_job_files, describe, media
 from publish import run as publish_run
 from publish import youtube as yt
@@ -100,18 +101,23 @@ def _connect_fake_channel(title="FloLabs"):
 
 
 class FakeYoutube:
-    """Stands in for yt.upload_video: records every upload and hands out ids."""
+    """Stands in for yt.upload_video: records every upload and hands out ids.
+    A failure listed in `fail` (by title) happens before YouTube made an
+    upload link, so nothing of it is on the channel."""
 
     def __init__(self, monkeypatch, fail=None):
         self.uploads = []
         self.fail = fail or {}
         monkeypatch.setattr(yt, "upload_video", self)
 
-    def __call__(self, path, title, description, privacy, on_progress=None):
+    def __call__(self, path, title, description, privacy, on_progress=None, *, tags=(), session_uri=None,
+                 start_byte=0, on_session=None):
         self.uploads.append({"bytes": Path(path).read_bytes(), "title": title, "description": description,
-                             "privacy": privacy})
+                             "privacy": privacy, "tags": list(tags)})
         if title in self.fail:
             raise self.fail[title]
+        if on_session is not None:
+            on_session(f"https://upload.example/session/{len(self.uploads)}")
         on_progress(50)
         return f"id{len(self.uploads)}"
 
@@ -343,7 +349,7 @@ def test_publish_options_suggests_the_words_and_says_what_can_be_uploaded(config
     assert body["youtube"]["connected"] and not body["busy"] and not body["files_deleted"]
     assert body["full"] == {"available": True, "title": "Weekly Sync — 2026-10-05",
                             "description": "00:00 Highlights\n02:00 The plan\n05:00 Questions",
-                            "status": None, "progress": 0, "url": None, "error": None}
+                            "status": None, "progress": 0, "url": None, "error": None, "blocked": None}
     first = body["shorts"][0]
     assert (first["index"], first["available"], first["title"], first["at"], first["at_s"]) == (
         1, True, "Why we moved to Postgres", "01:50", 110)
@@ -418,8 +424,10 @@ def test_publish_uploads_the_full_video_then_removes_the_files(monkeypatch, clie
     res = client.post(f"/jobs/{job.job_id}/publish",
                       json={"title": "Weekly sync", "description": "notes", "privacy": "unlisted"})
     assert res.status_code == 200
+    # the hidden tag finds the video on the channel if its upload link is ever lost
+    marker = uploads.marker_for(f"job:{job.job_id}|full")
     assert fake.uploads == [{"bytes": b"full-video", "title": "Weekly sync", "description": "notes",
-                             "privacy": "unlisted"}]
+                             "privacy": "unlisted", "tags": [marker]}]
 
     reread = _reread(job.job_id)
     assert reread.youtube_status == "published"

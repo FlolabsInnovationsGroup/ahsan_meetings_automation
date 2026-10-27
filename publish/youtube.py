@@ -195,20 +195,41 @@ def upload_video(
     description: str,
     privacy: YoutubePrivacy,
     on_progress: "callable[[int], None] | None" = None,
+    *,
+    tags: "list[str] | tuple[str, ...]" = (),
+    session_uri: str | None = None,
+    start_byte: int = 0,
+    on_session: "callable[[str], None] | None" = None,
 ) -> str:
-    """Resumable upload to the connected channel. Returns the YouTube video id."""
+    """Resumable upload to the connected channel. Returns the YouTube video id.
+
+    A new upload first asks YouTube for an upload link and hands it to
+    `on_session` before any byte is sent; the caller records it, because one
+    link can create at most one video (ledger/uploads.py). With `session_uri`
+    the upload carries on through that link from `start_byte` instead (the
+    title and description were fixed when the link was made)."""
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
     creds = _load_credentials()
     service = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    snippet = {"title": title, "description": description}
+    if tags:
+        snippet["tags"] = list(tags)
     body = {
-        "snippet": {"title": title, "description": description},
+        "snippet": snippet,
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
     }
     media = MediaFileUpload(str(path), mimetype="video/*", chunksize=CHUNK_SIZE, resumable=True)
     request = service.videos().insert(part="snippet,status", body=body, media_body=media)
+    if session_uri:
+        request.resumable_uri = session_uri
+        request.resumable_progress = start_byte
+    else:
+        request.resumable_uri = _start_session(request)
+        if on_session is not None:
+            on_session(request.resumable_uri)
 
     response = None
     retries = 0
@@ -229,6 +250,95 @@ def upload_video(
             retries += 1
             time.sleep(min(2**retries, 60))
     return response["id"]
+
+
+def _start_session(request) -> str:
+    """Ask YouTube for the upload link (the first step of a resumable upload,
+    as googleapiclient's next_chunk does it, done here so the link can be
+    recorded before any byte is sent). Making a link creates no video, so
+    asking again after an error is safe."""
+    from googleapiclient.errors import HttpError
+
+    headers = dict(request.headers)
+    headers["X-Upload-Content-Type"] = request.resumable.mimetype()
+    headers["X-Upload-Content-Length"] = str(request.resumable.size())
+    headers["content-length"] = str(request.body_size)
+    retries = 0
+    while True:
+        try:
+            resp, content = request.http.request(
+                request.uri, method=request.method, body=request.body, headers=headers
+            )
+        except (ConnectionError, TimeoutError, OSError):
+            if retries >= MAX_RETRIES:
+                raise
+            retries += 1
+            time.sleep(min(2**retries, 60))
+            continue
+        if resp.status == 200 and "location" in resp:
+            return resp["location"]
+        if resp.status in _RETRIABLE_STATUS and retries < MAX_RETRIES:
+            retries += 1
+            time.sleep(min(2**retries, 60))
+            continue
+        raise HttpError(resp, content, uri=request.uri)
+
+
+def session_status(session_uri: str, size: int) -> tuple[str, "str | int | None"]:
+    """Where an upload link stands: ("done", video_id) when YouTube has the
+    whole video, ("partial", next_byte) when it has part of it, ("gone",
+    None) when YouTube no longer knows the link (it expired). Raises on a
+    network error or any other answer: try again later."""
+    from googleapiclient.errors import HttpError
+
+    http = _authorized_http(_load_credentials())
+    resp, content = http.request(
+        session_uri, "PUT", headers={"Content-Range": f"bytes */{size}", "Content-Length": "0"}
+    )
+    if resp.status in (200, 201):
+        return "done", json.loads(content)["id"]
+    if resp.status == 308:
+        received = resp.get("range")  # "bytes=0-1234"; none = nothing received yet
+        return "partial", int(received.rsplit("-", 1)[1]) + 1 if received else 0
+    if resp.status in (404, 410):
+        return "gone", None
+    raise HttpError(resp, content, uri=session_uri)
+
+
+def find_by_marker(marker: str, max_pages: int = 4) -> str | None:
+    """The id of the channel's video tagged `marker` among its latest uploads
+    (50 per page), or None. Tags are only shown to the channel's owner, which
+    the connected account is (read access is part of the permission asked)."""
+    from googleapiclient.discovery import build
+
+    service = build("youtube", "v3", credentials=_load_credentials(), cache_discovery=False)
+    channels = service.channels().list(part="contentDetails", mine=True).execute().get("items", [])
+    if not channels:
+        return None
+    playlist = channels[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    token = None
+    for _ in range(max_pages):
+        params = {"part": "contentDetails", "playlistId": playlist, "maxResults": 50}
+        if token:
+            params["pageToken"] = token
+        page = service.playlistItems().list(**params).execute()
+        ids = [item["contentDetails"]["videoId"] for item in page.get("items", [])]
+        if ids:
+            videos = service.videos().list(part="snippet", id=",".join(ids), maxResults=50).execute()
+            for video in videos.get("items", []):
+                if marker in (video.get("snippet", {}).get("tags") or []):
+                    return video["id"]
+        token = page.get("nextPageToken")
+        if not token:
+            break
+    return None
+
+
+def _authorized_http(creds):
+    import google_auth_httplib2
+    from googleapiclient.http import build_http
+
+    return google_auth_httplib2.AuthorizedHttp(creds, http=build_http())
 
 
 def friendly_error(exc: Exception) -> str:

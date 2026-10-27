@@ -9,8 +9,11 @@ Internet ──HTTPS──> Caddy (TLS certificate + password) ──> app (Fast
                          Docker volume: model cache (WhisperX / pyannote weights)
 ```
 
-No database is needed: job state is JSON files under `data/jobs/`. Only the
-Gemini API (and YouTube, for URL jobs) is called from outside.
+No database server is needed: job state is JSON files under `data/jobs/`,
+and what must outlive the jobs (the list of videos on YouTube, the uploads in
+flight, the autopilot's meetings, the Zoom account list) is small text files
+under `data/state/`, copied to `data/state-backup/` after every change and to
+S3 once a day (see "Autopilot").
 
 ## What you need before starting
 
@@ -207,18 +210,85 @@ The "From Zoom" tab lists the cloud recordings of the company Zoom account and
 imports one with its Zoom transcript (no WhisperX, low CPU).
 
 1. marketplace.zoom.us > Develop > **Server-to-Server OAuth** app, activated.
-2. Scopes: `cloud_recording:read:list_user_recordings:admin` and
-   `cloud_recording:read:recording:admin`.
+2. Scopes: `cloud_recording:read:list_user_recordings:admin`,
+   `cloud_recording:read:list_recording_files:admin` and
+   `cloud_recording:read:recording:admin`; for the autopilot also
+   `meeting:read:list_meetings:admin` (it reads the meeting schedule).
 3. In `.env`: `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`.
-   Optional `ZOOM_USER` (default `me`, the account owner) to list another
-   user's recordings by email.
 4. Check it from the repo folder: `python3 deploy/zoom-check.py`, then
    `docker compose up -d` to load the new values.
 
-Only meetings with a finished MP4 and a transcript can be picked. Turn on
-**Create audio transcript** under Zoom Settings > Recording > Cloud recording so new meetings get one.
+The Zoom tab's dropdown lists the accounts (PM, `ZOOM_DEFAULT_EMAIL`, is the
+default; "Add a new email…" adds one for everyone). A meeting already on
+YouTube has a green Process button with "Posted" (or "Partly posted" when
+only some shorts are) under it. Turn on **Create audio transcript** under
+Zoom Settings > Recording > Cloud recording so new meetings get one.
 Nothing is deleted from Zoom; the copy on this server is removed after
 publishing, like any other job.
+
+## Autopilot
+
+Every new recording of the accounts ticked **Autopilot** under the Zoom tab
+(PM by default) is processed and posted without anyone pressing a button:
+
+1. It waits for Zoom's own transcript, up to `AUTOPILOT_TRANSCRIPT_WAIT_HOURS`
+   (10) after the meeting ends; after that the server transcribes it with
+   WhisperX (needs `HF_TOKEN`; such a job may run `ASR_JOB_MAX_WALL_S`, 6 h).
+2. It processes one meeting at a time, and never while another job runs.
+3. It posts the shorts, then the full video (listing the shorts), as
+   `AUTOPILOT_PRIVACY` (public), with the suggested titles and descriptions,
+   then removes the files from the server.
+4. A failed meeting is tried again after about 30 min, 2 h and 6 h, then
+   shows "needs attention" in the side panel with a Retry button.
+
+It finds new recordings three ways: Zoom's webhook (at once), Zoom's meeting
+schedule (15 minutes after a scheduled meeting ends) and a look every
+`AUTOPILOT_CHECK_MINUTES` (30) while no job runs. Meetings recorded before the
+day it was switched on (or `AUTOPILOT_START_AFTER`) are never posted by it.
+Setting `AUTOPILOT_START_AFTER` to a past day posts the older meetings too:
+look on the channel first, because the app only knows videos whose job
+records were still on the server when this version started.
+
+**Nothing is posted twice.** Every upload is written down before it starts
+(`data/state/uploads.jsonl`), with YouTube's upload link before the first
+byte; one link can make only one video, so after a crash the upload is
+finished through the same link instead of being sent again. A meeting has one
+full video, and all its shorts come from one processing run. When the app
+really can't tell whether a cut-off upload reached YouTube, it stops and asks
+in the side panel ("It's on YouTube" / "Not there, upload again"). Pressing
+Publish by hand goes through the same list, so a person can't double-post
+either. `data/state/posted.jsonl` is the list of everything on the channel
+(one line per video, readable in any text editor).
+
+Turning it on:
+
+1. In the Zoom app: add the `meeting:read:list_meetings:admin` scope. Under
+   Feature > **Event Subscriptions** start a subscription with the endpoint
+   `https://YOUR_DOMAIN/zoom/webhook` and the events "All recordings have
+   completed" and "Recording transcript files have completed", and copy the
+   app's **Secret Token** (don't press Validate yet).
+2. In `.env`: `ZOOM_WEBHOOK_SECRET_TOKEN` (that token),
+   `AUTOPILOT_ENABLED=true` and `HF_TOKEN` (for WhisperX). Leave
+   `REQUIRE_NATIVE_TRANSCRIPT=true`: it still applies to jobs started by
+   hand; the autopilot's own jobs may transcribe.
+3. Load it: `docker compose up -d` (a plain `restart` doesn't re-read
+   `.env`), and once, so Caddy lets Zoom reach the webhook without the site
+   password: `docker compose up -d --force-recreate --no-deps caddy` (later
+   updates do this by themselves when the Caddyfile changes).
+4. Now press **Validate** in Zoom and save the subscription.
+5. The side panel says "Autopilot is on", with the accounts it watches.
+   Pause/Resume is there too.
+
+Videos published before this version are added to the posted list at
+startup from their job records; any whose job folder the daily cleanup had
+already removed are not known to the app (look at the channel before
+processing such an old meeting again).
+
+Daily copy to S3 (optional, recommended): create a bucket, give the EC2
+instance an IAM role allowing `s3:PutObject` on it, set
+`STATE_BACKUP_S3_URI=s3://BUCKET/highlight-cutter` in `.env`, and re-run
+`sudo bash deploy/setup-ec2.sh` once (it installs the AWS CLI and the cron
+job). Test it with `bash deploy/backup-state.sh`.
 
 ## Calling it from n8n or scripts
 
@@ -294,6 +364,8 @@ Remove someone: `sed -i '/ <name>$/d' ~/.ssh/authorized_keys`.
 | Disk usage | `df -h / && du -sh data/*` |
 | Free space (each build leaves GBs of cache) | `docker image prune -f && docker builder prune -f && df -h /` |
 | Cleanup log | `cat /var/log/highlight-cutter-cleanup.log` |
+| What is on YouTube | `cat data/state/posted.jsonl` |
+| S3 backup log | `cat /var/log/highlight-cutter-backup.log` |
 
 Restarting or redeploying while a job is running abandons that job. On
 startup the app marks such jobs as failed ("Interrupted by a server
@@ -309,6 +381,8 @@ restart"), so redeploy when nobody is processing a recording.
   data-center IPs. Uploading files is not affected.
 - **One shared password.** Fine for an internal tool. Per-user accounts
   would need an auth layer in the app or in front of it.
-- **No backups of `data/`.** By design: recordings live on YouTube once
-  published and are removed from the server. If the YouTube token file is
-  lost, just reconnect the channel.
+- **Only `data/state/` is backed up.** Recordings live on YouTube once
+  published and are removed from the server. `data/state/` (what is on
+  YouTube, uploads in flight, the autopilot's meetings) is copied to
+  `data/state-backup/` after every change and to S3 daily. If the YouTube
+  token file is lost, just reconnect the channel.

@@ -83,7 +83,8 @@ def test_status_reports_configuration_without_leaking_secrets(zoom_env):
     response = TestClient(api_main.app).get("/zoom/status")
     assert response.status_code == 200
     body = response.json()
-    assert body["configured"] is True and body["host_email"] == "host@example.com"
+    # the dropdown's default account is PM's (owner, 2026-10-26), whatever ZOOM_HOST_EMAIL says
+    assert body["configured"] is True and body["host_email"] == "pm@flomad.com"
     assert "SECRET" not in response.text and "very-secret-value" not in response.text
 
 
@@ -101,7 +102,7 @@ def test_recordings_default_to_the_configured_host_and_the_last_30_days(zoom_env
     client = TestClient(api_main.app)
     body = client.get("/zoom/recordings").json()
     host, start, end = fake.listed[0]
-    assert host == "host@example.com" and (end - start).days == 29 and end == datetime.now(UTC).date()
+    assert host == "pm@flomad.com" and (end - start).days == 29 and end == datetime.now(UTC).date()
     assert body["meetings"][0]["uuid"] == "abc/def==" and body["meetings"][0]["status"] == "ready"
 
     client.get("/zoom/recordings?host=other@example.com&from=2026-01-01&to=2026-03-15")

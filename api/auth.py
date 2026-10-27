@@ -2,11 +2,13 @@
 (plan D14). The service holds account-wide Zoom scopes on a public IP, so it
 must not be callable anonymously once deployed.
 
-Two more routes must be reachable without the key: /privacy (Google's review
-of the OAuth consent screen reads it) and /youtube/callback (Google sends the
+Three more routes must be reachable without the key: /privacy (Google's review
+of the OAuth consent screen reads it), /youtube/callback (Google sends the
 admin's browser back there; the key cookie is SameSite=Strict, so the browser
-doesn't send it on that cross-site hop). The callback only acts on a one-time
-`state` that /youtube/connect, which needs the key, handed out.
+doesn't send it on that cross-site hop) and /zoom/webhook (Zoom's servers
+call it). The callback only acts on a one-time `state` that /youtube/connect,
+which needs the key, handed out; the webhook checks Zoom's signature and only
+wakes the autopilot.
 
 The key is accepted from the `X-API-Key` header (n8n, curl) or from the
 `hc_api_key` cookie, which the web UI sets so that <video>/<a download> links
@@ -28,7 +30,7 @@ from core.config import get_settings
 API_KEY_HEADER = "X-API-Key"
 API_KEY_COOKIE = "hc_api_key"
 PUBLIC_PATHS = frozenset(
-    {"/health", "/", "/app", "/styles.css", "/favicon.ico", "/privacy", "/youtube/callback"}
+    {"/health", "/", "/app", "/styles.css", "/favicon.ico", "/privacy", "/youtube/callback", "/zoom/webhook"}
 )
 
 

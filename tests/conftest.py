@@ -25,6 +25,12 @@ def _isolated_settings(tmp_path, monkeypatch):
     for name in ("ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_HOST_EMAIL"):
         monkeypatch.setenv(name, "")  # never reach the real Zoom account from a test
     monkeypatch.setenv("REQUIRE_NATIVE_TRANSCRIPT", "false")
+    # the autopilot never runs, nor takes webhook calls, unless a test says so
+    monkeypatch.setenv("AUTOPILOT_ENABLED", "false")
+    monkeypatch.setenv("AUTOPILOT_START_AFTER", "")
+    monkeypatch.setenv("ZOOM_WEBHOOK_SECRET_TOKEN", "")
+    monkeypatch.setenv("ZOOM_DEFAULT_EMAIL", "pm@flomad.com")
+    monkeypatch.setenv("ZOOM_EMAILS", '["zoom.buddy@flolabsinnovations.com"]')
     # the defaults the tests are written against, whatever the shell or .env
     # says (e.g. CHAPTERS_ENABLED=false while running against real jobs)
     monkeypatch.setenv("CHAPTERS_ENABLED", "true")

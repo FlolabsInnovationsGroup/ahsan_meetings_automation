@@ -29,6 +29,16 @@ main() {
   exec > >(tee -a "$log") 2>&1
   echo "=== $(date -u +%FT%TZ) update requested"
 
+  # While this file is there the autopilot starts no new job or upload (it
+  # ignores one older than 2 h), so nothing begins that the restart would cut
+  # off. It goes away however this script ends.
+  deploy_flag="$data_dir/state/.deploying"
+  if mkdir -p "$data_dir/state" && date -u +%FT%TZ > "$deploy_flag"; then
+    trap 'rm -f "$deploy_flag"' EXIT
+  else
+    echo "Could not write $deploy_flag; the autopilot may start work during the update."
+  fi
+
   # A restart kills any meeting being cut or uploaded, so wait for them.
   local waited=0
   while true; do
@@ -57,6 +67,16 @@ main() {
 
   echo "==> Rebuilding"
   docker compose up -d --build --remove-orphans
+  # Caddy reads its config from a mounted file and compose doesn't notice a
+  # changed file: recreate Caddy whenever the Caddyfile isn't the one it was
+  # last started with (remembered in .caddyfile.sha, ignored by git).
+  local caddy_sum
+  caddy_sum="$(sha256sum deploy/Caddyfile | cut -d' ' -f1)"
+  if [[ "$(cat .caddyfile.sha 2>/dev/null || true)" != "$caddy_sum" ]]; then
+    echo "==> The Caddyfile changed: recreating Caddy"
+    docker compose up -d --force-recreate --no-deps caddy
+    echo "$caddy_sum" > .caddyfile.sha
+  fi
 
   echo "==> Waiting for the app to be healthy"
   local i

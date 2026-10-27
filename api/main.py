@@ -9,7 +9,15 @@ from functools import lru_cache, partial
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -20,6 +28,12 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 
 import publish
+from autopilot import emails as zoom_emails
+from autopilot import loop as autopilot_loop
+from autopilot import webhook as zoom_webhook
+from autopilot.engine import Engine, Hooks
+from autopilot.engine import parse as parse_stamp
+from autopilot.store import store as autopilot_store
 from core.config import get_settings
 from core.errors import PipelineError
 from core.logging import configure_logging, get_logger
@@ -35,7 +49,10 @@ from core.proc import run_checked
 from core.version import PIPELINE_VERSION
 from ingest import zoom
 from ingest.store import store_transcript, store_video, title_from_filename
+from ledger import uploads as ledger_uploads
+from ledger.uploads import get_ledger
 from pipeline import run_pipeline, run_youtube_pipeline, run_zoom_pipeline
+from publish import run as publish_run
 from publish import youtube
 
 from .auth import ApiKeyMiddleware, auth_enabled
@@ -60,7 +77,17 @@ async def lifespan(_app: FastAPI):
     if not auth_enabled():
         logger.warning("HC_API_TOKEN is empty: the API is open (fine locally, never on a public host)")
     reconcile_on_startup(job_store)
+    # videos published before the posted list existed go on it, so nothing
+    # posted then can be posted again
+    imported = publish_run.import_published_jobs(_safe_get_job(job_id) for job_id in job_store.list_ids())
+    if imported:
+        logger.info("posted list: added %d video(s) published before it existed", imported)
+    if get_settings().autopilot_enabled:
+        autopilot_loop.start(autopilot_engine)
+    else:
+        autopilot_engine.note_switched_off()
     yield
+    autopilot_loop.stop()
 
 
 # No /docs, /redoc or /openapi.json: they map every route for anyone who can
@@ -123,8 +150,9 @@ class PublishRequest(BaseModel):
 
 
 # Serialises "is anything uploading?" with starting an upload, and deleting a
-# job's files with both, so two clicks can't start the same upload twice.
-_publish_lock = threading.Lock()
+# job's files with both, so two clicks (or a click and the autopilot) can't
+# start the same upload twice.
+_publish_lock = publish_run.PUBLISH_LOCK
 
 
 # The recordings picker lists at most this many days per request (every 30
@@ -179,14 +207,91 @@ def _has_capacity() -> bool:
     return max_depth <= 0 or job_queue.depth() < max_depth
 
 
-def _enqueue(job: JobRecord, runner, *args) -> JSONResponse | JobRecord:
+def _enqueue(job: JobRecord, runner, *args, max_wall_s: float | None = None) -> JSONResponse | JobRecord:
     job_store.create(job)
     try:
-        job_queue.submit(job.job_id, partial(runner, job, job_queue.make_updater(job.job_id), *args))
+        job_queue.submit(job.job_id, partial(runner, job, job_queue.make_updater(job.job_id), *args),
+                         max_wall_s=max_wall_s)
     except QueueFull:
         delete_job_files(job_store, job.job_id)
         return _busy_response()
     return job
+
+
+# ------------------------------------------------------------------ autopilot
+
+
+def _options_hash(options: JobOptions) -> str:
+    # allow_asr is how a job may transcribe, not what it makes: never part of the key
+    return hashlib.sha256(options.model_dump_json(exclude={"allow_asr"}).encode()).hexdigest()[:16]
+
+
+def _safe_get_job(job_id: str) -> JobRecord | None:
+    try:
+        return job_store.get(job_id)
+    except Exception as exc:  # noqa: BLE001 — an unreadable job.json is a missing job here
+        logger.warning("can't read job %s: %s", job_id, exc)
+        return None
+
+
+def _is_live(job: JobRecord) -> bool:
+    """Running, or done with its files still on the server: a job whose
+    result can still be posted. A decide_only job stopped at the picks
+    (DECIDED) has none until someone presses Render now."""
+    return not job.files_deleted and job.status not in (
+        JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED_DESYNC, JobStatus.DECIDED)
+
+
+def _job_is_live(job_id: str | None) -> bool:
+    job = _safe_get_job(job_id) if job_id else None
+    return job is not None and _is_live(job)
+
+
+def _live_zoom_job(meeting_uuid: str) -> JobRecord | None:
+    """The newest live job for this Zoom meeting (whatever its options), else None."""
+    found = []
+    for job_id in job_store.list_ids():
+        job = _safe_get_job(job_id)
+        if job is not None and job.zoom_meeting_uuid == meeting_uuid and _is_live(job):
+            found.append(job)
+    return max(found, key=lambda j: _aware(j.created_at) or datetime.min.replace(tzinfo=UTC), default=None)
+
+
+def _autopilot_submit(meeting_uuid: str, allow_asr: bool) -> str | None:
+    """Start the autopilot's job for a meeting: its id, or None when busy.
+    Raises PipelineError when Zoom can't be asked about it."""
+    meeting = zoom.get_client().get_meeting(meeting_uuid)
+    choice = zoom.choose_files(meeting)
+    options = JobOptions(allow_asr=allow_asr)
+    with _zoom_submit_lock:
+        existing = _live_zoom_job(meeting_uuid)
+        if existing is not None:
+            return existing.job_id
+        if not _has_capacity():
+            return None
+        info = zoom.meeting_info(meeting, choice)
+        job = JobRecord(
+            job_id=uuid.uuid4().hex,
+            status=JobStatus.QUEUED,
+            options=options,
+            title=" ".join(info["topic"].split())[:120],
+            zoom_meeting_uuid=meeting_uuid,
+            zoom_options_hash=_options_hash(options),
+            zoom_meeting=info,
+        )
+        created = _enqueue(job, run_zoom_pipeline,
+                           max_wall_s=get_settings().asr_job_max_wall_s if allow_asr else None)
+    return created.job_id if isinstance(created, JobRecord) else None
+
+
+autopilot_engine = Engine(Hooks(
+    worker_busy=job_queue.is_busy,
+    submit=_autopilot_submit,
+    find_job=_live_zoom_job,
+    get_job=_safe_get_job,
+    update_job=job_store.update,
+))
+autopilot_loop.set_engine(autopilot_engine)
 
 
 @app.get("/health")
@@ -206,6 +311,7 @@ async def health() -> dict:
         "running_job_id": job_queue.running_job_id,
         "queue_depth": job_queue.depth(),
         "auth_enabled": auth_enabled(),
+        "autopilot_enabled": settings.autopilot_enabled,
         "uptime_s": round(time.monotonic() - _STARTED_AT, 1),
     }
 
@@ -312,7 +418,8 @@ async def zoom_status() -> dict:
     settings = get_settings()
     return {
         "configured": zoom.is_configured(settings),
-        "host_email": settings.zoom_host_email or None,
+        # the dropdown's default account (the rest: GET /zoom/emails)
+        "host_email": settings.zoom_default_email or settings.zoom_host_email or None,
         "require_native_transcript": settings.require_native_transcript,
     }
 
@@ -323,12 +430,14 @@ def list_zoom_recordings(
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
 ):
-    """A host's cloud recordings (default: ZOOM_HOST_EMAIL, the last 30 days),
-    newest first, with what the picker needs to show and whether each one can
-    be processed now. A plain `def`: Zoom calls are blocking HTTP."""
-    host_email = (host or get_settings().zoom_host_email).strip()
+    """A host's cloud recordings (default: ZOOM_DEFAULT_EMAIL, the last 30
+    days), newest first, with what the picker needs to show, whether each one
+    can be processed now and whether it is on YouTube already. A plain `def`:
+    Zoom calls are blocking HTTP."""
+    settings = get_settings()
+    host_email = (host or settings.zoom_default_email or settings.zoom_host_email).strip()
     if not host_email:
-        raise HTTPException(status_code=400, detail="no host email: pass ?host= or set ZOOM_HOST_EMAIL in .env")
+        raise HTTPException(status_code=400, detail="no host email: pass ?host= or set ZOOM_DEFAULT_EMAIL in .env")
     try:
         end = date.fromisoformat(to_date) if to_date else datetime.now(UTC).date()
         start = date.fromisoformat(from_date) if from_date else end - timedelta(days=29)
@@ -342,6 +451,14 @@ def list_zoom_recordings(
         meetings = zoom.get_client().list_recordings(host_email, start, end)
     except PipelineError as exc:
         return _zoom_error(exc)
+    # what the page needs to colour the Process button: on YouTube already
+    # ("posted": the full video; "partly": only shorts), and the autopilot's word
+    ledger = get_ledger()
+    followed = autopilot_store.read().meetings
+    for meeting in meetings:
+        meeting["posted"] = ledger.meeting_state(f"zoom:{meeting.get('uuid')}")
+        m = followed.get(meeting.get("uuid") or "")
+        meeting["autopilot"] = _STATE_LABELS.get(m.state, m.state) if m is not None else None
     return {"host_email": host_email, "from": start.isoformat(), "to": end.isoformat(), "meetings": meetings}
 
 
@@ -368,9 +485,9 @@ def create_zoom_job(body: ZoomJobRequest):
         exc = zoom.not_ready_error(readiness)
         return _error_response(425 if exc.retryable else 422, exc.code, str(exc), exc.retryable, exc.retry_after_s)
 
-    options_hash = hashlib.sha256(body.options.model_dump_json().encode()).hexdigest()[:16]
+    options_hash = _options_hash(body.options)
     with _zoom_submit_lock:
-        existing = _find_zoom_job(meeting_uuid, options_hash)
+        existing = _find_zoom_job(meeting_uuid, options_hash) or _autopilot_job(meeting_uuid)
         if existing is not None:
             return _zoom_job_response(existing, deduplicated=True)
         if not _has_capacity():
@@ -404,8 +521,239 @@ def _find_zoom_job(meeting_uuid: str, options_hash: str) -> JobRecord | None:
     return None
 
 
+def _autopilot_job(meeting_uuid: str) -> JobRecord | None:
+    """The job the autopilot runs or posts for this meeting: pressing Process
+    shows that one instead of cutting the meeting a second time."""
+    m = autopilot_store.read().meetings.get(meeting_uuid)
+    if m is None or m.state not in ("processing", "posting") or not m.job_id:
+        return None
+    job = _safe_get_job(m.job_id)
+    return job if job is not None and _is_live(job) else None
+
+
 def _zoom_job_response(job: JobRecord, deduplicated: bool) -> JSONResponse:
     return JSONResponse(content={**job.model_dump(mode="json"), "deduplicated": deduplicated})
+
+
+# ------------------------------------------------------------------ the email list
+
+
+class EmailRequest(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class EmailAutopilotRequest(BaseModel):
+    email: str = Field(max_length=254)
+    enabled: bool
+
+
+@app.get("/zoom/emails")
+def get_zoom_emails() -> dict:
+    """The Zoom accounts in the dropdown (the default first) and which the
+    autopilot watches."""
+    return {"emails": zoom_emails.list_emails()}
+
+
+@app.post("/zoom/emails")
+def add_zoom_email(body: EmailRequest) -> dict:
+    try:
+        return {"emails": zoom_emails.add_email(body.email)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/zoom/emails/remove")
+def remove_zoom_email(body: EmailRequest) -> dict:
+    try:
+        return {"emails": zoom_emails.remove_email(body.email)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="That email isn't in the list.") from exc
+
+
+@app.post("/zoom/emails/autopilot")
+def set_zoom_email_autopilot(body: EmailAutopilotRequest) -> dict:
+    try:
+        return {"emails": zoom_emails.set_autopilot(body.email, body.enabled)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="That email isn't in the list.") from exc
+
+
+# ------------------------------------------------------------------ Zoom's webhook
+
+
+@app.post("/zoom/webhook")
+async def zoom_webhook_event(request: Request):
+    """Zoom says a recording or its transcript is ready (public: Zoom has no
+    key; the signature is checked instead, see autopilot/webhook.py). It only
+    wakes the autopilot; the answer goes back at once."""
+    # read at most MAX_BODY, whatever Content-Length says (or a chunked body
+    # without one): the route is public, so nobody may make it buffer gigabytes
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > zoom_webhook.MAX_BODY:
+            return JSONResponse(status_code=413, content={"detail": "too large"})
+    body = bytes(body)
+    try:
+        event = zoom_webhook.verify(body, request.headers.get("x-zm-signature"),
+                                    request.headers.get("x-zm-request-timestamp"))
+    except zoom_webhook.WebhookRefused as exc:
+        logger.warning("Zoom webhook refused: %s", exc)
+        return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+    if event.get("event") == "endpoint.url_validation":
+        return zoom_webhook.url_validation(event)
+    meeting_uuid = zoom_webhook.recording_uuid(event)
+    if meeting_uuid is not None:
+        autopilot_engine.nudge(meeting_uuid)
+        autopilot_loop.wake()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ the autopilot panel
+
+_STATE_LABELS = {
+    "waiting_recording": "Zoom is making the video",
+    "waiting_transcript": "waiting for Zoom's transcript",
+    "ready": "ready, waiting for the server",
+    "processing": "processing",
+    "posting": "posting to YouTube",
+    "posted": "posted",
+    "needs_attention": "needs attention",
+    "skipped": "skipped",
+}
+_STATE_ORDER = ["needs_attention", "posting", "processing", "ready", "waiting_transcript", "waiting_recording",
+                "posted", "skipped"]
+
+
+class MeetingActionRequest(BaseModel):
+    uuid: str = Field(max_length=200)
+
+
+class ResolveRequest(BaseModel):
+    key: str = Field(max_length=500)
+    on_youtube: bool
+    url: str = Field(default="", max_length=500)
+
+
+@app.get("/autopilot")
+def get_autopilot() -> dict:
+    """The autopilot's switch, its last and next look at Zoom, and the
+    meetings it follows (what needs a person first, then what's under way,
+    then the latest finished ones)."""
+    settings = get_settings()
+    state = autopilot_store.read()
+    last = parse_stamp(state.last_check_at)
+    meetings = sorted(state.meetings.values(), key=lambda m: m.start_time or "", reverse=True)
+    meetings.sort(key=lambda m: _STATE_ORDER.index(m.state))
+    open_rows = [m for m in meetings if m.state not in ("posted", "skipped")]
+    done_rows = [m for m in meetings if m.state in ("posted", "skipped")][:20]
+    return {
+        "enabled": settings.autopilot_enabled,
+        "paused": state.paused,
+        "privacy": settings.autopilot_privacy,
+        "wait_hours": settings.autopilot_transcript_wait_hours,
+        "check_minutes": settings.autopilot_check_minutes,
+        "start_after": state.start_after,
+        "watching": zoom_emails.autopilot_emails(),
+        "webhook": bool(settings.zoom_webhook_secret_token),
+        "busy": job_queue.is_busy(),
+        "last_check_at": state.last_check_at,
+        "last_check_error": state.last_check_error,
+        "next_check_at": (last + timedelta(minutes=settings.autopilot_check_minutes)).isoformat()
+        if last else None,
+        "schedule": [s.model_dump() for s in state.schedule if not s.checked][:5],
+        "schedule_error": state.schedule_error,
+        "meetings": [
+            {**m.model_dump(), "label": _STATE_LABELS.get(m.state, m.state),
+             "job_exists": bool(m.job_id and _safe_get_job(m.job_id))}
+            for m in open_rows + done_rows
+        ],
+    }
+
+
+@app.post("/autopilot/pause")
+def pause_autopilot() -> dict:
+    autopilot_engine.set_paused(True)
+    return get_autopilot()
+
+
+@app.post("/autopilot/resume")
+def resume_autopilot() -> dict:
+    autopilot_engine.set_paused(False)
+    autopilot_loop.wake()
+    return get_autopilot()
+
+
+@app.post("/autopilot/meetings/retry")
+def retry_autopilot_meeting(body: MeetingActionRequest) -> dict:
+    try:
+        autopilot_engine.retry(body.uuid)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="The autopilot doesn't follow that meeting.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    autopilot_loop.wake()
+    return get_autopilot()
+
+
+@app.post("/autopilot/meetings/skip")
+def skip_autopilot_meeting(body: MeetingActionRequest) -> dict:
+    try:
+        autopilot_engine.skip(body.uuid)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="The autopilot doesn't follow that meeting.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return get_autopilot()
+
+
+# ------------------------------------------------------------------ the posted list
+
+
+@app.get("/posted")
+def get_posted() -> dict:
+    """Every video on the channel, grouped by meeting (newest first), and the
+    uploads that wait for a person to check YouTube."""
+    groups: dict[str, dict] = {}
+    for u in get_ledger().posted():
+        group = groups.setdefault(u.source, {
+            "source": u.source, "meeting": u.meeting, "meeting_date": u.meeting_date,
+            "last_posted_at": u.posted_at, "full": None, "shorts": [],
+        })
+        entry = {"title": u.title, "url": u.url, "posted_at": u.posted_at, "privacy": u.privacy, "by": u.by}
+        if u.kind == "full":
+            group["full"] = entry
+        else:
+            group["shorts"].append({**entry, "short": u.index})
+    for group in groups.values():
+        group["shorts"].sort(key=lambda s: s["short"] or 0)
+    checks = [
+        {"key": u.key, "state": u.state, "meeting": u.meeting, "kind": u.kind, "short": u.index,
+         "title": u.title, "job_id": u.job_id, "job_exists": _job_is_live(u.job_id),
+         "error": u.error}
+        for u in get_ledger().needing_check()
+    ]
+    return {"meetings": list(groups.values()), "needs_check": checks}
+
+
+@app.post("/posted/resolve")
+def resolve_posted(body: ResolveRequest) -> dict:
+    """A person looked on YouTube for an upload the app couldn't settle: it
+    is there (with its link), or it isn't (then it may be uploaded again)."""
+    try:
+        upload = get_ledger().resolve(body.key, on_youtube=body.on_youtube, url=body.url)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="No such upload.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ledger_uploads.Refused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # the autopilot's meeting that waited for this check carries on posting
+    autopilot_engine.after_check(upload.job_id, upload.source)
+    autopilot_loop.wake()
+    return get_posted()
 
 
 @app.post("/jobs/{job_id}/render", response_model=JobRecord)
