@@ -1,5 +1,5 @@
 """ffmpeg 7 reads a filter graph from a file with `-/filter_complex`; before 7
-(Debian 12's ffmpeg 5.1 in the Docker image) only `-filter_complex_script`
+(e.g. Debian 12's ffmpeg 5.1) only `-filter_complex_script`
 exists, and ffmpeg 8+ no longer knows that one. The command builders must pick
 the spelling of the ffmpeg they will actually run on."""
 

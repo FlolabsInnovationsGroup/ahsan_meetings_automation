@@ -19,8 +19,9 @@ regression job. Cut points are whole source frames:
 Filter graphs are written to a file (long graphs would hit the command-line
 limit) and read with `-/filter_complex <file>` on ffmpeg 7 and newer, or the
 older `-filter_complex_script <file>` below 7: the old flag was deprecated in
-7.0 and is gone in 8.0, and the new one does not exist before 7.0 (the Docker
-image's Debian 12 ships ffmpeg 5.1). See `filter_graph_args`.
+7.0 and is gone in 8.0, and the new one does not exist before 7.0 (Debian 12
+ships ffmpeg 5.1; the Docker image is on Debian 13, ffmpeg 7.1). See
+`filter_graph_args`.
 """
 
 from __future__ import annotations
