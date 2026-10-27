@@ -265,7 +265,7 @@ def _transcribe(job: JobRecord, source_path: Path, duration: float) -> tuple[lis
             seg.overlap_candidate = w.overlap_candidate
         return words, segments
 
-    if get_settings().require_native_transcript:
+    if get_settings().require_native_transcript and not job.options.allow_asr:
         # Only a Zoom transcript can still turn up later; captions or an
         # upload that aren't there now never will.
         retryable = job.zoom_meeting_uuid is not None
@@ -275,6 +275,12 @@ def _transcribe(job: JobRecord, source_path: Path, duration: float) -> tuple[lis
             code="transcript_not_ready",
             retryable=retryable,
             retry_after_s=zoom.NOT_READY_RETRY_AFTER_S if retryable else None,
+        )
+    if job.options.allow_asr and not get_settings().hf_token:
+        # WhisperX checks the token only after hours of transcribing; say it now
+        raise PipelineError(
+            "HF_TOKEN is not set, and WhisperX needs it to tell the speakers apart (see .env.example)",
+            code="internal",
         )
     job.transcript_source = "asr"
     words = transcribe(source_path)
@@ -593,9 +599,12 @@ def _fetch_zoom_recording(job: JobRecord, update: "callable[[JobRecord], None]")
     client = zoom.get_client()
     uuid = job.zoom_meeting_uuid or ""
     meeting = client.get_meeting(uuid)
-    # a re-render reuses its saved transcript, so it never waits for one
+    # a re-render reuses its saved transcript, so it never waits for one; nor
+    # does an autopilot job that may transcribe itself (it waited before it
+    # was queued, without holding the worker)
     need_transcript = not (job.transcript_path and (job_dir / "segments.json").exists())
-    if need_transcript and zoom.readiness(meeting) == "transcript_not_ready":
+    allow_asr = job.options.allow_asr
+    if need_transcript and not allow_asr and zoom.readiness(meeting) == "transcript_not_ready":
         job.status = JobStatus.WAITING_TRANSCRIPT
         update(job)
         logger.info("job %s: waiting up to %.0fs for Zoom's transcript", job.job_id, settings.transcript_wait_max_s)
@@ -604,7 +613,8 @@ def _fetch_zoom_recording(job: JobRecord, update: "callable[[JobRecord], None]")
             checkpoint=lambda: update(job),
         )
     status = zoom.readiness(meeting)
-    if need_transcript and settings.require_native_transcript and status in ("transcript_not_ready", "no_transcript"):
+    if (need_transcript and settings.require_native_transcript and not allow_asr
+            and status in ("transcript_not_ready", "no_transcript")):
         # fail before downloading gigabytes that could not be transcribed here
         raise zoom.not_ready_error(status)
 

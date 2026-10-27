@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -264,6 +265,15 @@ class Settings(BaseSettings):
     # require_native_transcript is False, falling back to WhisperX.
     transcript_wait_max_s: float = 600.0
     transcript_poll_s: float = 60.0
+    # The Zoom accounts in the page's dropdown when storage_dir/state/emails.json
+    # doesn't exist yet (after that, the page adds and removes them). The
+    # default one is always first, can't be removed and starts with the
+    # autopilot on (owner, 2026-10-26: PM holds only team meetings).
+    zoom_default_email: str = "pm@flomad.com"
+    zoom_emails: list[str] = ["zoom.buddy@flolabsinnovations.com"]
+    # Zoom's webhook secret token (the app's Event Subscriptions page). Empty =
+    # /zoom/webhook refuses everything; the autopilot still checks Zoom on a timer.
+    zoom_webhook_secret_token: str = ""
     # The team's time zone (IANA name). A meeting's day in the final video's
     # name is counted here when Zoom doesn't send the meeting's own zone, so a
     # 02:00 PKT meeting (21:00 UTC the day before) gets the Pakistan day.
@@ -283,6 +293,31 @@ class Settings(BaseSettings):
     # Delete finished jobs older than this at startup. 0 = never (local dev;
     # EC2 sets 24). A job folder containing a `.keep` file is never deleted.
     job_retention_hours: float = 0.0
+    # A job that transcribes the meeting itself (WhisperX on the CPU is slow)
+    # gets this wall clock instead of job_max_wall_s.
+    asr_job_max_wall_s: float = 21600.0
+
+    # --- autopilot (autopilot/) -------------------------------------------
+    # Every new recording of the accounts marked "autopilot" in the dropdown
+    # is processed and posted: shorts first, then the full video. Off until
+    # the owner turns it on; then it posts for real (owner, 2026-10-26).
+    autopilot_enabled: bool = False
+    # Visibility of what it posts. The app can only upload, so this can't be
+    # changed afterwards except by hand in YouTube Studio.
+    autopilot_privacy: Literal["private", "unlisted", "public"] = "public"
+    # Wait this long after the recording ends for Zoom's own transcript, then
+    # transcribe with WhisperX.
+    autopilot_transcript_wait_hours: float = 10.0
+    # Look for new recordings this often while no job is running (no checks
+    # during a job). Zoom's webhook and its meeting schedule add checks.
+    autopilot_check_minutes: float = 30.0
+    # Only meetings recorded on or after this day (YYYY-MM-DD) are posted.
+    # Empty = the day the autopilot first ran, so old recordings are never
+    # posted in a batch when it is switched on.
+    autopilot_start_after: str = ""
+    # A meeting whose processing fails is tried again this many times (after
+    # about 30 min, 2 h and 6 h), then waits for a person.
+    autopilot_max_retries: int = 3
 
     @property
     def videos_dir(self) -> Path:

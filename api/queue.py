@@ -46,9 +46,10 @@ class JobQueue:
     def __init__(self, store: JobStore) -> None:
         self._store = store
         self._cv = threading.Condition()
-        self._pending: deque[tuple[str, Callable[[], None]]] = deque()
+        self._pending: deque[tuple[str, Callable[[], None], float | None]] = deque()
         self._running: str | None = None
         self._running_started: float = 0.0
+        self._running_limit: float | None = None
         self._cancel: set[str] = set()
         self._delete_after: set[str] = set()
         self._thread: threading.Thread | None = None
@@ -61,7 +62,7 @@ class JobQueue:
 
     def pending_ids(self) -> list[str]:
         with self._cv:
-            return [job_id for job_id, _ in self._pending]
+            return [job_id for job_id, _, _ in self._pending]
 
     def depth(self) -> int:
         with self._cv:
@@ -72,16 +73,19 @@ class JobQueue:
 
     def contains(self, job_id: str) -> bool:
         with self._cv:
-            return job_id == self._running or any(j == job_id for j, _ in self._pending)
+            return job_id == self._running or any(j == job_id for j, _, _ in self._pending)
 
     # ------------------------------------------------------------- submit
-    def submit(self, job_id: str, fn: Callable[[], None], max_depth: int | None = None) -> None:
+    def submit(self, job_id: str, fn: Callable[[], None], max_depth: int | None = None,
+               max_wall_s: float | None = None) -> None:
+        """Queue a job. `max_wall_s` replaces job_max_wall_s for this job (a
+        job that transcribes the meeting itself needs longer)."""
         max_depth = get_settings().max_queue_depth if max_depth is None else max_depth
         with self._cv:
             depth = len(self._pending) + (1 if self._running else 0)
             if max_depth > 0 and depth >= max_depth:
                 raise QueueFull(self._running, depth)
-            self._pending.append((job_id, fn))
+            self._pending.append((job_id, fn, max_wall_s))
             self._ensure_worker()
             self._cv.notify_all()
 
@@ -95,7 +99,7 @@ class JobQueue:
         """'dequeued' (was waiting, now removed), 'signalled' (running; it will
         stop at its next checkpoint), or 'not_found'."""
         with self._cv:
-            for i, (queued_id, _) in enumerate(self._pending):
+            for i, (queued_id, _, _) in enumerate(self._pending):
                 if queued_id == job_id:
                     del self._pending[i]
                     return "dequeued"
@@ -112,7 +116,7 @@ class JobQueue:
         if job_id in self._cancel:
             raise JobCancelled("cancelled by DELETE /jobs/{id}?force=true")
         if self._running == job_id:
-            limit = get_settings().job_max_wall_s
+            limit = self._running_limit if self._running_limit is not None else get_settings().job_max_wall_s
             if limit and time.monotonic() - self._running_started > limit:
                 raise JobTimedOut(f"job exceeded job_max_wall_s={limit:.0f}s")
 
@@ -133,9 +137,10 @@ class JobQueue:
             with self._cv:
                 while not self._pending:
                     self._cv.wait()
-                job_id, fn = self._pending.popleft()
+                job_id, fn, limit = self._pending.popleft()
                 self._running = job_id
                 self._running_started = time.monotonic()
+                self._running_limit = limit
             settings = get_settings()
             handler = _attach_job_log(job_id)
             set_poll_hook(lambda jid=job_id: self._heartbeat(jid), settings.heartbeat_interval_s)

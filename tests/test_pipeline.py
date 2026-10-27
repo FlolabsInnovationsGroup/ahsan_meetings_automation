@@ -867,6 +867,39 @@ def test_zoom_job_waits_for_a_pending_transcript_then_fails_retryable(monkeypatc
     assert client.downloads == []
 
 
+def test_an_autopilot_job_transcribes_itself_without_waiting_even_where_the_server_never_does(monkeypatch):
+    """The autopilot waited its hours for Zoom before queueing the job: the
+    job neither waits again (holding the worker) nor refuses WhisperX."""
+    from datetime import UTC, datetime
+
+    monkeypatch.setenv("REQUIRE_NATIVE_TRANSCRIPT", "true")
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    get_settings.cache_clear()
+    transcribe_calls, segment_lists = [], []
+    _patch_common(monkeypatch, transcribe_calls, segment_lists)
+    recent = datetime.now(UTC).isoformat()  # Zoom would still be "making" it
+    client = _zoom_client(monkeypatch, _zoom_meeting(with_transcript=False, end=recent))
+    job = JobRecord(job_id="job-zoom-auto", zoom_meeting_uuid="abc==", options=JobOptions(allow_asr=True))
+    statuses = []
+    pipeline_module.run_zoom_pipeline(job, lambda j: statuses.append(j.status))
+    assert job.status == JobStatus.DONE, job.error
+    assert JobStatus.WAITING_TRANSCRIPT not in statuses
+    assert job.transcript_source == "asr" and len(transcribe_calls) == 1
+    assert client.downloads == ["https://zoom.us/v"]
+
+
+def test_an_autopilot_job_without_a_hugging_face_token_fails_before_transcribing(monkeypatch):
+    monkeypatch.setenv("REQUIRE_NATIVE_TRANSCRIPT", "true")
+    monkeypatch.setenv("HF_TOKEN", "")
+    get_settings.cache_clear()
+    transcribe_calls, segment_lists = [], []
+    _patch_common(monkeypatch, transcribe_calls, segment_lists)
+    _zoom_client(monkeypatch, _zoom_meeting(with_transcript=False))
+    job = JobRecord(job_id="job-zoom-nohf", zoom_meeting_uuid="abc==", options=JobOptions(allow_asr=True))
+    pipeline_module.run_zoom_pipeline(job, lambda j: None)
+    assert job.status == JobStatus.FAILED and "HF_TOKEN" in job.error and transcribe_calls == []
+
+
 def test_zoom_segment_without_video_is_a_job_warning(monkeypatch):
     transcribe_calls, segment_lists = [], []
     _patch_common(monkeypatch, transcribe_calls, segment_lists)

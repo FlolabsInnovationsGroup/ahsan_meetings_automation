@@ -5,6 +5,13 @@ venv/
 .env
 storage/videos/*
 storage/jobs/*
+# what is on YouTube and the autopilot's state (local runs / the server)
+storage/state/
+storage/state-backup/
+data/
+deploy/caddy.env
+# the Caddyfile Caddy was last started with (deploy/auto-update.sh)
+.caddyfile.sha
 !storage/videos/.gitkeep
 !storage/jobs/.gitkeep
 .pytest_cache/

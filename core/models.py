@@ -121,6 +121,10 @@ class JobOptions(BaseModel):
     cut_silence: bool | None = None
     # Put the owner's intro/outro clips around final.mp4 (None = INTRO_OUTRO_ENABLED).
     intro_outro: bool | None = None
+    # Transcribe with WhisperX when there is no platform transcript, even on a
+    # server with REQUIRE_NATIVE_TRANSCRIPT (the autopilot, once it has waited
+    # its hours for Zoom's). Never part of the Zoom dedupe key.
+    allow_asr: bool = False
 
 
 class EDLRange(BaseModel):

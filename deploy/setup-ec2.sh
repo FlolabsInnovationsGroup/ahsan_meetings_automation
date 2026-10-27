@@ -67,6 +67,21 @@ cat > /etc/cron.d/highlight-cutter-cleanup <<EOF
 EOF
 chmod 644 /etc/cron.d/highlight-cutter-cleanup
 
+echo "==> Daily copy of the posted list and the autopilot's state to S3"
+# The bucket is STATE_BACKUP_S3_URI in .env; access comes from the instance's
+# IAM role. Until both exist the job just logs that there is nothing to do.
+if ! command -v aws >/dev/null 2>&1; then
+  snap install aws-cli --classic || echo "    could not install the AWS CLI; install it by hand for S3 backups"
+fi
+chmod +x "$REPO_DIR/deploy/backup-state.sh"
+cat > /etc/cron.d/highlight-cutter-backup <<EOF
+# Copy Highlight Cutter's state (what is on YouTube) to S3 once a day.
+# cron's own PATH lacks /snap/bin, where the AWS CLI is.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+15 3 * * * root DATA_DIR=$DATA_DIR bash $REPO_DIR/deploy/backup-state.sh >> /var/log/highlight-cutter-backup.log 2>&1
+EOF
+chmod 644 /etc/cron.d/highlight-cutter-backup
+
 echo "==> SSH: keys only, and ban IPs that keep guessing"
 # Port 22 may be open to anywhere (each person gets their own key in
 # ~/.ssh/authorized_keys), so passwords must never be accepted.

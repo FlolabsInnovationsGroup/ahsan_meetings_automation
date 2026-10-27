@@ -384,6 +384,80 @@
     background: var(--highlighter-wash);
     box-shadow: 2px 0 0 var(--highlighter-wash), -2px 0 0 var(--highlighter-wash);
   }
+
+  /* posted: on the channel already */
+  :root { --green: #2f6b3e; --green-wash: rgba(47, 107, 62, 0.1); }
+
+  /* the Zoom account dropdown */
+  .zoom-form select {
+    width: 100%; min-width: 0; background: var(--bond-dim); border: 1.5px dashed var(--ink-muted);
+    padding: 7px 8px; color: var(--ink); font-family: 'IBM Plex Sans'; font-size: 13px;
+  }
+  .zoom-form select:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .zoom-account {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px;
+    font-family: 'IBM Plex Sans'; font-size: 12.5px; color: var(--ink);
+  }
+  .zoom-account label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  .zoom-account input { accent-color: var(--green); width: 15px; height: 15px; }
+  .link-btn {
+    background: none; border: none; padding: 0; cursor: pointer; font-family: 'IBM Plex Sans';
+    font-size: 12px; color: var(--ink-muted); text-decoration: underline; text-underline-offset: 2px;
+  }
+  .link-btn:hover { color: var(--red); }
+  .zoom-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .zoom-add[hidden] { display: none; }
+  .zoom-add input {
+    flex: 1 1 220px; min-width: 0; background: var(--bond-dim); border: 1.5px dashed var(--ink-muted);
+    padding: 8px 10px; color: var(--ink); font-family: 'IBM Plex Sans'; font-size: 13px;
+  }
+  .zoom-add input:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* the green Process button of a meeting on YouTube */
+  .zoom-list .small-btn.posted { color: var(--bond); background: var(--green); border-color: var(--green); }
+  .zoom-list .small-btn.posted:hover:not(:disabled) { color: var(--bond); background: #24552f; border-color: #24552f; }
+  .zoom-list .small-btn.posted:disabled { opacity: 0.55; }
+  .posted-note { margin-top: 3px; font-family: 'IBM Plex Sans'; font-size: 11px; font-weight: 600; color: var(--green); }
+  .zoom-list .hook.auto { color: var(--blue); }
+
+  /* the side panel: what's on YouTube and what the autopilot is doing */
+  @media (min-width: 1180px) {
+    .desk-inner {
+      max-width: 1096px; display: grid; grid-template-columns: minmax(0, 740px) minmax(0, 1fr);
+      column-gap: 24px; align-items: start;
+    }
+  }
+  .side-sheet { margin-top: 20px; padding: 22px 20px 20px; font-family: 'IBM Plex Sans'; }
+  @media (min-width: 1180px) {
+    .side-sheet { margin-top: 0; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+  }
+  .side-title { font-family: 'Source Serif 4', serif; font-weight: 600; font-size: 19px; margin: 0; color: var(--ink); }
+  .side-sub {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--ink-muted); margin: 18px 0 8px;
+  }
+  .ap-status { margin-top: 10px; font-size: 12.5px; line-height: 1.55; color: var(--ink); }
+  .ap-status .muted { color: var(--ink-muted); }
+  .ap-status .bad { color: var(--red); }
+  .ap-status .small-btn { padding: 3px 9px; font-size: 11.5px; margin-top: 6px; }
+  .ap-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--ink-muted); }
+  .ap-dot.on { background: var(--green); }
+  .ap-dot.paused { background: var(--highlighter); }
+  .side-row { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.45; }
+  .side-row:last-child { border-bottom: none; }
+  .side-row .what { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+  .side-row .when { font-family: 'Courier Prime', monospace; font-size: 11.5px; color: var(--ink-muted); }
+  .side-row .state { font-size: 11.5px; color: var(--blue); }
+  .side-row .state.attention { color: var(--red); font-weight: 600; }
+  .side-row .err { font-size: 11.5px; color: var(--red); margin-top: 2px; overflow-wrap: anywhere; }
+  .side-row .acts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 5px; }
+  .side-row ul { list-style: none; margin: 4px 0 0; padding: 0; }
+  .side-row li { margin: 2px 0; overflow-wrap: anywhere; }
+  .side-row a { color: var(--ink); }
+  .side-row a:hover { color: var(--red); }
+  .side-row .tag-full { font-size: 10.5px; color: var(--green); font-weight: 600; margin-right: 4px; }
+  .side-empty { font-size: 12px; color: var(--ink-muted); margin: 0; }
+  .side-checks .side-row { border-left: 3px solid var(--red); padding-left: 9px; background: var(--red-wash); }
 </style>
 </head>
 <body>
@@ -422,10 +496,19 @@
 
         <div class="source-panel" id="zoomPanel" role="tabpanel">
           <div class="zoom-form">
-            <label class="host">Host email<input type="email" id="zoomHost" placeholder="host@company.com" autocomplete="off" /></label>
+            <label class="host">Zoom account<select id="zoomHost"></select></label>
             <label>From<input type="date" id="zoomFrom" /></label>
             <label>To<input type="date" id="zoomTo" /></label>
             <button type="button" class="small-btn" id="zoomFind">Find recordings</button>
+          </div>
+          <div class="zoom-add" id="zoomAdd" hidden>
+            <input type="email" id="zoomNewEmail" placeholder="name@company.com" autocomplete="off" aria-label="New Zoom account email" />
+            <button type="button" class="small-btn" id="zoomAddBtn">Add</button>
+            <button type="button" class="link-btn" id="zoomAddCancel">Cancel</button>
+          </div>
+          <div class="zoom-account" id="zoomAccount">
+            <label for="zoomAutopilot"><input type="checkbox" id="zoomAutopilot" /> Autopilot: post this account's new meetings by itself</label>
+            <button type="button" class="link-btn" id="zoomRemoveEmail" hidden>Remove this email</button>
           </div>
           <p class="hint" id="zoomHint">Lists the host's cloud recordings; press Process on one to cut it. Zoom's own transcript is reused, so nothing is transcribed.</p>
           <div class="zoom-list" id="zoomList">
@@ -554,6 +637,18 @@
         </div>
       </aside>
     </div>
+
+    <aside class="sheet side-sheet" id="sidePanel" aria-labelledby="sideTitle">
+      <h2 class="side-title" id="sideTitle">On YouTube</h2>
+      <div class="ap-status" id="apStatus"></div>
+      <div class="side-checks" id="sideChecks"></div>
+      <div id="apQueueWrap">
+        <p class="side-sub">Autopilot</p>
+        <div id="apQueue"></div>
+      </div>
+      <p class="side-sub">Posted</p>
+      <div id="postedList"><p class="side-empty">Loading…</p></div>
+    </aside>
     </div>
   </div>
 
@@ -571,6 +666,25 @@ function saveApiKey(key) {
 }
 if (readApiKey()) saveApiKey(readApiKey());
 const rawFetch = window.fetch.bind(window);
+// Several requests can be refused at once (the page loads its parts side by
+// side): they share one prompt, and one that was sent before a key was typed
+// just goes again with it.
+let keyPrompt = null;
+let keyRefused = false; // the last prompt was cancelled: background refreshes stay quiet
+function askApiKey() {
+  if (!keyPrompt) {
+    keyPrompt = new Promise((resolve) => {
+      setTimeout(() => {
+        const key = window.prompt("This server needs an API key:", "");
+        if (key && key.trim()) saveApiKey(key.trim());
+        keyRefused = !(key && key.trim());
+        keyPrompt = null;
+        resolve();
+      }, 0);
+    });
+  }
+  return keyPrompt;
+}
 window.fetch = async (url, opts = {}) => {
   const withKey = () => {
     const headers = new Headers(opts.headers || {});
@@ -578,13 +692,11 @@ window.fetch = async (url, opts = {}) => {
     if (key) headers.set("X-API-Key", key);
     return { ...opts, headers };
   };
+  const sentWith = readApiKey();
   let res = await rawFetch(url, withKey());
   if (res.status === 401) {
-    const key = window.prompt("This server needs an API key:", "");
-    if (key && key.trim()) {
-      saveApiKey(key.trim());
-      res = await rawFetch(url, withKey());
-    }
+    if (readApiKey() === sentWith) await askApiKey();
+    if (readApiKey() !== sentWith) res = await rawFetch(url, withKey());
   }
   return res;
 };
@@ -713,7 +825,10 @@ document.querySelectorAll(".source-tab").forEach((tab) => {
     uploadPanel.classList.toggle("active", selectedSource === "upload");
     // a Zoom job starts from its row's Process button
     submitBtn.style.display = selectedSource === "zoom" ? "none" : "";
-    if (selectedSource === "zoom") loadZoomStatus();
+    if (selectedSource === "zoom") {
+      loadZoomStatus();
+      if (!zoomEmails.length) loadEmails(); // the first load was refused (no API key yet)
+    }
     clearError();
     updateSlug();
   });
@@ -984,8 +1099,8 @@ async function launch(request) {
 }
 
 const ZOOM_NOT_SET_UP =
-  "Zoom isn't set up on this server yet: fill ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET and " +
-  "ZOOM_HOST_EMAIL in .env, then restart the server.";
+  "Zoom isn't set up on this server yet: fill ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET " +
+  "in .env, then restart the server.";
 
 function detailText(body) {
   return (typeof body.detail === "string" && body.detail) || (body.detail && body.detail.message) || "";
@@ -1049,10 +1164,130 @@ async function loadZoomStatus() {
   if (!status.configured) {
     zoomHint.textContent = ZOOM_NOT_SET_UP;
     zoomFind.disabled = true;
+  }
+}
+
+// ------------------------------------------------------------ the account dropdown
+// The list lives on the server (GET /zoom/emails), so an address added here
+// is there for everyone. The default (PM) is always first and always picked
+// when the page opens.
+const ADD_EMAIL = "__add__";
+const zoomAdd = document.getElementById("zoomAdd");
+const zoomNewEmail = document.getElementById("zoomNewEmail");
+const zoomAutopilot = document.getElementById("zoomAutopilot");
+const zoomRemoveEmail = document.getElementById("zoomRemoveEmail");
+let zoomEmails = [];
+let zoomEmailPicked = "";
+
+async function loadEmails(pick) {
+  let body;
+  try {
+    const res = await fetch("/zoom/emails");
+    if (!res.ok) return;
+    body = await res.json();
+  } catch (e) {
+    return; // the dropdown stays as it was
+  }
+  renderEmails(body.emails || [], pick);
+}
+
+function renderEmails(rows, pick) {
+  zoomEmails = rows;
+  const wanted = pick || zoomEmailPicked;
+  zoomHost.textContent = "";
+  rows.forEach((row) => {
+    const option = document.createElement("option");
+    option.value = row.email;
+    option.textContent = row.default ? `${row.email} (default)` : row.email;
+    zoomHost.appendChild(option);
+  });
+  const add = document.createElement("option");
+  add.value = ADD_EMAIL;
+  add.textContent = "Add a new email…";
+  zoomHost.appendChild(add);
+  const fallback = (rows.find((r) => r.default) || rows[0] || {}).email || "";
+  zoomEmailPicked = rows.some((r) => r.email === wanted) ? wanted : fallback;
+  zoomHost.value = zoomEmailPicked;
+  syncEmailControls();
+}
+
+function syncEmailControls() {
+  const row = zoomEmails.find((r) => r.email === zoomEmailPicked);
+  zoomAutopilot.checked = !!(row && row.autopilot);
+  zoomAutopilot.disabled = !row;
+  zoomRemoveEmail.hidden = !row || row.default;
+}
+
+function showAddEmail(open) {
+  zoomAdd.hidden = !open;
+  if (open) {
+    zoomNewEmail.value = "";
+    zoomNewEmail.focus();
+  }
+}
+
+async function emailRequest(path, payload) {
+  clearError();
+  let res, body;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    showError("Can't reach the server: " + e.message);
+    return null;
+  }
+  if (!res.ok) {
+    showError(detailText(body) || "That didn't work.");
+    return null;
+  }
+  return body.emails || [];
+}
+
+zoomHost.addEventListener("change", () => {
+  if (zoomHost.value === ADD_EMAIL) {
+    zoomHost.value = zoomEmailPicked; // stays on the account it was on until one is added
+    showAddEmail(true);
     return;
   }
-  if (status.host_email && !zoomHost.value) zoomHost.value = status.host_email;
+  zoomEmailPicked = zoomHost.value;
+  syncEmailControls();
+});
+
+async function addEmail() {
+  const email = zoomNewEmail.value.trim().toLowerCase();
+  if (!email) return;
+  const rows = await emailRequest("/zoom/emails", { email });
+  if (rows === null) return;
+  showAddEmail(false);
+  renderEmails(rows, email);
 }
+document.getElementById("zoomAddBtn").addEventListener("click", addEmail);
+zoomNewEmail.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") addEmail();
+  if (e.key === "Escape") showAddEmail(false);
+});
+document.getElementById("zoomAddCancel").addEventListener("click", () => showAddEmail(false));
+
+zoomAutopilot.addEventListener("change", async () => {
+  const enabled = zoomAutopilot.checked;
+  const rows = await emailRequest("/zoom/emails/autopilot", { email: zoomEmailPicked, enabled });
+  if (rows === null) {
+    zoomAutopilot.checked = !enabled;
+    return;
+  }
+  renderEmails(rows);
+  loadSide(); // "watching …" in the side panel
+});
+
+zoomRemoveEmail.addEventListener("click", async () => {
+  if (!window.confirm(`Remove ${zoomEmailPicked} from the list?`)) return;
+  const rows = await emailRequest("/zoom/emails/remove", { email: zoomEmailPicked });
+  if (rows !== null) renderEmails(rows, "");
+});
 
 function zoomDate(iso) {
   const d = new Date(iso);
@@ -1063,7 +1298,7 @@ function zoomDate(iso) {
 async function findZoomRecordings() {
   clearError();
   const params = new URLSearchParams();
-  if (zoomHost.value.trim()) params.set("host", zoomHost.value.trim());
+  if (zoomEmailPicked) params.set("host", zoomEmailPicked);
   if (zoomFrom.value) params.set("from", zoomFrom.value);
   if (zoomTo.value) params.set("to", zoomTo.value);
   zoomFind.disabled = true;
@@ -1107,6 +1342,12 @@ function renderZoomRecordings(meetings) {
       line.textContent = meta.join(" · ");
       what.appendChild(line);
     }
+    if (m.autopilot && m.posted !== "posted") {
+      const line = document.createElement("div");
+      line.className = "hook auto";
+      line.textContent = `Autopilot: ${m.autopilot}`;
+      what.appendChild(line);
+    }
     // without a Zoom transcript the server transcribes it itself, unless it can't
     const blocked = m.status === "source_unsupported" || (m.status === "no_transcript" && zoomRequireNative);
     const [tone, label] = ZOOM_BADGES[m.status] || ["wait", m.status];
@@ -1116,12 +1357,20 @@ function renderZoomRecordings(meetings) {
     cell(tr, "").appendChild(tag);
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "small-btn zoom-process";
+    // green once it is on YouTube; still clickable (what is posted is never posted again)
+    btn.className = "small-btn zoom-process" + (m.posted ? " posted" : "");
     btn.textContent = "Process";
     btn.dataset.blocked = blocked ? "1" : "0";
     btn.disabled = isBusy || blocked;
     btn.addEventListener("click", () => processZoom(m));
-    cell(tr, "", "act").appendChild(btn);
+    const act = cell(tr, "", "act");
+    act.appendChild(btn);
+    if (m.posted) {
+      const note = document.createElement("div");
+      note.className = "posted-note";
+      note.textContent = m.posted === "posted" ? "Posted" : "Partly posted";
+      act.appendChild(note);
+    }
     zoomBody.appendChild(tr);
   });
 }
@@ -1528,7 +1777,8 @@ function buildPublish(jobId) {
         r.dirty = true;
       }
     } else {
-      r.check.checked = !!r.item.available && r.item.status !== "published"; // everything left is ticked
+      // everything left is ticked; never what the posted list blocks
+      r.check.checked = !!r.item.available && r.item.status !== "published" && !r.item.blocked;
     }
   });
 
@@ -1650,11 +1900,11 @@ function refreshPublishRows() {
     const item = r.kind === "full" ? o.full : o.shorts.find((s) => s.index === r.index);
     r.item = item;
     const posted = item.status === "published";
-    const editable = canEdit && item.available && !posted;
+    const editable = canEdit && item.available && !posted && !item.blocked;
     r.check.disabled = !editable;
-    if (posted) r.check.checked = false;
+    if (posted || item.blocked) r.check.checked = false;
     r.title.disabled = r.desc.disabled = !editable;
-    r.title.hidden = r.details.hidden = posted || !item.available;
+    r.title.hidden = r.details.hidden = posted || !item.available || !!item.blocked;
     setChip(r, item);
   });
   ytMore.classList.toggle("visible", !o.files_deleted && !o.busy);
@@ -1678,13 +1928,17 @@ function setChip(r, item) {
   } else if (item.status === "queued") {
     r.chip.classList.add("live");
     r.chip.textContent = "waiting";
+  } else if (item.blocked) {
+    r.chip.classList.add("bad");
+    r.chip.textContent = "can't post";
   } else if (item.status === "failed") {
     r.chip.classList.add("bad");
     r.chip.textContent = "failed";
   } else if (!item.available) {
     r.chip.textContent = "file no longer on the server";
   }
-  r.err.textContent = item.status === "failed" && item.error ? item.error : "";
+  r.err.textContent = item.status !== "published" && item.blocked ? item.blocked
+    : item.status === "failed" && item.error ? item.error : "";
   r.err.hidden = !r.err.textContent;
 }
 
@@ -1696,7 +1950,7 @@ function updatePublishButton() {
   const o = publishOptions;
   if (!o) return;
   const canPublish = o.youtube.configured && o.youtube.connected && !o.files_deleted;
-  const anyLeft = publishRows.some((r) => r.item.available && r.item.status !== "published");
+  const anyLeft = publishRows.some((r) => r.item.available && r.item.status !== "published" && !r.item.blocked);
   ytPublishBtn.style.display = canPublish && anyLeft ? "block" : "none";
   ytDelete.closest("label").style.display = canPublish && anyLeft ? "" : "none";
   const n = pickedRows().length;
@@ -1785,6 +2039,7 @@ function watchPublish(jobId) {
     publishTimer = null;
     renderResults(job); // the files may have been removed after the last upload
     loadPublish(jobId);
+    loadSide(); // the posted list has the new links
   };
   tick();
 }
@@ -1838,6 +2093,219 @@ document.getElementById("ytRemoveFiles").addEventListener("click", async () => {
   loadPublish(jobId);
 });
 
+// ------------------------------------------------------------ the side panel
+// What is on the channel (the posted list on the server, never cleaned up)
+// and what the autopilot is doing, refreshed every 30 seconds.
+const apStatus = document.getElementById("apStatus");
+const apQueue = document.getElementById("apQueue");
+const sideChecks = document.getElementById("sideChecks");
+const postedList = document.getElementById("postedList");
+const SIDE_REFRESH_MS = 30000;
+const SIDE_MAX_MEETINGS = 40;
+let sideLoading = false;
+
+function sideTime(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function sideEl(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function sideLink(parent, href, text) {
+  if (typeof href === "string" && /^https:\/\//.test(href)) {
+    addLink(parent, href, text, { newTab: true }).rel = "noopener";
+  } else {
+    parent.append(text);
+  }
+}
+
+async function loadSide() {
+  if (sideLoading) return;
+  sideLoading = true;
+  try {
+    // one after the other: a missing API key is asked for once, not twice
+    const apRes = await fetch("/autopilot").catch(() => null);
+    if (!apRes || apRes.status === 401) return; // no key (the prompt was cancelled)
+    const ap = apRes.ok ? await apRes.json().catch(() => null) : null;
+    if (ap) renderAutopilot(ap);
+    const posted = await fetch("/posted").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (posted) renderPosted(posted);
+  } finally {
+    sideLoading = false;
+  }
+}
+
+async function sideAction(path, payload) {
+  clearError();
+  let res, body;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    showError("Can't reach the server: " + e.message);
+    return;
+  }
+  if (!res.ok) showError(detailText(body) || "That didn't work.");
+  loadSide();
+}
+
+function sideButton(parent, label, onClick) {
+  const btn = sideEl("button", "link-btn", label);
+  btn.type = "button";
+  btn.addEventListener("click", onClick);
+  parent.appendChild(btn);
+  return btn;
+}
+
+function renderAutopilot(ap) {
+  apStatus.textContent = "";
+  const head = sideEl("div");
+  const dot = sideEl("span", "ap-dot");
+  head.appendChild(dot);
+  if (!ap.enabled) {
+    head.append("Autopilot is off. Turn it on with AUTOPILOT_ENABLED=true in .env.");
+  } else if (ap.paused) {
+    dot.classList.add("paused");
+    head.append("Autopilot is paused: it starts nothing new.");
+  } else {
+    dot.classList.add("on");
+    const who = ap.watching.length ? ap.watching.join(", ") : "no account (tick Autopilot under the Zoom tab)";
+    head.append(`Autopilot is on: new meetings of ${who} go up as ${ap.privacy}.`);
+  }
+  apStatus.appendChild(head);
+  if (ap.enabled && !ap.paused) {
+    const when = ap.busy ? "It looks at Zoom again when the current job is done."
+      : ap.last_check_at ? `Last looked at Zoom ${sideTime(ap.last_check_at)}; next about ${sideTime(ap.next_check_at)}.`
+        : "It looks at Zoom within a minute.";
+    apStatus.appendChild(sideEl("div", "muted", when));
+  }
+  if (ap.last_check_error) apStatus.appendChild(sideEl("div", "bad", `Zoom: ${ap.last_check_error}`));
+  if (ap.schedule_error) apStatus.appendChild(sideEl("div", "muted", `Zoom schedule: ${ap.schedule_error}`));
+  if (ap.enabled) {
+    const btn = sideEl("button", "small-btn", ap.paused ? "Resume" : "Pause");
+    btn.type = "button";
+    btn.addEventListener("click", () => sideAction(ap.paused ? "/autopilot/resume" : "/autopilot/pause"));
+    apStatus.appendChild(btn);
+  }
+
+  apQueue.textContent = "";
+  const rows = (ap.meetings || []).filter((m) => m.state !== "posted");
+  if (!rows.length) {
+    apQueue.appendChild(sideEl("p", "side-empty", ap.enabled ? "Nothing waiting." : "No meetings followed."));
+    return;
+  }
+  rows.forEach((m) => {
+    const row = sideEl("div", "side-row");
+    row.appendChild(sideEl("div", "what", m.topic || "(no topic)"));
+    row.appendChild(sideEl("div", "when", sideTime(m.start_time)));
+    let label = m.label;
+    if (m.state === "waiting_transcript" && m.deadline_at) label += ` (until ${sideTime(m.deadline_at)}, then WhisperX)`;
+    if (m.state === "processing" && m.by_hand) label += " (a job someone started)";
+    row.appendChild(sideEl("div", "state" + (m.state === "needs_attention" ? " attention" : ""), label));
+    if (m.error && m.state !== "skipped") row.appendChild(sideEl("div", "err", m.error));
+    const acts = sideEl("div", "acts");
+    if (m.state === "needs_attention" || m.state === "skipped") {
+      sideButton(acts, m.state === "skipped" ? "Post it after all" : "Retry", () =>
+        sideAction("/autopilot/meetings/retry", { uuid: m.uuid }));
+    }
+    if (["needs_attention", "waiting_recording", "waiting_transcript", "ready"].includes(m.state)) {
+      sideButton(acts, "Skip", () => {
+        if (window.confirm(`Never post "${m.topic || "this meeting"}"?`)) sideAction("/autopilot/meetings/skip", { uuid: m.uuid });
+      });
+    }
+    if (m.job_id && m.job_exists) addLink(acts, `/app?job=${encodeURIComponent(m.job_id)}`, "Open its job");
+    if (acts.childNodes.length) row.appendChild(acts);
+    apQueue.appendChild(row);
+  });
+}
+
+function renderPosted(data) {
+  sideChecks.textContent = "";
+  (data.needs_check || []).forEach((c) => {
+    const row = sideEl("div", "side-row");
+    const what = c.kind === "full" ? "the full video" : `short ${c.short}`;
+    const cutOff = c.state === "interrupted";
+    row.appendChild(sideEl("div", "what",
+      `${cutOff ? "Cut off mid-upload" : "Check YouTube"}: ${what} of ${c.meeting || "a meeting"}`));
+    if (c.title) row.appendChild(sideEl("div", "when", c.title));
+    if (cutOff) {
+      row.appendChild(sideEl("div", "err", c.job_exists
+        ? "Publishing its job again finishes this upload (it never sends a second video)."
+        : "Its job's files are gone, so it can't be finished: look on YouTube and say whether it's there."));
+    } else if (c.error) {
+      row.appendChild(sideEl("div", "err", c.error));
+    }
+    const acts = sideEl("div", "acts");
+    if (cutOff && c.job_exists) {
+      // resuming asks YouTube itself how far it got: no need for a person to guess
+      addLink(acts, `/app?job=${encodeURIComponent(c.job_id)}`, "Open its job to publish again");
+      row.appendChild(acts);
+      sideChecks.appendChild(row);
+      return;
+    }
+    sideButton(acts, "It's on YouTube", () => {
+      const url = window.prompt("Paste its YouTube link:", "");
+      if (url && url.trim()) sideAction("/posted/resolve", { key: c.key, on_youtube: true, url: url.trim() });
+    });
+    sideButton(acts, "Not there, upload again", () => {
+      if (window.confirm("Sure it is not on the channel (also not as private or still processing)?")) {
+        sideAction("/posted/resolve", { key: c.key, on_youtube: false });
+      }
+    });
+    row.appendChild(acts);
+    sideChecks.appendChild(row);
+  });
+
+  postedList.textContent = "";
+  const meetings = data.meetings || [];
+  if (!meetings.length) {
+    postedList.appendChild(sideEl("p", "side-empty", "Nothing posted yet."));
+    return;
+  }
+  meetings.slice(0, SIDE_MAX_MEETINGS).forEach((g) => {
+    const row = sideEl("div", "side-row");
+    row.appendChild(sideEl("div", "what", g.meeting || "(no title)"));
+    row.appendChild(sideEl("div", "when", g.meeting_date || sideTime(g.last_posted_at)));
+    const list = sideEl("ul");
+    if (g.full) {
+      const li = sideEl("li");
+      li.appendChild(sideEl("span", "tag-full", "FULL"));
+      sideLink(li, g.full.url, g.full.title || "Full video");
+      list.appendChild(li);
+    }
+    g.shorts.forEach((s) => {
+      const li = sideEl("li");
+      li.append(`Short ${s.short}: `);
+      sideLink(li, s.url, s.title || "short");
+      list.appendChild(li);
+    });
+    row.appendChild(list);
+    postedList.appendChild(row);
+  });
+  if (meetings.length > SIDE_MAX_MEETINGS) {
+    postedList.appendChild(sideEl("p", "side-empty",
+      `…and ${meetings.length - SIDE_MAX_MEETINGS} older meetings (all in data/state/posted.jsonl on the server).`));
+  }
+}
+
+setInterval(() => {
+  // no prompt every 30 s for someone who cancelled the API-key prompt
+  if (!document.hidden && !keyRefused) loadSide();
+}, SIDE_REFRESH_MS);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadSide();
+});
+
 submitBtn.addEventListener("click", submit);
 urlInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") submit();
@@ -1851,6 +2319,8 @@ urlInput.addEventListener("keydown", (e) => {
   try { history.replaceState(null, "", rest ? `?${rest}` : window.location.pathname); } catch (e) { /* not important */ }
 })();
 resumeFromUrl();
+loadEmails();
+loadSide();
 </script>
 </body>
 </html>

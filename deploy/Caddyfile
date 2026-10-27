@@ -7,13 +7,20 @@
 {$DOMAIN} {
 	encode gzip
 
-	# The API has no authentication of its own, so everything sits behind
-	# a password. n8n or scripts can send the same credentials as a
-	# standard "Authorization: Basic ..." header. Only the privacy policy
-	# is public: Google requires it on the OAuth consent screen.
-	@protected not path /privacy
+	# Everything sits behind a password (and the API key, HC_API_TOKEN). n8n
+	# or scripts can send the same credentials as a standard
+	# "Authorization: Basic ..." header. Two paths are public: the privacy
+	# policy (Google requires it on the OAuth consent screen) and Zoom's
+	# webhook (Zoom's servers have no password; the app checks Zoom's
+	# signature instead, see autopilot/webhook.py).
+	@protected not path /privacy /zoom/webhook
 	basic_auth @protected {
 		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	# Zoom's webhook calls are a few KB; the public route takes no more.
+	request_body /zoom/webhook {
+		max_size 256KB
 	}
 
 	# Meeting recordings are large. Raise if you upload longer files.
