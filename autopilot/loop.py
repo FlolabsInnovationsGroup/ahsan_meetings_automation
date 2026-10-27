@@ -1,7 +1,7 @@
 """Runs the autopilot's step every minute in a thread of its own, and at once
-when Zoom's webhook calls. Started by the API at startup when
-AUTOPILOT_ENABLED is true; a step that fails is logged and the next one runs
-as usual."""
+when Zoom's webhook calls or someone switches it on. Started by the API at
+startup; a step does nothing while the switch is off, and a step that fails
+is logged and the next one runs as usual."""
 
 from __future__ import annotations
 

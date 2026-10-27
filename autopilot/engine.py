@@ -124,7 +124,7 @@ class Engine:
     # ------------------------------------------------------------- the step
     def step(self) -> None:
         settings = get_settings()
-        if not settings.autopilot_enabled:
+        if not self.enabled():
             return
         with self._step_lock:
             now = self.clock()
@@ -148,12 +148,16 @@ class Engine:
             self._refresh_schedule(now)
             self._start_next(now)
 
-    def note_switched_off(self) -> None:
-        """The app started with the autopilot off: when it is switched on
-        again, it starts from that day, not from where it stopped."""
-        if not self.store.read().switched_off:
-            with self.store.editing() as state:
+    def enabled(self) -> bool:
+        return self.store.read().enabled
+
+    def set_enabled(self, on: bool) -> None:
+        """The side panel's switch. Switched on again later, it starts from
+        that day: meetings recorded while it was off are never posted by it."""
+        with self.store.editing() as state:
+            if state.enabled != on and not on:
                 state.switched_off = True
+            state.enabled = on
 
     def _drop_unwatched(self, now: datetime) -> None:
         """A meeting of an account no longer ticked "autopilot" (or removed
