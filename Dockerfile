@@ -3,7 +3,10 @@
 # Build:  docker compose build
 # The first build takes a while: torch + WhisperX + pyannote are large.
 
-FROM python:3.12-slim-bookworm
+# Debian 13 (trixie): its ffmpeg is 7.1. The renderer is written and tested
+# for ffmpeg 7+; Debian 12's ffmpeg 5.1 broke it (no drawtext text_align, so
+# no title card; audio lengths off in the shorts; a 27-hour final video).
+FROM python:3.12-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
