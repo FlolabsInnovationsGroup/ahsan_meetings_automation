@@ -78,8 +78,6 @@ class World:
     """The autopilot with everything around it faked."""
 
     def __init__(self, monkeypatch):
-        monkeypatch.setenv("AUTOPILOT_ENABLED", "true")
-        get_settings.cache_clear()
         self.now = T0
         self.zoom = FakeZoom()
         self.channel = FakeChannel().install(monkeypatch)
@@ -87,6 +85,7 @@ class World:
         self.submitted = []
         self.manual = {}
         self.engine = self.restart()
+        self.engine.set_enabled(True)  # the side panel's Turn on
 
     def restart(self) -> Engine:
         """A new process: the autopilot's file and the ledger are read again,
@@ -142,8 +141,7 @@ def _count_lists(world) -> int:
 
 def test_off_means_nothing_at_all(monkeypatch):
     w = World(monkeypatch)
-    monkeypatch.setenv("AUTOPILOT_ENABLED", "false")
-    get_settings.cache_clear()
+    w.engine.set_enabled(False)
     w.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
     w.step()
     assert w.zoom.calls == [] and w.engine.store.read().meetings == {}
@@ -664,9 +662,12 @@ def test_the_start_date_setting_always_wins_and_switching_on_again_starts_today(
     # off, then on again two weeks later: nothing recorded while it was off
     monkeypatch.setenv("AUTOPILOT_START_AFTER", "")
     get_settings.cache_clear()
-    w.engine.note_switched_off()
+    w.engine.set_enabled(False)
     w.zoom.meetings["while_off"] = _meeting("while_off", datetime(2026, 11, 18, 9, 0, tzinfo=UTC))
     w.now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    w.step()
+    assert w.zoom.calls.count(("list", PM)) == 2  # nothing while off
+    w.engine.set_enabled(True)
     w.step()
     assert "while_off" not in w.engine.store.read().meetings
     assert w.engine.store.read().start_after == "2026-11-19T19:00:00+00:00"  # 20 Nov, Karachi
@@ -818,3 +819,15 @@ def test_settling_another_jobs_upload_frees_the_meeting_it_held_up(world):
         state.meetings["m1"].state = "needs_attention"
     world.engine.after_check("some-older-job", "zoom:m1")
     assert world.meeting("m1").state == "posting"
+
+
+def test_the_side_panel_switch_turns_it_on_and_off_and_is_remembered(monkeypatch):
+    client = TestClient(api_main.app)
+    monkeypatch.setattr(api_main.autopilot_store, "_state", None)
+    assert client.get("/autopilot").json()["enabled"] is False  # off until someone presses Turn on
+    assert client.post("/autopilot/on").json()["enabled"] is True
+    saved = json.loads((get_settings().storage_dir / "state" / "autopilot.json").read_text(encoding="utf-8"))
+    assert saved["enabled"] is True  # survives a restart
+    assert client.get("/health").json()["autopilot_enabled"] is True
+    body = client.post("/autopilot/off").json()
+    assert body["enabled"] is False and Store().read().switched_off

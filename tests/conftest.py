@@ -25,8 +25,8 @@ def _isolated_settings(tmp_path, monkeypatch):
     for name in ("ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_HOST_EMAIL"):
         monkeypatch.setenv(name, "")  # never reach the real Zoom account from a test
     monkeypatch.setenv("REQUIRE_NATIVE_TRANSCRIPT", "false")
-    # the autopilot never runs, nor takes webhook calls, unless a test says so
-    monkeypatch.setenv("AUTOPILOT_ENABLED", "false")
+    # the autopilot's switch lives in the per-test storage folder, so it is
+    # off unless a test turns it on; no webhook calls unless a test says so
     monkeypatch.setenv("AUTOPILOT_START_AFTER", "")
     monkeypatch.setenv("ZOOM_WEBHOOK_SECRET_TOKEN", "")
     monkeypatch.setenv("ZOOM_DEFAULT_EMAIL", "pm@flomad.com")

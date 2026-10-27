@@ -82,10 +82,7 @@ async def lifespan(_app: FastAPI):
     imported = publish_run.import_published_jobs(_safe_get_job(job_id) for job_id in job_store.list_ids())
     if imported:
         logger.info("posted list: added %d video(s) published before it existed", imported)
-    if get_settings().autopilot_enabled:
-        autopilot_loop.start(autopilot_engine)
-    else:
-        autopilot_engine.note_switched_off()
+    autopilot_loop.start(autopilot_engine)  # it does nothing until switched on in the side panel
     yield
     autopilot_loop.stop()
 
@@ -311,7 +308,7 @@ async def health() -> dict:
         "running_job_id": job_queue.running_job_id,
         "queue_depth": job_queue.depth(),
         "auth_enabled": auth_enabled(),
-        "autopilot_enabled": settings.autopilot_enabled,
+        "autopilot_enabled": autopilot_engine.enabled(),
         "uptime_s": round(time.monotonic() - _STARTED_AT, 1),
     }
 
@@ -650,7 +647,7 @@ def get_autopilot() -> dict:
     open_rows = [m for m in meetings if m.state not in ("posted", "skipped")]
     done_rows = [m for m in meetings if m.state in ("posted", "skipped")][:20]
     return {
-        "enabled": settings.autopilot_enabled,
+        "enabled": state.enabled,
         "paused": state.paused,
         "privacy": settings.autopilot_privacy,
         "wait_hours": settings.autopilot_transcript_wait_hours,
@@ -671,6 +668,23 @@ def get_autopilot() -> dict:
             for m in open_rows + done_rows
         ],
     }
+
+
+@app.post("/autopilot/on")
+def turn_autopilot_on() -> dict:
+    """The side panel's switch: from now on new meetings of the ticked
+    accounts are processed and posted publicly."""
+    autopilot_engine.set_enabled(True)
+    autopilot_loop.wake()
+    return get_autopilot()
+
+
+@app.post("/autopilot/off")
+def turn_autopilot_off() -> dict:
+    """Stops starting anything; what is under way finishes. Switched on
+    again, it starts from that day."""
+    autopilot_engine.set_enabled(False)
+    return get_autopilot()
 
 
 @app.post("/autopilot/pause")

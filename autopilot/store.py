@@ -73,6 +73,8 @@ class ScheduledMeeting(BaseModel):
 
 
 class State(BaseModel):
+    # the side panel's on/off switch (off until someone turns it on)
+    enabled: bool = False
     # meetings recorded before this are never posted by the autopilot
     start_after: str | None = None
     paused: bool = False

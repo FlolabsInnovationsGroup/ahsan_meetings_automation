@@ -299,9 +299,10 @@ class Settings(BaseSettings):
 
     # --- autopilot (autopilot/) -------------------------------------------
     # Every new recording of the accounts marked "autopilot" in the dropdown
-    # is processed and posted: shorts first, then the full video. Off until
-    # the owner turns it on; then it posts for real (owner, 2026-10-26).
-    autopilot_enabled: bool = False
+    # is processed and posted: shorts first, then the full video. It is
+    # switched on and off with the button in the page's side panel (saved in
+    # storage_dir/state/autopilot.json), not here (owner, 2026-10-27); off
+    # until someone presses it.
     # Visibility of what it posts. The app can only upload, so this can't be
     # changed afterwards except by hand in YouTube Studio.
     autopilot_privacy: Literal["private", "unlisted", "public"] = "public"

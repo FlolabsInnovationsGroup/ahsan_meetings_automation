@@ -267,8 +267,8 @@ Turning it on:
    `https://YOUR_DOMAIN/zoom/webhook` and the events "All recordings have
    completed" and "Recording transcript files have completed", and copy the
    app's **Secret Token** (don't press Validate yet).
-2. In `.env`: `ZOOM_WEBHOOK_SECRET_TOKEN` (that token),
-   `AUTOPILOT_ENABLED=true` and `HF_TOKEN` (for WhisperX). Leave
+2. In `.env`: `ZOOM_WEBHOOK_SECRET_TOKEN` (that token) and `HF_TOKEN` (for
+   WhisperX). Leave
    `REQUIRE_NATIVE_TRANSCRIPT=true`: it still applies to jobs started by
    hand; the autopilot's own jobs may transcribe.
 3. Load it: `docker compose up -d` (a plain `restart` doesn't re-read
@@ -276,8 +276,10 @@ Turning it on:
    password: `docker compose up -d --force-recreate --no-deps caddy` (later
    updates do this by themselves when the Caddyfile changes).
 4. Now press **Validate** in Zoom and save the subscription.
-5. The side panel says "Autopilot is on", with the accounts it watches.
-   Pause/Resume is there too.
+5. Press **Turn on** in the page's side panel (it asks to confirm). It then
+   says "Autopilot is on", with the accounts it watches; Pause and Turn off
+   are there too. The switch is saved on the server, so it stays on across
+   restarts and updates.
 
 Videos published before this version are added to the posted list at
 startup from their job records; any whose job folder the daily cleanup had

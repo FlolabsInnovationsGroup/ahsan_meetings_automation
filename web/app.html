@@ -439,7 +439,10 @@
   .ap-status { margin-top: 10px; font-size: 12.5px; line-height: 1.55; color: var(--ink); }
   .ap-status .muted { color: var(--ink-muted); }
   .ap-status .bad { color: var(--red); }
-  .ap-status .small-btn { padding: 3px 9px; font-size: 11.5px; margin-top: 6px; }
+  .ap-status .small-btn { padding: 3px 9px; font-size: 11.5px; }
+  .ap-buttons { display: flex; gap: 8px; margin-top: 8px; }
+  .ap-status .small-btn.ap-on { color: var(--bond); background: var(--green); border-color: var(--green); }
+  .ap-status .small-btn.ap-on:hover { color: var(--bond); background: #24552f; border-color: #24552f; }
   .ap-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--ink-muted); }
   .ap-dot.on { background: var(--green); }
   .ap-dot.paused { background: var(--highlighter); }
@@ -456,6 +459,15 @@
   .side-row a { color: var(--ink); }
   .side-row a:hover { color: var(--red); }
   .side-row .tag-full { font-size: 10.5px; color: var(--green); font-weight: 600; margin-right: 4px; }
+  .posted-item summary { list-style: none; cursor: pointer; position: relative; padding-left: 16px; }
+  .posted-item summary::-webkit-details-marker { display: none; }
+  .posted-item summary::before {
+    content: "▸"; position: absolute; left: 0; top: 0; color: var(--ink-muted); transition: transform 0.15s;
+  }
+  .posted-item[open] summary::before { transform: rotate(90deg); }
+  .posted-item summary:hover .what { color: var(--red); }
+  .posted-item summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .posted-item ul { padding-left: 16px; }
   .side-empty { font-size: 12px; color: var(--ink-muted); margin: 0; }
   .side-checks .side-row { border-left: 3px solid var(--red); padding-left: 9px; background: var(--red-wash); }
 </style>
@@ -2102,6 +2114,7 @@ const sideChecks = document.getElementById("sideChecks");
 const postedList = document.getElementById("postedList");
 const SIDE_REFRESH_MS = 30000;
 const SIDE_MAX_MEETINGS = 40;
+const postedOpen = new Set(); // posted meetings opened by the person, by source
 let sideLoading = false;
 
 function sideTime(iso) {
@@ -2173,7 +2186,7 @@ function renderAutopilot(ap) {
   const dot = sideEl("span", "ap-dot");
   head.appendChild(dot);
   if (!ap.enabled) {
-    head.append("Autopilot is off. Turn it on with AUTOPILOT_ENABLED=true in .env.");
+    head.append("Autopilot is off.");
   } else if (ap.paused) {
     dot.classList.add("paused");
     head.append("Autopilot is paused: it starts nothing new.");
@@ -2191,12 +2204,30 @@ function renderAutopilot(ap) {
   }
   if (ap.last_check_error) apStatus.appendChild(sideEl("div", "bad", `Zoom: ${ap.last_check_error}`));
   if (ap.schedule_error) apStatus.appendChild(sideEl("div", "muted", `Zoom schedule: ${ap.schedule_error}`));
-  if (ap.enabled) {
-    const btn = sideEl("button", "small-btn", ap.paused ? "Resume" : "Pause");
-    btn.type = "button";
-    btn.addEventListener("click", () => sideAction(ap.paused ? "/autopilot/resume" : "/autopilot/pause"));
-    apStatus.appendChild(btn);
+  const buttons = sideEl("div", "ap-buttons");
+  if (!ap.enabled) {
+    const on = sideEl("button", "small-btn ap-on", "Turn on");
+    on.type = "button";
+    on.addEventListener("click", () => {
+      const who = ap.watching.length ? ap.watching.join(", ") : "the accounts ticked Autopilot";
+      if (window.confirm(`Turn on the autopilot? From now on, new meetings of ${who} are processed `
+        + `and posted to YouTube as ${ap.privacy}.`)) sideAction("/autopilot/on");
+    });
+    buttons.appendChild(on);
+  } else {
+    const pause = sideEl("button", "small-btn", ap.paused ? "Resume" : "Pause");
+    pause.type = "button";
+    pause.addEventListener("click", () => sideAction(ap.paused ? "/autopilot/resume" : "/autopilot/pause"));
+    const off = sideEl("button", "small-btn", "Turn off");
+    off.type = "button";
+    off.addEventListener("click", () => {
+      if (window.confirm("Turn off the autopilot? What is under way finishes; nothing new starts.")) {
+        sideAction("/autopilot/off");
+      }
+    });
+    buttons.append(pause, off);
   }
+  apStatus.appendChild(buttons);
 
   apQueue.textContent = "";
   const rows = (ap.meetings || []).filter((m) => m.state !== "posted");
@@ -2273,9 +2304,20 @@ function renderPosted(data) {
     return;
   }
   meetings.slice(0, SIDE_MAX_MEETINGS).forEach((g) => {
-    const row = sideEl("div", "side-row");
-    row.appendChild(sideEl("div", "what", g.meeting || "(no title)"));
-    row.appendChild(sideEl("div", "when", g.meeting_date || sideTime(g.last_posted_at)));
+    // one closed row per meeting; its links show when it is opened (and it
+    // stays open through the 30-second refresh)
+    const row = sideEl("details", "side-row posted-item");
+    row.open = postedOpen.has(g.source);
+    row.addEventListener("toggle", () => {
+      if (row.open) postedOpen.add(g.source);
+      else postedOpen.delete(g.source);
+    });
+    const summary = sideEl("summary");
+    summary.appendChild(sideEl("div", "what", g.meeting || "(no title)"));
+    const count = [g.full ? "full video" : "", g.shorts.length ? `${g.shorts.length} short${g.shorts.length === 1 ? "" : "s"}` : ""]
+      .filter(Boolean).join(" + ");
+    summary.appendChild(sideEl("div", "when", [g.meeting_date || sideTime(g.last_posted_at), count].filter(Boolean).join(" · ")));
+    row.appendChild(summary);
     const list = sideEl("ul");
     if (g.full) {
       const li = sideEl("li");
