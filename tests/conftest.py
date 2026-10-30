@@ -25,6 +25,9 @@ def _isolated_settings(tmp_path, monkeypatch):
     for name in ("ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_HOST_EMAIL"):
         monkeypatch.setenv(name, "")  # never reach the real Zoom account from a test
     monkeypatch.setenv("REQUIRE_NATIVE_TRANSCRIPT", "false")
+    # a real YouTube client in .env must not make tests "configured"
+    for name in ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "PUBLIC_BASE_URL"):
+        monkeypatch.setenv(name, "")
     # the autopilot's switch lives in the per-test storage folder, so it is
     # off unless a test turns it on; no webhook calls unless a test says so
     monkeypatch.setenv("AUTOPILOT_START_AFTER", "")

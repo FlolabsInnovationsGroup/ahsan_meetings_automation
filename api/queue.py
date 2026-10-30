@@ -288,13 +288,15 @@ def _owned_download(store: JobStore, job_id: str) -> Path | None:
 
 # ----------------------------------------------------------------- startup
 
-def reconcile_on_startup(store: JobStore) -> dict[str, int]:
+def reconcile_on_startup(store: JobStore, retention_hours: float | None = None) -> dict[str, int]:
     """Anything a previous process left non-terminal can never finish: mark it
     failed/interrupted (retryable) and drop its temp files. A finished job
     whose YouTube upload was cut off keeps its result; only the upload is
     marked failed, so it can be published again. Then apply the retention
-    policy (0 = keep everything)."""
+    policy: `retention_hours` (the side panel's choice), else
+    JOB_RETENTION_HOURS; 0 = keep everything."""
     settings = get_settings()
+    hours = settings.job_retention_hours if retention_hours is None else retention_hours
     interrupted = swept = 0
     for job_id in store.list_ids():
         path = settings.jobs_dir / job_id / "job.json"
@@ -322,12 +324,12 @@ def reconcile_on_startup(store: JobStore) -> dict[str, int]:
             shutil.rmtree(settings.jobs_dir / job_id / "publish_tmp", ignore_errors=True)
             interrupted += 1
             continue
-        if settings.job_retention_hours > 0 and not is_protected(job_id):
+        if hours > 0 and not is_protected(job_id):
             stamp = job.updated_at or job.created_at
             if stamp is not None:
                 if stamp.tzinfo is None:
                     stamp = stamp.replace(tzinfo=UTC)
-                if datetime.now(UTC) - stamp > timedelta(hours=settings.job_retention_hours):
+                if datetime.now(UTC) - stamp > timedelta(hours=hours):
                     delete_job_files(store, job_id)
                     swept += 1
     if interrupted or swept:

@@ -290,9 +290,16 @@ class Settings(BaseSettings):
     job_max_wall_s: float = 10800.0
     # Refuse to start a job unless this much disk is free (6 GiB default).
     min_free_disk_bytes: int = 6 * 1024**3
-    # Delete finished jobs older than this at startup. 0 = never (local dev;
-    # EC2 sets 24). A job folder containing a `.keep` file is never deleted.
-    job_retention_hours: float = 0.0
+    # Delete finished jobs nobody touched for this long: at startup and then
+    # every few minutes (owner, 2026-10-30: 30 h). 0 = never. The side panel
+    # can change it (saved in storage_dir/state/prefs.json, which wins over
+    # this). Running, queued and uploading jobs, jobs the autopilot still
+    # posts, and a folder with a `.keep` file are never deleted; what is on
+    # YouTube stays in the posted list.
+    job_retention_hours: float = 30.0
+    # Below this much free disk, the oldest finished jobs are deleted (same
+    # care as above) until there is this much again (owner, 2026-10-30: 2 GB).
+    low_disk_cleanup_bytes: int = 2 * 1024**3
     # A job that transcribes the meeting itself (WhisperX on the CPU is slow)
     # gets this wall clock instead of job_max_wall_s.
     asr_job_max_wall_s: float = 21600.0

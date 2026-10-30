@@ -470,6 +470,16 @@
   .posted-item ul { padding-left: 16px; }
   .side-empty { font-size: 12px; color: var(--ink-muted); margin: 0; }
   .side-checks .side-row { border-left: 3px solid var(--red); padding-left: 9px; background: var(--red-wash); }
+  .retention { margin-top: 12px; font-size: 12.5px; }
+  .retention label { display: block; color: var(--ink); margin-bottom: 5px; }
+  .retention-row { display: flex; align-items: center; gap: 8px; }
+  .retention-row input {
+    width: 84px; background: var(--bond-dim); border: 1.5px dashed var(--ink-muted); padding: 5px 8px;
+    color: var(--ink); font-family: 'IBM Plex Sans'; font-size: 13px;
+  }
+  .retention-row input:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .retention-row .small-btn { padding: 4px 10px; font-size: 11.5px; }
+  .retention .side-empty { margin-top: 6px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -662,6 +672,15 @@
       <div id="postedList"><p class="side-empty">Loading…</p></div>
       <p class="side-sub">Server storage</p>
       <div class="ap-status" id="storageBox"><p class="side-empty">Loading…</p></div>
+      <div class="retention">
+        <label for="retentionHours">Delete finished jobs after</label>
+        <div class="retention-row">
+          <input type="number" id="retentionHours" min="0" max="8760" step="1" inputmode="decimal" aria-describedby="retentionNote" />
+          <span>hours</span>
+          <button type="button" class="small-btn" id="retentionSave">Save</button>
+        </div>
+        <p class="side-empty" id="retentionNote">0 = never.</p>
+      </div>
     </aside>
     </div>
   </div>
@@ -2352,7 +2371,53 @@ function sizeText(bytes) {
   return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
+const retentionInput = document.getElementById("retentionHours");
+const retentionNote = document.getElementById("retentionNote");
+let retentionDirty = false; // typed and not saved yet: the refresh leaves it alone
+retentionInput.addEventListener("input", () => { retentionDirty = true; });
+
+function retentionText(hours, lowBytes) {
+  const when = hours > 0 ? `Finished jobs are deleted ${hours} hour${hours === 1 ? "" : "s"} after they were last touched`
+    : "Finished jobs are kept (0 = never delete)";
+  return `${when}. When less than ${sizeText(lowBytes)} is free, the oldest go first, whatever their age. `
+    + "Running jobs and uploads are never touched.";
+}
+
+async function saveRetention() {
+  const hours = Number(retentionInput.value);
+  if (retentionInput.value.trim() === "" || !Number.isFinite(hours) || hours < 0 || hours > 8760) {
+    showError("Type a number of hours from 0 (never) to 8760.");
+    return;
+  }
+  clearError();
+  let res, body;
+  try {
+    res = await fetch("/storage/retention", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hours }),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    showError("Can't reach the server: " + e.message);
+    return;
+  }
+  if (!res.ok) {
+    showError(detailText(body) || "Couldn't save the setting.");
+    return;
+  }
+  retentionDirty = false;
+  storageNote = "Saved.";
+  renderStorage(body);
+}
+document.getElementById("retentionSave").addEventListener("click", saveRetention);
+retentionInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveRetention();
+});
+
 function renderStorage(s) {
+  if (!retentionDirty && document.activeElement !== retentionInput) retentionInput.value = String(s.retention_hours);
+  retentionNote.textContent = retentionText(s.retention_hours, s.low_disk_bytes);
   storageBox.textContent = "";
   storageBox.appendChild(sideEl("div", "", `${sizeText(s.disk_free_bytes)} free on the server.`));
   storageBox.appendChild(sideEl("div", "muted", s.old_jobs
