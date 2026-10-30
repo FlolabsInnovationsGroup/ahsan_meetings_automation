@@ -3,13 +3,12 @@
 # Build:  docker compose build
 # The first build takes a while: torch + WhisperX + pyannote are large.
 
-# TEMPORARY: back on Debian 12 so this deploy reuses the server's cached
-# layers (the Debian 13 build ran out of disk). Once old jobs are cleared and
-# Docker's build cache is pruned, switch to python:3.12-slim-trixie again:
-# Debian 13's ffmpeg is 7.1, which the renderer is written and tested for;
-# Debian 12's ffmpeg 5.1 broke it (no drawtext text_align, so no title card;
-# audio lengths off in the shorts; a 27-hour final video).
-FROM python:3.12-slim-bookworm
+# Debian 13 (trixie): its ffmpeg is 7.1. The renderer is written and tested
+# for ffmpeg 7+; Debian 12's ffmpeg 5.1 broke it (no drawtext text_align, so
+# no title card; audio lengths off in the shorts; a 27-hour final video).
+# Switching the base rebuilds every layer: the server needs room for two
+# images at once (prune Docker's build cache first: DEPLOY.md, Day-to-day).
+FROM python:3.12-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
