@@ -7,7 +7,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from core.config import get_settings
-from core.errors import InsufficientDisk, PipelineError, classify, is_fatal
+from core.errors import (
+    InsufficientDisk,
+    PipelineError,
+    SourceUnsupported,
+    classify,
+    is_fatal,
+)
 from core.logging import get_logger
 from core.models import (
     Decision,
@@ -35,7 +41,7 @@ from edl.highlights import (
 )
 from ingest import zoom
 from ingest.store import title_from_filename
-from ingest.validate import AVSyncError, validate_video
+from ingest.validate import AVSyncError, check_length, validate_video
 from ingest.youtube import download_youtube
 from outputs import RenderInputs
 from slice.intro_outro import find_intro_outro
@@ -107,9 +113,14 @@ def run_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
         check_disk()
         video_info = validate_video(source_path)
         media = probe_media(source_path)
+        check_length(media.video_duration or video_info.duration)
     except AVSyncError as exc:
         logger.warning("job %s: %s", job.job_id, exc)
         _fail(job, update, exc, status=JobStatus.SKIPPED_DESYNC, code="source_unsupported")
+        return
+    except SourceUnsupported as exc:
+        logger.warning("job %s: %s", job.job_id, exc)
+        _fail(job, update, exc)
         return
     except Exception as exc:
         # ffprobe itself can fail in ways that aren't AVSyncError (corrupt/
@@ -599,6 +610,9 @@ def _fetch_zoom_recording(job: JobRecord, update: "callable[[JobRecord], None]")
     client = zoom.get_client()
     uuid = job.zoom_meeting_uuid or ""
     meeting = client.get_meeting(uuid)
+    # before waiting or downloading: the autopilot retries a failed meeting,
+    # and each retry must not fetch gigabytes just to refuse them again
+    check_length(zoom.recorded_seconds(meeting))
     # a re-render reuses its saved transcript, so it never waits for one; nor
     # does an autopilot job that may transcribe itself (it waited before it
     # was queued, without holding the worker)

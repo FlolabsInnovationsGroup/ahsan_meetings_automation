@@ -90,10 +90,12 @@ def test_standard_profile_is_pinned():
 
 # ------------------------------------------------------------ renderer (faked ffmpeg)
 
-def _fake_ffmpeg(monkeypatch, written, output_audio_s):
+def _fake_ffmpeg(monkeypatch, written, output_audio_s, output_s=None):
     """Replace every ffmpeg/ffprobe call in slice.pipeline with a fake that
     writes a marker file and records its frame/sample count in `written`.
-    The final header reports `output_audio_s` as the muxed audio duration."""
+    The final header reports `output_audio_s` as the muxed audio duration,
+    and `output_s` as the video's and the file's (default: frames/25, as
+    ffmpeg writes it)."""
 
     def fake_part(src, part, fps, w, h, graph, dest, overlays=None):
         dest.write_bytes(b"v")
@@ -118,15 +120,17 @@ def _fake_ffmpeg(monkeypatch, written, output_audio_s):
         dest.write_bytes(b"out")
         written[dest.name] = written[video.name]
 
+    def fake_assert_frames(path, n, what):
+        lasts = n / 25 if output_s is None else output_s
+        return StreamHeader(n, lasts, "25/1", 320, 180, "yuv420p", "x", output_audio_s, None, 48000, 2, "aac", lasts)
+
     monkeypatch.setattr(slice_pipeline, "render_video_part", fake_part)
     monkeypatch.setattr(slice_pipeline, "concat_copy", fake_concat)
     monkeypatch.setattr(slice_pipeline, "render_audio_chunk", fake_chunk)
     monkeypatch.setattr(slice_pipeline, "probe_header", fake_header)
     monkeypatch.setattr(slice_pipeline, "encode_aac", fake_aac)
     monkeypatch.setattr(slice_pipeline, "mux", fake_mux)
-    monkeypatch.setattr(slice_pipeline, "assert_frames",
-                        lambda path, n, what: StreamHeader(n, None, "25/1", 320, 180, "yuv420p", "x",
-                                                           output_audio_s, None, 48000, 2, "aac", None))
+    monkeypatch.setattr(slice_pipeline, "assert_frames", fake_assert_frames)
     monkeypatch.setattr(slice_pipeline, "assert_concat_compatible", lambda paths: [])
     monkeypatch.setenv("XFADE_BATCH_SIZE", "2")
     slice_pipeline.get_settings.cache_clear()
@@ -165,6 +169,42 @@ def test_failed_post_mux_assert_leaves_nothing_at_out_path(monkeypatch, tmp_path
                                       _media(), out, work)
     assert not out.exists()
     assert not work.exists()
+
+
+def test_output_whose_timestamps_disagree_with_its_frames_is_refused(monkeypatch, tmp_path):
+    """Regression: on ffmpeg 5.1 the server shipped a 27-hour final.mp4. Its
+    frame count and its audio were right, so every assert passed; only the
+    timestamps were wrong."""
+    from core.errors import RenderAssertError
+
+    _fake_ffmpeg(monkeypatch, {}, output_audio_s=300 / 25, output_s=27 * 3600.0)
+    out, work = tmp_path / "out.mp4", tmp_path / "tmp"
+    with pytest.raises(RenderAssertError, match="300 frames at 25/1 fps last 12.000s"):
+        slice_pipeline.render_cleaned(tmp_path / "src.mp4", tmp_path / "a.flac", _edl([(0, 100), (150, 250), (300, 400)]),
+                                      _media(), out, work)
+    assert not out.exists()
+
+
+# 729 frames at 29.97 fps last 24.324300 s; one frame is 0.033367 s
+@pytest.mark.parametrize("video_s, file_s, ok", [
+    (24.3243, 24.3243, True),  # what ffmpeg 9.0.1 writes
+    (24.3243, 24.3243 + slice_pipeline.AAC_TOLERANCE_S, True),  # the AAC tail may run past the last frame
+    (24.3243 - 0.03, 24.3243, True),  # rounding, within a frame
+    (24.3243 - 0.07, 24.3243, False),  # two frames short
+    (24.3243, 24.3243 + 0.2, False),  # the file runs on far past its video
+    (24.3243, 27 * 3600.0, False),  # the 27-hour final.mp4
+    (None, 24.3243, False),  # no duration to check is a failure, not a pass
+])
+def test_duration_assert(video_s, file_s, ok):
+    from core.errors import RenderAssertError
+    from slice.profile import assert_duration
+
+    header = StreamHeader(729, video_s, "30000/1001", 320, 180, "yuv420p", "x", 24.3243, None, 48000, 2, "aac", file_s)
+    if ok:
+        assert_duration(header, 729, Fraction(30000, 1001), "final output", slice_pipeline.AAC_TOLERANCE_S)
+    else:
+        with pytest.raises(RenderAssertError):
+            assert_duration(header, 729, Fraction(30000, 1001), "final output", slice_pipeline.AAC_TOLERANCE_S)
 
 
 # ------------------------------------------------------------ real ffmpeg end to end

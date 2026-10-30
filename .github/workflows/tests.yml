@@ -29,7 +29,31 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      # The render tests need ffmpeg. Without it they skipped, which is how
+      # ffmpeg 5.1 and 7.1 reached the server untested. Install the exact
+      # build the server runs: the image pinned on the Dockerfile's
+      # "AS ffmpeg" line. DejaVu is the font the server's image has.
+      - name: Install the server's ffmpeg
+        run: |
+          image="$(sed -n 's/^FROM \(mwader\/static-ffmpeg:[^ ]*\) AS ffmpeg$/\1/p' Dockerfile)"
+          if [ -z "$image" ]; then
+            echo "::error::The Dockerfile pins no ffmpeg image (FROM mwader/static-ffmpeg:... AS ffmpeg)."
+            exit 1
+          fi
+          id="$(docker create "$image")"
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          docker cp "$id:/ffmpeg" "$RUNNER_TEMP/ffmpeg/ffmpeg"
+          docker cp "$id:/ffprobe" "$RUNNER_TEMP/ffmpeg/ffprobe"
+          docker rm "$id" > /dev/null
+          echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends fonts-dejavu-core
+          "$RUNNER_TEMP/ffmpeg/ffmpeg" -hide_banner -version | head -n 1
+
       - name: Tests
+        # fail, never skip, when ffmpeg is missing or not the pinned version
+        env:
+          REQUIRE_FFMPEG: "1"
         run: pytest -q
 
       - name: Check shell scripts

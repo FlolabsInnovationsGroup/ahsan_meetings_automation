@@ -368,6 +368,12 @@ Remove someone: `sed -i '/ <name>$/d' ~/.ssh/authorized_keys`.
 | Cleanup log | `cat /var/log/highlight-cutter-cleanup.log` |
 | What is on YouTube | `cat data/state/posted.jsonl` |
 | S3 backup log | `cat /var/log/highlight-cutter-backup.log` |
+| Which ffmpeg the app uses (must say 9.0.1) | `docker compose exec app ffmpeg -version \| head -1` |
+
+The image runs a pinned ffmpeg 9.0.1, the version the renderer is tested on;
+Debian's own ffmpeg stays installed only for WhisperX's libraries. To upgrade
+ffmpeg, change the tag and digest on the Dockerfile's `AS ffmpeg` line (CI
+then runs the render tests on the new build before it is deployed).
 
 Restarting or redeploying while a job is running abandons that job. On
 startup the app marks such jobs as failed ("Interrupted by a server

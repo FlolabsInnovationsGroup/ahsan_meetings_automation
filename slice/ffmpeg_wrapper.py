@@ -19,9 +19,13 @@ regression job. Cut points are whole source frames:
 Filter graphs are written to a file (long graphs would hit the command-line
 limit) and read with `-/filter_complex <file>` on ffmpeg 7 and newer, or the
 older `-filter_complex_script <file>` below 7: the old flag was deprecated in
-7.0 and is gone in 8.0, and the new one does not exist before 7.0 (Debian 12
-ships ffmpeg 5.1; the Docker image is on Debian 13, ffmpeg 7.1). See
+7.0 and is gone in 8.0, and the new one does not exist before 7.0. See
 `filter_graph_args`.
+
+The renderer is written and tested on ffmpeg 9.0.1, which the Docker image
+pins (Dockerfile, "AS ffmpeg"); CI runs the render tests on that same build.
+Distro builds broke it: Debian 12's 5.1 shipped a 27-hour final video, and
+Debian 13's 7.1 rejects the xfade chain ("current rate of 1/0 is invalid").
 """
 
 from __future__ import annotations

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.config import get_settings
+from core.errors import SourceUnsupported
 from core.logging import get_logger
 from core.proc import run_checked
 
@@ -15,6 +16,17 @@ DESYNC_THRESHOLD_SECONDS = 1.0
 
 class AVSyncError(ValueError):
     """Raised when the source file has no audio/video track, or the two are desynced."""
+
+
+def check_length(duration_s: float) -> None:
+    """Refuse a recording longer than MAX_VIDEO_HOURS (8 h by default; 0 = no
+    limit). Not retryable: the same recording is just as long next time."""
+    hours = get_settings().max_video_hours
+    if hours > 0 and duration_s > hours * 3600:
+        raise SourceUnsupported(
+            f"the recording is {duration_s / 3600:.1f} hours long; recordings over {hours:g} hours are not "
+            f"processed (MAX_VIDEO_HOURS)"
+        )
 
 
 def _parse_tag_duration(raw: str) -> float | None:
