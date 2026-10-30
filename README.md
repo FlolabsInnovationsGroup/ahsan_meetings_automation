@@ -110,7 +110,9 @@ Fill in `.env`:
   absolute paths — useful if you just installed ffmpeg and the running
   process's PATH hasn't picked it up yet; `core.config` also injects that
   directory onto `PATH` for the current process so libraries like WhisperX
-  that shell out to a bare `ffmpeg` still find it).
+  that shell out to a bare `ffmpeg` still find it). Use **ffmpeg 9.0.x**:
+  the Docker image pins 9.0.1 and CI tests on it, while Debian's 5.1 and
+  7.1 break the renderer (`GET /health` shows the version in use).
 
 ## Running
 

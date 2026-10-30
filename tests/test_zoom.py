@@ -281,6 +281,18 @@ def test_two_part_meeting_pairs_transcripts_by_time_when_the_longer_part_is_seco
     assert choice.transcript_kind == "TRANSCRIPT" and choice.verdict is None
 
 
+def test_recorded_length_adds_up_the_parts_not_the_pause_or_other_views():
+    # 5 + 50 minutes recorded with a 5-minute pause; the gallery view is the
+    # same first part again (MAX_VIDEO_HOURS is checked on this before download)
+    files = [
+        _file("MP4", "active_speaker", "2026-09-20T10:00:00Z", "2026-09-20T10:05:00Z", "https://zoom.us/v1"),
+        _file("MP4", "gallery_view", "2026-09-20T10:00:00Z", "2026-09-20T10:05:00Z", "https://zoom.us/g1"),
+        _file("MP4", "active_speaker", "2026-09-20T10:10:00Z", "2026-09-20T11:00:00Z", "https://zoom.us/v2"),
+    ]
+    assert zoom.recorded_seconds(_meeting(files)) == 55 * 60
+    assert zoom.recorded_seconds(_meeting([])) == 0
+
+
 FIRST = ("2026-09-20T10:00:00Z", "2026-09-20T10:30:00Z")
 SECOND = ("2026-09-20T10:40:00Z", "2026-09-20T11:30:00Z")
 

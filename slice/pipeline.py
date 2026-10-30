@@ -75,6 +75,7 @@ from .profile import (
     MediaInfo,
     StreamHeader,
     assert_concat_compatible,
+    assert_duration,
     assert_frames,
     probe_header,
     probe_media,
@@ -299,6 +300,7 @@ def assemble(
             raise RenderAssertError(
                 f"{kind} output audio is {header.audio_duration}s, expected {want_s:.6f}s (±{AAC_TOLERANCE_S:.3f})"
             )
+        assert_duration(header, frames, fps, f"{kind} output", AAC_TOLERANCE_S)
         os.replace(muxed, out_path)
         if on_step:
             on_step()
@@ -552,6 +554,7 @@ def render_short_clip(
         want_s = piece.samples / AUDIO_RATE
         if header.audio_duration is None or abs(header.audio_duration - want_s) > AAC_TOLERANCE_S:
             raise RenderAssertError(f"short {clip.index} audio is {header.audio_duration}s, expected {want_s:.3f}s")
+        assert_duration(header, frames, fps, f"short {clip.index}", AAC_TOLERANCE_S)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         srt_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(tmp, out_path)

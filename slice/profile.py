@@ -266,3 +266,19 @@ def assert_frames(path: Path, expected: int, what: str) -> StreamHeader:
             f"{what}: {path.name} has {header.video_frames} video frames, expected exactly {expected}"
         )
     return header
+
+
+def assert_duration(header: StreamHeader, frames: int, fps: Fraction, what: str, audio_slack_s: float = 0.0) -> None:
+    """A finished file must last as long as its frames say. The frame count
+    alone let broken timestamps through: ffmpeg 5.1 turned a meeting into a
+    27-hour final.mp4 with exactly the right number of frames. The video
+    stream must last frames/fps and the whole file no longer than that plus
+    the audio's allowed overhang (`audio_slack_s`), one frame either way for
+    rounding; ffmpeg 9.0.1 writes both to the frame."""
+    want = Fraction(frames) / fps
+    frame = 1 / fps
+    for name, got, slack in (("video", header.video_duration, 0.0), ("file", header.format_duration, audio_slack_s)):
+        if got is None or not want - frame <= Fraction(got) <= want + frame + Fraction(slack):
+            raise RenderAssertError(
+                f"{what}: the {name} lasts {got}s, but {frames} frames at {rate_str(fps)} fps last {float(want):.3f}s"
+            )

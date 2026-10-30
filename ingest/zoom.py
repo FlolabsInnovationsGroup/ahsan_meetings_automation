@@ -610,6 +610,15 @@ def meeting_info(meeting: dict, choice: Choice | None = None) -> dict:
     }
 
 
+def recorded_seconds(meeting: dict, choice: Choice | None = None) -> float:
+    """How long the MP4s a job would download last together, from Zoom's own
+    recording_start/end. A part without them counts 0: the length is checked
+    again on the downloaded file."""
+    choice = choice or choose_files(meeting)
+    spans = [_span(p.video) for p in choice.parts]
+    return sum((end - start).total_seconds() for start, end in filter(None, spans))
+
+
 def not_ready_error(status: str) -> PipelineError:
     messages = {
         "recording_not_ready": "Zoom is still processing this recording",

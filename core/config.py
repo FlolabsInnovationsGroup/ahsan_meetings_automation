@@ -153,6 +153,10 @@ class Settings(BaseSettings):
     # stream, or a process that ends up waiting on stdin/stdout).
     ffprobe_timeout_seconds: float = 60.0
     ffmpeg_timeout_seconds: float = 1800.0
+    # A job can't be longer than this (the owner's rule): a longer recording
+    # fails before anything is downloaded or cut. No real meeting runs that
+    # long; a 27-hour one is a broken file. 0 = no limit.
+    max_video_hours: float = 8.0
 
     # EDL tuning (spec section 3.4)
     min_gap_merge_seconds: float = 0.3

@@ -3,11 +3,18 @@
 # Build:  docker compose build
 # The first build takes a while: torch + WhisperX + pyannote are large.
 
-# Debian 13 (trixie): its ffmpeg is 7.1. The renderer is written and tested
-# for ffmpeg 7+; Debian 12's ffmpeg 5.1 broke it (no drawtext text_align, so
-# no title card; audio lengths off in the shorts; a 27-hour final video).
-# Switching the base rebuilds every layer: the server needs room for two
-# images at once (prune Docker's build cache first: DEPLOY.md, Day-to-day).
+# The ffmpeg and ffprobe the app runs: 9.0.1, the version the renderer is
+# written and tested on. Distro builds broke it: Debian 12's 5.1 (no title
+# card, short audio in the shorts, a 27-hour final video) and Debian 13's 7.1
+# (xfade refused every job with dissolves: "current rate of 1/0 is invalid").
+# A static build pinned by digest, so every rebuild gets the same binaries.
+# CI's render tests run on this same image (.github/workflows/tests.yml reads
+# this line). To upgrade: change the tag and digest here, nowhere else.
+FROM mwader/static-ffmpeg:9.0.1@sha256:54e55b0cb8f672870fc38ceb2e6c411855cb3b39c505f5f3b2505ee01ed5f2b7 AS ffmpeg
+
+# Debian 13 (trixie). Switching the base rebuilds every layer: the server
+# needs room for two images at once (prune Docker's build cache first:
+# DEPLOY.md, Day-to-day).
 FROM python:3.12-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -15,7 +22,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# ffmpeg: slicing + probing (and the shared libs torchcodec loads).
+# ffmpeg: Debian's 7.1, only for its shared libraries. WhisperX pins
+# torchcodec < 0.8, which loads ffmpeg 4-7 libraries (pyannote reads audio
+# files with it). The ffmpeg/ffprobe commands are the 9.0.1 build below.
 # git: requirements.txt installs WhisperX and yt-dlp from GitHub.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg git ca-certificates \
@@ -30,6 +39,16 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
+
+# The pinned ffmpeg/ffprobe 9.0.1 (static: no libraries needed). /usr/local/bin
+# comes before Debian's /usr/bin on PATH, so the app (FFMPEG_BIN=ffmpeg) and
+# WhisperX (it runs "ffmpeg" to read audio) both get 9.0.1. Copied after the
+# big pip layers, so a rebuild can reuse them from Docker's cache. The build
+# stops if the commands found on PATH aren't these.
+COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
+RUN [ "$(command -v ffmpeg)" = /usr/local/bin/ffmpeg ] \
+    && [ "$(command -v ffprobe)" = /usr/local/bin/ffprobe ] \
+    && ffmpeg -hide_banner -version | head -n 1
 
 # Run as an unprivileged user. Model weights (Hugging Face, torch hub, nltk)
 # are cached under /home/app/.cache, which compose mounts as a volume so they

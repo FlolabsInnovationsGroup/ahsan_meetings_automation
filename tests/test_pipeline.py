@@ -747,9 +747,24 @@ def test_chapter_failure_is_only_a_warning(monkeypatch):
     assert any("chapters skipped" in w for w in job.warnings)
 
 
+def test_recording_over_the_length_limit_fails_before_any_work(monkeypatch):
+    """The owner's rule: a job can't be longer than 8 hours (MAX_VIDEO_HOURS)."""
+    transcribe_calls, segment_lists = [], []
+    _patch_common(monkeypatch, transcribe_calls, segment_lists)
+    nine_hours = 9 * 3600.0
+    monkeypatch.setattr(pipeline_module, "probe_media", lambda path: MediaInfo(**{
+        **_fake_media(path).__dict__, "duration": nine_hours, "video_duration": nine_hours,
+        "total_frames": int(nine_hours * 25), "audio_duration": nine_hours}))
+    job = _make_job("job-too-long")
+    pipeline_module.run_pipeline(job, lambda j: None)
+    assert job.status == JobStatus.FAILED and job.error_code == "source_unsupported" and job.retryable is False
+    assert "9.0 hours" in job.error and "MAX_VIDEO_HOURS" in job.error
+    assert transcribe_calls == [] and segment_lists == []
+
+
 # ---------------------------------------------------------------- Zoom jobs
 
-_ZOOM_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+_ZOOM_MP4 =b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
 _ZOOM_VTT = (
     b"WEBVTT\n\n1\n00:00:00.500 --> 00:00:03.000\nJane Doe: Welcome to the robotics sync.\n\n"
     b"2\n00:00:03.500 --> 00:00:08.000\nBob Smith: The new gripper design ships next week.\n\n"
@@ -777,8 +792,12 @@ class _FakeZoomClient:
         return dest
 
 
-def _zoom_meeting(with_transcript=True, end="2020-01-06T11:00:00Z"):
-    span = {"recording_start": "2020-01-06T10:00:00Z", "recording_end": end, "status": "completed"}
+def _zoom_meeting(with_transcript=True, end="2020-01-06T11:00:00Z", hours=1.0):
+    """A recording of `hours` that ended at `end` (its start moves with it)."""
+    from datetime import datetime, timedelta
+
+    start = (datetime.fromisoformat(end) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    span = {"recording_start": start, "recording_end": end, "status": "completed"}
     files = [{"file_type": "MP4", "recording_type": "active_speaker", "download_url": "https://zoom.us/v",
               "file_size": len(_ZOOM_MP4), **span}]
     if with_transcript:
@@ -846,6 +865,24 @@ def test_zoom_job_fails_before_downloading_when_this_server_cannot_transcribe(mo
     assert job.status == JobStatus.FAILED
     assert job.error_code == "transcript_not_ready" and job.retryable is False  # it is never coming
     assert client.downloads == [] and transcribe_calls == []
+
+
+def test_zoom_recording_over_the_length_limit_fails_before_downloading(monkeypatch):
+    """Measured from Zoom's own timestamps, so a too-long meeting costs no
+    download (the autopilot retries a failed meeting). MAX_VIDEO_HOURS=0
+    lifts the limit."""
+    transcribe_calls, segment_lists = [], []
+    _patch_common(monkeypatch, transcribe_calls, segment_lists)
+    client = _zoom_client(monkeypatch, _zoom_meeting(end="2020-01-06T18:30:00Z", hours=8.5))
+    job = JobRecord(job_id="job-zoom-too-long", zoom_meeting_uuid="abc==")
+    pipeline_module.run_zoom_pipeline(job, lambda j: None)
+    assert job.status == JobStatus.FAILED and job.error_code == "source_unsupported" and job.retryable is False
+    assert "8.5 hours" in job.error and client.downloads == []
+
+    monkeypatch.setenv("MAX_VIDEO_HOURS", "0")
+    get_settings.cache_clear()
+    pipeline_module.run_zoom_pipeline(job, lambda j: None)
+    assert job.status == JobStatus.DONE, job.error
 
 
 def test_zoom_job_waits_for_a_pending_transcript_then_fails_retryable(monkeypatch):
