@@ -49,6 +49,7 @@ from core.proc import run_checked
 from core.version import PIPELINE_VERSION
 from ingest import zoom
 from ingest.store import store_transcript, store_video, title_from_filename
+from ledger import prefs
 from ledger import uploads as ledger_uploads
 from ledger.uploads import get_ledger
 from pipeline import run_pipeline, run_youtube_pipeline, run_zoom_pipeline
@@ -76,15 +77,18 @@ BUSY_RETRY_AFTER_S = 60
 async def lifespan(_app: FastAPI):
     if not auth_enabled():
         logger.warning("HC_API_TOKEN is empty: the API is open (fine locally, never on a public host)")
-    reconcile_on_startup(job_store)
+    reconcile_on_startup(job_store, prefs.retention_hours())
     # videos published before the posted list existed go on it, so nothing
     # posted then can be posted again
     imported = publish_run.import_published_jobs(_safe_get_job(job_id) for job_id in job_store.list_ids())
     if imported:
         logger.info("posted list: added %d video(s) published before it existed", imported)
     autopilot_loop.start(autopilot_engine)  # it does nothing until switched on in the side panel
+    _sweep_stop.clear()
+    threading.Thread(target=_sweep_loop, name="retention", daemon=True).start()
     yield
     autopilot_loop.stop()
+    _sweep_stop.set()
 
 
 # No /docs, /redoc or /openapi.json: they map every route for anyone who can
@@ -859,7 +863,22 @@ def get_storage() -> dict:
         "disk_free_bytes": free,
         "old_jobs": len(jobs),
         "old_jobs_bytes": sum(_folder_bytes(settings.jobs_dir / job.job_id) for job in jobs),
+        "retention_hours": prefs.retention_hours(),
+        "low_disk_bytes": settings.low_disk_cleanup_bytes,
     }
+
+
+class RetentionRequest(BaseModel):
+    hours: float = Field(ge=0, le=prefs.MAX_RETENTION_HOURS)
+
+
+@app.post("/storage/retention")
+def set_retention(body: RetentionRequest) -> dict:
+    """The side panel's "delete finished jobs after N hours" (0 = never).
+    Saved on the server, and applied at once."""
+    prefs.set_retention_hours(body.hours)
+    sweep_old_jobs()
+    return get_storage()
 
 
 @app.post("/storage/clear-jobs")
@@ -867,19 +886,84 @@ def clear_old_jobs() -> dict:
     """Delete every finished job: its videos, zip, transcripts and record.
     What went to YouTube stays in the posted list (data/state), so nothing
     can be posted twice afterwards."""
+    deleted, freed = _delete_jobs(_clearable_jobs())
+    logger.info("cleared %d old job(s), %.2f GB", deleted, freed / 1024**3)
+    return {"deleted": deleted, "freed_bytes": freed, **get_storage()}
+
+
+def _delete_jobs(jobs: list[JobRecord]) -> tuple[int, int]:
+    """Delete these jobs' folders. Returns (jobs deleted, bytes freed)."""
     settings = get_settings()
     deleted = freed = 0
     # under the publish lock: no upload can start on a job while it goes
     with _publish_lock:
-        for job in _clearable_jobs():
+        for job in jobs:
             folder = settings.jobs_dir / job.job_id
             size = _folder_bytes(folder)
             delete_job_files(job_store, job.job_id)
             if not folder.exists():
                 deleted += 1
                 freed += size
-    logger.info("cleared %d old job(s), %.2f GB", deleted, freed / 1024**3)
-    return {"deleted": deleted, "freed_bytes": freed, **get_storage()}
+    return deleted, freed
+
+
+# how often the age rule and the low-space rule are checked
+RETENTION_SWEEP_EVERY_S = 300.0
+_sweep_stop = threading.Event()
+
+
+def sweep_old_jobs(now: datetime | None = None) -> int:
+    """Delete the finished jobs nobody touched for the chosen hours (the side
+    panel's, else JOB_RETENTION_HOURS; 0 = never), with the same care as
+    "Clear old jobs" (never one that runs, waits, uploads, has a .keep
+    marker or that the autopilot still posts). Returns how many."""
+    hours = prefs.retention_hours()
+    if hours <= 0:
+        return 0
+    cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours)
+    old = [job for job in _clearable_jobs() if (_aware(job.updated_at or job.created_at) or cutoff) < cutoff]
+    deleted, freed = _delete_jobs(old)
+    if deleted:
+        logger.info("retention: deleted %d job(s) untouched for %g h, %.2f GB", deleted, hours, freed / 1024**3)
+    return deleted
+
+
+def free_space_if_low() -> int:
+    """Below LOW_DISK_CLEANUP_BYTES free (2 GB), delete the oldest finished
+    jobs one by one, with the same care, until there is that much again.
+    Returns how many were deleted."""
+    settings = get_settings()
+    want = settings.low_disk_cleanup_bytes
+    try:
+        free = shutil.disk_usage(settings.storage_dir).free
+    except OSError:
+        return 0
+    if free >= want:
+        return 0
+    epoch = datetime.min.replace(tzinfo=UTC)
+    oldest_first = sorted(_clearable_jobs(), key=lambda job: _aware(job.updated_at or job.created_at) or epoch)
+    deleted = 0
+    for job in oldest_first:
+        count, _ = _delete_jobs([job])
+        deleted += count
+        try:
+            if shutil.disk_usage(settings.storage_dir).free >= want:
+                break
+        except OSError:
+            break
+    logger.warning("low disk (%.2f GB free, want %.2f GB): deleted %d finished job(s)",
+                   free / 1024**3, want / 1024**3, deleted)
+    return deleted
+
+
+def _sweep_loop() -> None:
+    """Every few minutes while the app runs (startup itself is reconcile_on_startup's)."""
+    while not _sweep_stop.wait(RETENTION_SWEEP_EVERY_S):
+        try:
+            free_space_if_low()
+            sweep_old_jobs()
+        except Exception:  # the next round tries again
+            logger.exception("retention sweep failed")
 
 
 @app.get("/jobs")
