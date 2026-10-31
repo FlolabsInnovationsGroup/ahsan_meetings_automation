@@ -110,12 +110,12 @@ def test_the_page_choice_wins_over_env_and_env_is_the_default(monkeypatch):
     assert prefs.retention_hours() == 12.5
 
 
-def test_below_2_gb_free_the_oldest_finished_jobs_go_first_until_there_is_room(monkeypatch):
+def test_below_4_gb_free_the_oldest_finished_jobs_go_first_until_there_is_room(monkeypatch):
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
     gb = 1024**3
-    disk = {"free": 1.0 * gb}
+    disk = {"free": 3.0 * gb}
     monkeypatch.setattr(api_main.shutil, "disk_usage", lambda path: SimpleNamespace(free=disk["free"]))
     real_delete = api_main.delete_job_files
 
@@ -129,7 +129,7 @@ def test_below_2_gb_free_the_oldest_finished_jobs_go_first_until_there_is_room(m
         _aged(_finished_job(name), hours, now)
     busy = _job("uploading2", JobStatus.DONE, youtube_status="uploading")
     _aged(busy, 99, now)
-    assert api_main.free_space_if_low() == 2  # 1.0 -> 1.6 -> 2.2 GB: stops there
+    assert api_main.free_space_if_low() == 2  # 3.0 -> 3.6 -> 4.2 GB: stops there
     jobs_dir = get_settings().jobs_dir
     assert not (jobs_dir / "oldest").exists() and not (jobs_dir / "middle").exists()
     assert (jobs_dir / "newest" / "job.json").exists() and (jobs_dir / "uploading2" / "job.json").exists()

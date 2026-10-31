@@ -302,8 +302,8 @@ class Settings(BaseSettings):
     # YouTube stays in the posted list.
     job_retention_hours: float = 30.0
     # Below this much free disk, the oldest finished jobs are deleted (same
-    # care as above) until there is this much again (owner, 2026-10-30: 2 GB).
-    low_disk_cleanup_bytes: int = 2 * 1024**3
+    # care as above) until there is this much again (owner, 2026-10-31: 4 GB).
+    low_disk_cleanup_bytes: int = 4 * 1024**3
     # A job that transcribes the meeting itself (WhisperX on the CPU is slow)
     # gets this wall clock instead of job_max_wall_s.
     asr_job_max_wall_s: float = 21600.0
