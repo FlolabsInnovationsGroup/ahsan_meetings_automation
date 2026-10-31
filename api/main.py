@@ -929,7 +929,7 @@ def sweep_old_jobs(now: datetime | None = None) -> int:
 
 
 def free_space_if_low() -> int:
-    """Below LOW_DISK_CLEANUP_BYTES free (2 GB), delete the oldest finished
+    """Below LOW_DISK_CLEANUP_BYTES free (4 GB), delete the oldest finished
     jobs one by one, with the same care, until there is that much again.
     Returns how many were deleted."""
     settings = get_settings()
@@ -991,9 +991,18 @@ async def list_jobs(limit: int = 50) -> list[dict]:
             "updated_at": j.updated_at,
             "error_code": j.error_code,
             "stale": _is_stale(j),
+            # for the side panel's job list
+            "title": j.title,
+            "meeting_date": j.meeting_date,
+            "has_files": _has_files(j),
         }
         for j in jobs[: max(1, limit)]
     ]
+
+
+def _has_files(job: JobRecord) -> bool:
+    """Its final video or zip is still on the server (not deleted after posting)."""
+    return any(p and Path(p).is_file() for p in (job.output_video_path, job.bundle_path))
 
 
 @app.get("/jobs/{job_id}", response_model=JobRecord)

@@ -288,6 +288,8 @@ def test_job_list_and_log(monkeypatch):
     assert api_main.job_queue.wait_idle(10)
     listed = client.get("/jobs").json()
     assert listed[0]["job_id"] == job_id and listed[0]["status"] == "done"
+    # what the side panel's job list shows: no final video was written here
+    assert "title" in listed[0] and "meeting_date" in listed[0] and listed[0]["has_files"] is False
     assert "hello from inside the job" in client.get(f"/jobs/{job_id}/log").text
 
 
