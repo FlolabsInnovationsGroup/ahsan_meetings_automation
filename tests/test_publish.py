@@ -862,6 +862,31 @@ def test_the_deploy_script_waits_for_every_running_status():
     assert "youtube_shorts" in script and '"queued", "uploading"' in script
 
 
+def test_the_deploy_waits_for_running_and_queued_jobs_but_not_for_a_transcript(tmp_path):
+    """Owner, 2026-11-01: a job only waiting for Zoom's transcript must not
+    hold an update back; one in the queue or running must."""
+    import subprocess
+    import sys
+
+    script = (Path(__file__).resolve().parent.parent / "deploy" / "auto-update.sh").read_text(encoding="utf-8")
+    counter = re.search(r"<<'PY'\n(.*?)\nPY\n", script, re.DOTALL).group(1)
+
+    def busy(*jobs):
+        for i, job in enumerate(jobs):
+            (tmp_path / str(i)).mkdir(exist_ok=True)
+            (tmp_path / str(i) / "job.json").write_text(json.dumps(job), encoding="utf-8")
+        out = subprocess.run([sys.executable, "-c", counter, str(tmp_path)], capture_output=True, text=True,
+                             check=True).stdout
+        for i in range(len(jobs)):
+            (tmp_path / str(i) / "job.json").unlink()
+        return int(out)
+
+    assert busy({"status": "waiting_transcript"}) == 0
+    assert busy({"status": "queued"}, {"status": "deciding"}) == 2
+    assert busy({"status": "done", "youtube_status": "uploading"}) == 1
+    assert busy({"status": "done"}, {"status": "cancelled"}) == 0
+
+
 def test_the_container_healthcheck_asks_for_a_route_that_exists():
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text(encoding="utf-8")
     path = re.search(r"urlopen\('http://127\.0\.0\.1:8000(/[a-z]*)'", dockerfile).group(1)
