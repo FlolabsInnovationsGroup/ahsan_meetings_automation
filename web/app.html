@@ -1497,6 +1497,13 @@ async function poll(jobId) {
     return;
   }
 
+  if (job.status === "skipped_empty") {
+    // no one speaks in it: kept on the server, never cut or posted
+    showError(job.error || "No meeting to post: nobody speaks in this recording.");
+    setBusy(false);
+    return;
+  }
+
   clearError(); // e.g. a stale "busy" message from an earlier Render now click
   renderSteps(job.status);
   renderTranscriptSource(job);
@@ -2401,10 +2408,11 @@ function renderPosted(data) {
 
 const JOB_STATE_LABELS = {
   done: "Done", failed: "Failed", cancelled: "Cancelled", skipped_desync: "Skipped: sound and picture out of sync",
+  skipped_empty: "Skipped: no meeting in it",
   decided: "Waiting for Render now", queued: "Waiting to start", waiting_transcript: "Waiting for Zoom's transcript",
 };
 
-const FINISHED_JOB_STATES = new Set(["done", "failed", "cancelled", "skipped_desync", "decided"]);
+const FINISHED_JOB_STATES = new Set(["done", "failed", "cancelled", "skipped_desync", "skipped_empty", "decided"]);
 const stopAllBox = document.getElementById("stopAllBox");
 
 // Shown only while something runs or waits: cancel it all and pause the

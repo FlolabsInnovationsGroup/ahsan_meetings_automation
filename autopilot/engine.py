@@ -191,6 +191,9 @@ class Engine:
                     m.state, m.post_attempts, m.next_try_at, m.error = "posting", 0, None, None
                 elif job.status == JobStatus.SKIPPED_DESYNC:
                     m.state, m.error = "needs_attention", job.error or "The recording's sound and picture are out of sync."
+                elif job.status == JobStatus.SKIPPED_EMPTY:
+                    # no one speaks in it: never posted, never retried (kept on the server)
+                    m.state, m.error = "skipped", job.error or "No meeting in it: nothing to post."
                 elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                     self._failed(m, now, job.error or f"The job ended: {job.status.value}.")
                 elif job.status == JobStatus.DECIDED:

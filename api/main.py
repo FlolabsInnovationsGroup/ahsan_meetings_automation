@@ -241,7 +241,7 @@ def _is_live(job: JobRecord) -> bool:
     result can still be posted. A decide_only job stopped at the picks
     (DECIDED) has none until someone presses Render now."""
     return not job.files_deleted and job.status not in (
-        JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED_DESYNC, JobStatus.DECIDED)
+        JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED_DESYNC, JobStatus.SKIPPED_EMPTY, JobStatus.DECIDED)
 
 
 def _job_is_live(job_id: str | None) -> bool:
@@ -821,7 +821,8 @@ async def render_decided_job(job_id: str):
 
 # What "Clear old jobs" may delete: finished jobs. A job stopped at the AI's
 # picks (DECIDED) still waits for "Render now", so it stays.
-_CLEARABLE = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.CANCELLED})
+_CLEARABLE = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.SKIPPED_EMPTY,
+                        JobStatus.CANCELLED})
 
 
 def _clearable_jobs() -> list[JobRecord]:
@@ -1193,7 +1194,8 @@ async def get_job_transcript(job_id: str, clean: bool = True) -> FileResponse:
 
 # Statuses whose files may be removed while the record stays (a decided job
 # is still waiting for "Render now").
-_FILES_REMOVABLE = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.CANCELLED})
+_FILES_REMOVABLE = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.SKIPPED_EMPTY,
+                              JobStatus.CANCELLED})
 
 
 @app.get("/youtube/status")

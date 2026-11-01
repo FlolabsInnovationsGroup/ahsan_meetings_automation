@@ -104,7 +104,7 @@ main() {
 busy_jobs() {
   python3 - "$1" <<'PY'
 import json, pathlib, sys
-finished = {"done", "failed", "skipped_desync", "cancelled", "decided"}
+finished = {"done", "failed", "skipped_desync", "skipped_empty", "cancelled", "decided"}
 not_waited_for = {"waiting_transcript"}
 uploading = {"queued", "uploading"}
 count = 0

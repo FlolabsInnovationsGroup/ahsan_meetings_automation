@@ -256,11 +256,14 @@ class JobStatus(str, Enum):
     # decide_only jobs stop here; POST /jobs/{id}/render continues them.
     DECIDED = "decided"
     SKIPPED_DESYNC = "skipped_desync"
+    # no one speaks / no real meeting in it (decide/content.py): kept, never posted
+    SKIPPED_EMPTY = "skipped_empty"
     CANCELLED = "cancelled"
 
 
 TERMINAL_STATUSES = frozenset(
-    {JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.CANCELLED, JobStatus.DECIDED}
+    {JobStatus.DONE, JobStatus.FAILED, JobStatus.SKIPPED_DESYNC, JobStatus.SKIPPED_EMPTY, JobStatus.CANCELLED,
+     JobStatus.DECIDED}
 )
 
 TranscriptSource = Literal["asr", "youtube_captions", "uploaded_transcript", "zoom_transcript"]

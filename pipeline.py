@@ -28,6 +28,7 @@ from core.naming import final_video_name, meeting_date
 from core.timeline import fade_frames_for
 from decide import build_segments
 from decide.chapters import generate_chapters
+from decide.content import check_content
 from decide.gemini_client import LazyCaller, judge_segments, rerank_moments
 from decide.prompts import REMOVAL_LABELS, rerank_prompt
 from decide.repair import repair_fragments
@@ -59,6 +60,8 @@ logger = get_logger(__name__)
 
 HIGHLIGHT_MIN_GAP_S = 2.0
 SILENCE_LABEL = "silence (no one speaking)"
+# the one short "is there a meeting?" question gets this long
+CONTENT_CHECK_MAX_WALL_S = 300.0
 # A removed range this close to lying wholly inside detected silence is pure
 # silence (its edges are snapped to frames; the silences to 50 ms windows).
 PURE_SILENCE_SLACK_S = 0.05
@@ -144,6 +147,21 @@ def run_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
             _write_json(job_dir / "transcript.json", [w.model_dump() for w in words])
             _write_json(job_dir / "segments.json", [s.model_dump() for s in segments])
             job.transcript_path = str(job_dir / "transcript.json")
+
+        if settings.content_check_enabled:
+            with _stage(job, "content_check"):
+                caller.start_stage("content check", CONTENT_CHECK_MAX_WALL_S)
+                found = check_content(segments, duration, caller, settings.content_min_words,
+                                      saved=job_dir / "content_check.json")
+                job.llm_usage = _add_usage(prior_usage, caller.usage.as_dict())
+            if not found.has_meeting:
+                # kept on the server, never cut or posted (the autopilot skips it)
+                logger.info("job %s: no meeting in this recording (%s)", job.job_id, found.reason)
+                job.status = JobStatus.SKIPPED_EMPTY
+                job.error = f"No meeting to post: {found.reason}."
+                job.error_code = "no_content"
+                update(job)
+                return
 
         with _stage(job, "deciding"):
             job.status = JobStatus.DECIDING

@@ -157,6 +157,13 @@ class Settings(BaseSettings):
     # fails before anything is downloaded or cut. No real meeting runs that
     # long; a 27-hour one is a broken file. 0 = no limit.
     max_video_hours: float = 8.0
+    # Before any judging or rendering, check that someone actually speaks and
+    # that it is a real meeting (owner, 2026-11-01: some recordings are an
+    # hour of an empty room). Fewer words than content_min_words in the whole
+    # transcript = empty, with no AI call; otherwise one short AI question on
+    # a sample. An empty recording is kept on disk but never cut or posted.
+    content_check_enabled: bool = True
+    content_min_words: int = 150
 
     # EDL tuning (spec section 3.4)
     min_gap_merge_seconds: float = 0.3
@@ -292,8 +299,10 @@ class Settings(BaseSettings):
     heartbeat_interval_s: float = 30.0
     stale_after_s: float = 600.0
     job_max_wall_s: float = 10800.0
-    # Refuse to start a job unless this much disk is free (6 GiB default).
-    min_free_disk_bytes: int = 6 * 1024**3
+    # Refuse to start a job unless this much disk is free, and keep this much
+    # spare beyond a Zoom download (owner, 2026-11-01: 3 GiB; the server has
+    # little disk, and the low-disk cleanup keeps 4 GB free anyway).
+    min_free_disk_bytes: int = 3 * 1024**3
     # Delete finished jobs nobody touched for this long: at startup and then
     # every few minutes (owner, 2026-10-30: 30 h). 0 = never. The side panel
     # can change it (saved in storage_dir/state/prefs.json, which wins over
