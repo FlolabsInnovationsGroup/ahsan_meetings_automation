@@ -691,6 +691,7 @@
       </details>
       <p class="side-sub">Server storage</p>
       <div class="ap-status" id="storageBox"><p class="side-empty">Loading…</p></div>
+      <div class="ap-status" id="stopAllBox" hidden></div>
       <div class="retention">
         <label for="retentionHours">Delete finished jobs after</label>
         <div class="retention-row">
@@ -2403,11 +2404,30 @@ const JOB_STATE_LABELS = {
   decided: "Waiting for Render now", queued: "Waiting to start", waiting_transcript: "Waiting for Zoom's transcript",
 };
 
+const FINISHED_JOB_STATES = new Set(["done", "failed", "cancelled", "skipped_desync", "decided"]);
+const stopAllBox = document.getElementById("stopAllBox");
+
+// Shown only while something runs or waits: cancel it all and pause the
+// autopilot, e.g. so an update can go out now.
+function renderStopAll(active) {
+  stopAllBox.textContent = "";
+  stopAllBox.hidden = !active;
+  if (!active) return;
+  stopAllBox.appendChild(sideEl("span", "muted", `${active} job${active === 1 ? "" : "s"} running or waiting. `));
+  sideButton(stopAllBox, "Stop everything", () => {
+    if (window.confirm("Cancel every running and waiting job and pause the autopilot (for example before an "
+      + "update)? Jobs keep their files and can be run again. YouTube uploads are left to finish. "
+      + "Press Resume on the autopilot afterwards.")) sideAction("/jobs/stop-all");
+  });
+}
+
 // Every job still on the server, newest first; a click opens it (videos,
 // zip, publishing) like it was just made.
 function renderJobs(jobs) {
   jobsList.textContent = "";
-  jobsCount.textContent = `· ${jobs.length}${jobs.length >= SIDE_MAX_JOBS ? "+" : ""}`;
+  const active = jobs.filter((j) => !FINISHED_JOB_STATES.has(j.status)).length;
+  jobsCount.textContent = `· ${jobs.length}${jobs.length >= SIDE_MAX_JOBS ? "+" : ""}${active ? ` · ${active} running` : ""}`;
+  renderStopAll(active);
   if (!jobs.length) {
     jobsList.appendChild(sideEl("p", "side-empty", "No jobs on the server."));
     return;
@@ -2423,6 +2443,15 @@ function renderJobs(jobs) {
     const kind = j.status === "done" ? " done" : j.status === "failed" || j.status === "cancelled" ? " failed" : "";
     row.appendChild(sideEl("div", "state" + kind,
       j.error_code && j.status === "failed" ? `${label} (${j.error_code})` : (j.stale ? `${label} (no sign of life)` : label)));
+    if (!FINISHED_JOB_STATES.has(j.status)) {
+      const acts = sideEl("div", "acts");
+      sideButton(acts, "Cancel", () => {
+        if (window.confirm(`Cancel "${j.title || j.job_id}"? Its files stay, and it can be run again.`)) {
+          sideAction(`/jobs/${encodeURIComponent(j.job_id)}/cancel`);
+        }
+      });
+      row.appendChild(acts);
+    }
     jobsList.appendChild(row);
   });
   if (jobs.length >= SIDE_MAX_JOBS) {

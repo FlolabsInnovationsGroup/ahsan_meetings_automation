@@ -1011,6 +1011,51 @@ async def get_job(job_id: str) -> JobRecord:
     return job.model_copy(update={"stale": _is_stale(job)})
 
 
+def _cancel_job(job: JobRecord) -> str:
+    """Stop one unfinished job, keeping its files: 'cancelling' (running: it
+    stops at its next checkpoint, within about half a minute), or
+    'cancelled' (it was waiting in the queue, or its record says it runs but
+    nothing does: left over from a crash, it would block every deploy)."""
+    outcome = job_queue.cancel(job.job_id)
+    if outcome == "signalled":
+        return "cancelling"
+    job.status = JobStatus.CANCELLED
+    job.error_code = "cancelled"
+    job.retryable = True
+    job.error = "cancelled before it started" if outcome == "dequeued" else "cancelled (it was no longer running)"
+    job_store.update(job)
+    return "cancelled"
+
+
+@app.post("/jobs/stop-all")
+def stop_all_jobs() -> dict:
+    """The side panel's "Stop everything", e.g. before an update: pause the
+    autopilot (so it starts nothing new) and cancel every unfinished job.
+    YouTube uploads are left to finish: one cut off mid-way must be checked
+    by hand afterwards."""
+    autopilot_engine.set_paused(True)
+    stopped = 0
+    for job_id in job_store.list_ids():
+        job = _safe_get_job(job_id)
+        if job is not None and job.status not in TERMINAL_STATUSES:
+            _cancel_job(job)
+            stopped += 1
+    uploading = sum(1 for job_id in job_store.list_ids() if (j := _safe_get_job(job_id)) and j.youtube_busy)
+    logger.warning("stop everything: autopilot paused, %d job(s) cancelled, %d upload(s) left running",
+                   stopped, uploading)
+    return {"stopped": stopped, "uploads_running": uploading}
+
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    """Stop one job and keep its files (DELETE /jobs/{id} also deletes them)."""
+    job = _get_job_or_404(job_id)
+    if job.status in TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail={"error_code": "finished",
+                                                     "message": f"job is already {job.status.value}"})
+    return {"job_id": job_id, "result": _cancel_job(job)}
+
+
 @app.delete("/jobs/{job_id}")
 async def delete_job(job_id: str, force: bool = False):
     """Queued -> removed and wiped. Running -> 409 unless ?force=true, which

@@ -114,7 +114,7 @@ class JobQueue:
         """Raise if the running job was cancelled or ran past job_max_wall_s.
         Called from progress updates and from the ffmpeg heartbeat."""
         if job_id in self._cancel:
-            raise JobCancelled("cancelled by DELETE /jobs/{id}?force=true")
+            raise JobCancelled("the job was cancelled")
         if self._running == job_id:
             limit = self._running_limit if self._running_limit is not None else get_settings().job_max_wall_s
             if limit and time.monotonic() - self._running_started > limit:

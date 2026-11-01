@@ -214,6 +214,43 @@ def test_cancelled_job_reports_cancelled_status(monkeypatch):
     assert job.error_code == "cancelled"
 
 
+def test_cancel_button_stops_a_running_job_and_keeps_its_files(monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(api_main, "run_pipeline", _blocking_runner(started, release))
+    client = TestClient(api_main.app)
+    job_id = _upload(client).json()["job_id"]
+    assert started.wait(5)
+    assert client.post(f"/jobs/{job_id}/cancel").json()["result"] == "cancelling"
+    assert api_main.job_queue.wait_idle(10)
+    assert client.get(f"/jobs/{job_id}").json()["status"] == "cancelled"
+    assert (get_settings().jobs_dir / job_id / "job.json").exists()
+    assert client.post(f"/jobs/{job_id}/cancel").status_code == 409  # already finished
+
+
+def test_cancel_button_clears_a_job_left_running_by_a_crash():
+    """Its record says it runs, but nothing does: it blocked every deploy."""
+    _write_job("leftover", status="deciding")
+    client = TestClient(api_main.app)
+    assert client.post("/jobs/leftover/cancel").json()["result"] == "cancelled"
+    job = client.get("/jobs/leftover").json()
+    assert job["status"] == "cancelled" and job["retryable"] is True
+
+
+def test_stop_everything_cancels_every_job_and_pauses_the_autopilot(monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(api_main, "run_pipeline", _blocking_runner(started, release))
+    client = TestClient(api_main.app)
+    running = _upload(client).json()["job_id"]
+    assert started.wait(5)
+    _write_job("leftover2", status="queued")
+    _write_job("finished", status="done")
+    assert client.post("/jobs/stop-all").json() == {"stopped": 2, "uploads_running": 0}
+    assert api_main.job_queue.wait_idle(10)
+    assert [client.get(f"/jobs/{j}").json()["status"] for j in (running, "leftover2", "finished")] == [
+        "cancelled", "cancelled", "done"]
+    assert client.get("/autopilot").json()["paused"] is True
+
+
 def test_cancel_kills_a_long_running_subprocess_via_heartbeat(monkeypatch):
     """DELETE ?force=true must stop a job even while ffmpeg is mid-command:
     the heartbeat hook runs during the subprocess and raises JobCancelled."""

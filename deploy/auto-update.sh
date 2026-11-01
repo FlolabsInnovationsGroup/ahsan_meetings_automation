@@ -94,14 +94,18 @@ main() {
   exit 1
 }
 
-# Prints how many jobs are still being processed or uploaded to YouTube (the
-# full video or any of its shorts). A job is done with once it reaches one of
-# the `finished` statuses (core/models.py TERMINAL_STATUSES; a test keeps the
-# two lists equal), so a stage added later is waited for without editing this.
+# Prints how many jobs are still being processed, waiting in the queue, or
+# uploading to YouTube (the full video or any of its shorts). A job is done
+# with once it reaches one of the `finished` statuses (core/models.py
+# TERMINAL_STATUSES; a test keeps the two lists equal), so a stage added later
+# is waited for without editing this. A job only waiting for Zoom's
+# transcript is not waited for (owner, 2026-11-01): the restart marks it
+# interrupted, to be run again (the autopilot retries its meetings itself).
 busy_jobs() {
   python3 - "$1" <<'PY'
 import json, pathlib, sys
 finished = {"done", "failed", "skipped_desync", "cancelled", "decided"}
+not_waited_for = {"waiting_transcript"}
 uploading = {"queued", "uploading"}
 count = 0
 for path in pathlib.Path(sys.argv[1]).glob("*/job.json"):
@@ -114,7 +118,7 @@ for path in pathlib.Path(sys.argv[1]).glob("*/job.json"):
         isinstance(s, dict) and s.get("status") in uploading for s in shorts.values()
     )
     status = job.get("status")
-    if (status and status not in finished) or busy_upload:
+    if (status and status not in finished and status not in not_waited_for) or busy_upload:
         count += 1
 print(count)
 PY
