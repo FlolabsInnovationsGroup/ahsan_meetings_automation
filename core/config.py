@@ -212,7 +212,7 @@ class Settings(BaseSettings):
     # Per-command ffmpeg timeout = clamp(factor * content_seconds, floor, cap).
     ffmpeg_timeout_per_content_second: float = 3.0
     ffmpeg_timeout_floor_s: float = 120.0
-    ffmpeg_timeout_cap_s: float = 1800.0
+    ffmpeg_timeout_cap_s: float = 7200.0
     audio_inputs_per_command: int = 100
     # drawtext/subtitles need an explicit font file (fontconfig lookups crash
     # the Windows ffmpeg build). Empty = auto-detect DejaVu/Arial.
@@ -298,7 +298,9 @@ class Settings(BaseSettings):
     max_queue_depth: int = 1
     heartbeat_interval_s: float = 30.0
     stale_after_s: float = 600.0
-    job_max_wall_s: float = 10800.0
+    # A job that runs longer than this is stopped: only a backstop for a stuck
+    # job (owner, 2026-11-01: 13 h; some meetings take 8-9 hours to process).
+    job_max_wall_s: float = 46800.0
     # Refuse to start a job unless this much disk is free, and keep this much
     # spare beyond a Zoom download (owner, 2026-11-01: 3 GiB; the server has
     # little disk, and the low-disk cleanup keeps 4 GB free anyway).
@@ -313,9 +315,9 @@ class Settings(BaseSettings):
     # Below this much free disk, the oldest finished jobs are deleted (same
     # care as above) until there is this much again (owner, 2026-10-31: 4 GB).
     low_disk_cleanup_bytes: int = 4 * 1024**3
-    # A job that transcribes the meeting itself (WhisperX on the CPU is slow)
-    # gets this wall clock instead of job_max_wall_s.
-    asr_job_max_wall_s: float = 21600.0
+    # A job that may transcribe the meeting itself (WhisperX on the CPU is
+    # slow) gets this wall clock instead of job_max_wall_s (13 h too).
+    asr_job_max_wall_s: float = 46800.0
 
     # --- autopilot (autopilot/) -------------------------------------------
     # Every new recording of the accounts marked "autopilot" in the dropdown

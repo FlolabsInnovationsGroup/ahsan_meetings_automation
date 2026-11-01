@@ -596,7 +596,7 @@ def test_the_autopilots_job_may_transcribe_and_gets_the_longer_wall_clock(monkey
     job_id = api_main._autopilot_submit("m1", True)
     job = api_main.job_store.get(job_id)
     assert job.options.allow_asr and job.zoom_meeting_uuid == "m1" and job.title == "Weekly Sync"
-    assert queued == [(job_id, 21600.0)]
+    assert queued == [(job_id, 46800.0)]
     # the dedupe key is the same as a plain job's: allow_asr is not part of it
     assert job.zoom_options_hash == api_main._options_hash(api_main.JobOptions())
     # a second call finds that job instead of starting another
