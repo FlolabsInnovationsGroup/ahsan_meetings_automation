@@ -42,6 +42,7 @@ from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
+from core import disk
 from core.config import Settings, get_settings
 from core.errors import InsufficientDisk, PipelineError, SourceUnsupported
 from core.logging import get_logger
@@ -739,7 +740,7 @@ def download_meeting(
 def _ensure_disk(folder: Path, needed: int) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     reserve = max(0, get_settings().min_free_disk_bytes)
-    free = shutil.disk_usage(folder).free
+    free = disk.free_bytes(folder, needed + reserve)
     if free < needed + reserve:
         raise InsufficientDisk(
             f"the Zoom recording needs {needed / 1024**3:.1f} GiB but only {free / 1024**3:.1f} GiB is free "

@@ -1,11 +1,11 @@
 import bisect
 import hashlib
 import json
-import shutil
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from core import disk
 from core.config import get_settings
 from core.errors import (
     InsufficientDisk,
@@ -69,7 +69,7 @@ def check_disk(min_free: int | None = None) -> None:
     min_free = settings.min_free_disk_bytes if min_free is None else min_free
     if min_free <= 0:
         return
-    free = shutil.disk_usage(settings.storage_dir).free
+    free = disk.free_bytes(settings.storage_dir, min_free)
     if free < min_free:
         raise InsufficientDisk(
             f"only {free / 1024**3:.1f} GiB free under {settings.storage_dir}, need {min_free / 1024**3:.1f} GiB"

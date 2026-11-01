@@ -34,6 +34,7 @@ from autopilot import webhook as zoom_webhook
 from autopilot.engine import Engine, Hooks
 from autopilot.engine import parse as parse_stamp
 from autopilot.store import store as autopilot_store
+from core import disk
 from core.config import get_settings
 from core.errors import PipelineError
 from core.logging import configure_logging, get_logger
@@ -928,12 +929,13 @@ def sweep_old_jobs(now: datetime | None = None) -> int:
     return deleted
 
 
-def free_space_if_low() -> int:
-    """Below LOW_DISK_CLEANUP_BYTES free (4 GB), delete the oldest finished
-    jobs one by one, with the same care, until there is that much again.
-    Returns how many were deleted."""
+def free_space_if_low(want: int | None = None) -> int:
+    """Below LOW_DISK_CLEANUP_BYTES free (4 GB), or below `want` bytes when a
+    job needs that much room to start, delete the oldest finished jobs one by
+    one, with the same care, until there is that much again. Returns how many
+    were deleted."""
     settings = get_settings()
-    want = settings.low_disk_cleanup_bytes
+    want = settings.low_disk_cleanup_bytes if want is None else want
     try:
         free = shutil.disk_usage(settings.storage_dir).free
     except OSError:
@@ -954,6 +956,10 @@ def free_space_if_low() -> int:
     logger.warning("low disk (%.2f GB free, want %.2f GB): deleted %d finished job(s)",
                    free / 1024**3, want / 1024**3, deleted)
     return deleted
+
+
+# a job short of disk space deletes old finished jobs before giving up
+disk.set_cleaner(free_space_if_low)
 
 
 def _sweep_loop() -> None:
