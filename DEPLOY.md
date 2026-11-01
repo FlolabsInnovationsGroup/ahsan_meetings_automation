@@ -233,7 +233,7 @@ Every new recording of the accounts ticked **Autopilot** under the Zoom tab
 
 1. It waits for Zoom's own transcript, up to `AUTOPILOT_TRANSCRIPT_WAIT_HOURS`
    (10) after the meeting ends; after that the server transcribes it with
-   WhisperX (needs `HF_TOKEN`; such a job may run `ASR_JOB_MAX_WALL_S`, 6 h).
+   WhisperX (needs `HF_TOKEN`; such a job may run `ASR_JOB_MAX_WALL_S`, 13 h).
 2. It processes one meeting at a time, and never while another job runs.
 3. It posts the shorts, then the full video (listing the shorts), as
    `AUTOPILOT_PRIVACY` (public), with the suggested titles and descriptions,
