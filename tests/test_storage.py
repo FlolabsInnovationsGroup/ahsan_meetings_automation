@@ -150,3 +150,40 @@ def test_startup_uses_the_hours_chosen_on_the_page():
     path.write_text(json.dumps(record), encoding="utf-8")
     assert reconcile_on_startup(JobStore(), retention_hours=12)["deleted"] == 0
     assert reconcile_on_startup(JobStore(), retention_hours=8)["deleted"] == 1
+
+
+def test_a_job_short_of_disk_space_deletes_old_finished_jobs_before_giving_up(monkeypatch):
+    """The Ethics & Legal meeting failed "needs 1.9 GiB but only 6.5 GiB is
+    free (keeping 6.0 GiB spare)" while finished jobs still held space: the
+    low-disk cleanup only starts below 4 GB."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    import pytest
+
+    from core.errors import InsufficientDisk
+    from ingest import zoom
+
+    gb = 1024**3
+    monkeypatch.setenv("MIN_FREE_DISK_BYTES", str(6 * gb))
+    get_settings.cache_clear()
+    disk = {"free": 6.8 * gb}
+    monkeypatch.setattr(api_main.shutil, "disk_usage", lambda path: SimpleNamespace(free=disk["free"]))
+    real_delete = api_main.delete_job_files
+
+    def delete_and_free(store, job_id):
+        real_delete(store, job_id)
+        disk["free"] += 0.6 * gb
+
+    monkeypatch.setattr(api_main, "delete_job_files", delete_and_free)
+    now = datetime.now(UTC)
+    for name, hours in (("old", 50), ("older", 90), ("newest", 1)):
+        _aged(_finished_job(name), hours, now)
+    folder = get_settings().jobs_dir / "new"
+    zoom._ensure_disk(folder, int(1.9 * gb))  # needs 7.9 GB: two old jobs go, 6.8 -> 7.4 -> 8.0 GB
+    jobs_dir = get_settings().jobs_dir
+    assert not (jobs_dir / "older").exists() and not (jobs_dir / "old").exists()
+    assert (jobs_dir / "newest" / "job.json").exists()
+
+    with pytest.raises(InsufficientDisk):  # nothing left to delete that would be enough
+        zoom._ensure_disk(folder, int(4 * gb))
