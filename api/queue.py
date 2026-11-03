@@ -50,7 +50,7 @@ class JobQueue:
         self._running: str | None = None
         self._running_started: float = 0.0
         self._running_limit: float | None = None
-        self._cancel: set[str] = set()
+        self._cancel: dict[str, str | None] = {}  # job id -> why (how and when it was cancelled)
         self._delete_after: set[str] = set()
         self._thread: threading.Thread | None = None
         self._idle_since = time.monotonic()
@@ -95,16 +95,17 @@ class JobQueue:
             self._thread.start()
 
     # ------------------------------------------------------------- cancel
-    def cancel(self, job_id: str, delete_after: bool = False) -> str:
+    def cancel(self, job_id: str, delete_after: bool = False, reason: str | None = None) -> str:
         """'dequeued' (was waiting, now removed), 'signalled' (running; it will
-        stop at its next checkpoint), or 'not_found'."""
+        stop at its next checkpoint, with `reason` as its error), or
+        'not_found'."""
         with self._cv:
             for i, (queued_id, _, _) in enumerate(self._pending):
                 if queued_id == job_id:
                     del self._pending[i]
                     return "dequeued"
             if self._running == job_id:
-                self._cancel.add(job_id)
+                self._cancel[job_id] = reason
                 if delete_after:
                     self._delete_after.add(job_id)
                 return "signalled"
@@ -114,7 +115,7 @@ class JobQueue:
         """Raise if the running job was cancelled or ran past job_max_wall_s.
         Called from progress updates and from the ffmpeg heartbeat."""
         if job_id in self._cancel:
-            raise JobCancelled("the job was cancelled")
+            raise JobCancelled(self._cancel.get(job_id) or "the job was cancelled")
         if self._running == job_id:
             limit = self._running_limit if self._running_limit is not None else get_settings().job_max_wall_s
             if limit and time.monotonic() - self._running_started > limit:
@@ -159,7 +160,7 @@ class JobQueue:
                     delete_job_files(self._store, job_id)
                 with self._cv:
                     self._running = None
-                    self._cancel.discard(job_id)
+                    self._cancel.pop(job_id, None)
                     self._idle_since = time.monotonic()
                     self._cv.notify_all()
 
