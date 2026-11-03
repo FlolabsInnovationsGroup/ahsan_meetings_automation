@@ -13,7 +13,9 @@ A meeting goes:
   posting            the job is done; its videos go up
   posted             the full video and its shorts are on the channel
   needs_attention    something a person has to look at (the panel says what)
-  skipped            a person said no, or the recording was deleted in Zoom
+  skipped            a person said no, no one speaks in it, or the recording
+                     was deleted in Zoom (gone from its recordings list, not
+                     just one "not found" answer)
 Nothing ever moves a meeting back from "posted".
 """
 
@@ -59,6 +61,9 @@ class Meeting(BaseModel):
     # not before this time (a retry's wait)
     next_try_at: str | None = None
     error: str | None = None
+    # when Zoom first answered "not found" about it (cleared once Zoom finds
+    # it again): a day of that and a person decides
+    not_found_since: str | None = None
     first_seen_at: str = ""
     updated_at: str = ""
     posted_at: str | None = None

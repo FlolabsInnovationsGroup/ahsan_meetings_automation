@@ -59,6 +59,12 @@ RECORDING_GIVE_UP = timedelta(hours=48)
 LOOKBACK = timedelta(days=1)
 # webhook meetings Zoom couldn't be asked about, kept for the next checks
 MAX_NUDGES_LATER = 50
+# Zoom keeps answering "not found" about a recording its own list still
+# shows: after this long a person looks (Retry or Skip)
+NOT_FOUND_GIVE_UP = timedelta(hours=24)
+# what the old rule saved when it skipped a meeting on a single "not found"
+# from Zoom (live recordings were dropped): such meetings are looked at again
+OLD_GONE_ERROR = "The recording was deleted in Zoom."
 # written by deploy/auto-update.sh while it waits to restart the app
 DEPLOY_FLAG = ".deploying"
 DEPLOY_FLAG_MAX_AGE = timedelta(hours=2)
@@ -95,6 +101,21 @@ def parse(raw: str | None) -> datetime | None:
 def _due(next_try_at: str | None, now: datetime) -> bool:
     stamp = parse(next_try_at)
     return stamp is None or stamp <= now
+
+
+def _look_again_at_old_gone(state, now: datetime) -> None:
+    """Meetings the old rule skipped as deleted on a single "not found" from
+    Zoom (their recordings were there) are looked at again in the next check,
+    like a person pressing "Post it after all" (owner, 2026-11-04). Nothing
+    goes up twice: the ledger knows what is on the channel, and a job someone
+    started by hand is the one that gets posted."""
+    for m in state.meetings.values():
+        if m.state == "skipped" and m.error == OLD_GONE_ERROR:
+            logger.info("autopilot: looking again at %r (%s), skipped by the old not-found rule", m.topic, m.uuid)
+            m.state, m.error, m.next_try_at, m.not_found_since = "waiting_recording", None, None, None
+            m.updated_at = iso(now)
+            if m.uuid not in state.nudges:
+                state.nudges.append(m.uuid)
 
 
 class Engine:
@@ -134,6 +155,7 @@ class Engine:
                 if settings.autopilot_start_after.strip() or state.start_after is None or state.switched_off:
                     state.start_after = iso(_first_day(now))
                 state.switched_off = False
+                _look_again_at_old_gone(state, now)
             if self.store.read().paused:
                 return
             self._follow_jobs(now)
@@ -343,7 +365,8 @@ class Engine:
                 meeting = client.get_meeting(uuid)
             except PipelineError as exc:
                 if exc.code == "zoom_not_found":
-                    self._gone(uuid, now)
+                    # the recordings list proves a deletion only when it was read in full
+                    self._not_found(uuid, now, exc, set(found) if listed_all else None, first)
                     looked_at.add(uuid)
                 else:
                     errors.append(f"{uuid}: {exc}")
@@ -369,11 +392,42 @@ class Engine:
                 if parse(scheduled.end_at) + AFTER_SCHEDULED_END <= now:
                     scheduled.checked = True
 
-    def _gone(self, uuid: str, now: datetime) -> None:
+    def _not_found(self, uuid: str, now: datetime, exc: PipelineError, listed: set[str] | None,
+                   listed_from: date | None) -> None:
+        """Zoom answered "not found" about the meeting's recording. It says
+        that for a while about recordings that are there (being processed, or
+        a bad moment on Zoom's side), so one answer never drops a meeting
+        (owner, 2026-11-04). It counts as deleted only when it was "not found"
+        in an earlier check too and Zoom's recordings list, read in full in
+        this check, no longer has it either (`listed`: the list's meetings,
+        None when it wasn't read in full). Otherwise it is looked at again,
+        and after NOT_FOUND_GIVE_UP of "not found" a person decides."""
         with self.store.editing() as state:
             m = state.meetings.get(uuid)
-            if m is not None and m.state in ("waiting_recording", "waiting_transcript", "ready"):
-                m.state, m.error, m.updated_at = "skipped", "The recording was deleted in Zoom.", iso(now)
+            if m is None or m.state not in ("waiting_recording", "waiting_transcript", "ready"):
+                return
+            start = parse(m.start_time)
+            off_the_list = (listed is not None and uuid not in listed and start is not None
+                            and listed_from is not None and start.astimezone(UTC).date() >= listed_from)
+            since = parse(m.not_found_since)
+            logger.warning("autopilot: Zoom says the recording of %r (%s) is not found%s: %s", m.topic, uuid,
+                           ", and its recordings list no longer has it" if off_the_list else "", exc)
+            m.updated_at = iso(now)
+            if off_the_list and since is not None:
+                m.state, m.not_found_since = "skipped", None
+                m.error = f"The recording was deleted in Zoom: Zoom's recordings list no longer has it ({exc})."[:500]
+                return
+            if since is None:
+                m.not_found_since, since = iso(now), now
+            if now - since >= NOT_FOUND_GIVE_UP:
+                hours = int(NOT_FOUND_GIVE_UP.total_seconds() // 3600)
+                m.state = "needs_attention"
+                m.error = (f"Zoom has said the recording is not found for {hours} hours ({exc}). "
+                           "Look for it in Zoom, then press Retry or Skip.")[:500]
+                return
+            m.error = f"Zoom said the recording is not found ({exc}); the autopilot looks again soon."[:500]
+            if m.state == "ready":
+                m.next_try_at = iso(now + SUBMIT_TRY_AGAIN)
 
     def _evaluate(self, state, uuid: str, meeting: dict, now: datetime, watched: list[str],
                   start_after: datetime) -> None:
@@ -388,6 +442,8 @@ class Engine:
                 uuid=uuid, host_email=host, topic=(meeting.get("topic") or "").strip(),
                 start_time=meeting.get("start_time"), first_seen_at=iso(now),
             )
+        if m.not_found_since is not None:  # Zoom found it again
+            m.not_found_since, m.error = None, None
         if m.state not in ("waiting_recording", "waiting_transcript"):
             return
         m.updated_at = iso(now)
@@ -477,7 +533,7 @@ class Engine:
             job_id = self.hooks.submit(m.uuid, m.transcript == "whisperx")
         except PipelineError as exc:
             if exc.code == "zoom_not_found":
-                self._gone(m.uuid, now)
+                self._not_found(m.uuid, now, exc, None, None)  # no list here: never a deletion
                 return
             with self.store.editing() as state:
                 current = state.meetings[m.uuid]
@@ -496,6 +552,7 @@ class Engine:
             current.state, current.job_id, current.by_hand = "processing", job_id, False
             current.attempts += 1
             current.error, current.next_try_at, current.updated_at = None, None, iso(now)
+            current.not_found_since = None
         logger.info("autopilot: started job %s for %r (%s transcript)", job_id, m.topic, m.transcript)
 
     # ------------------------------------------------------------- a person's say
@@ -517,7 +574,7 @@ class Engine:
             else:
                 m.state, m.attempts, m.job_id = "ready", 0, None
                 m.transcript = m.transcript or "zoom"
-            m.next_try_at, m.error = None, None
+            m.next_try_at, m.error, m.not_found_since = None, None, None
             return m.model_copy()
 
     def skip(self, uuid: str) -> Meeting:
