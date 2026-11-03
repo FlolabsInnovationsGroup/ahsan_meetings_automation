@@ -158,7 +158,11 @@ def run_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
                 # kept on the server, never cut or posted (the autopilot skips it)
                 logger.info("job %s: no meeting in this recording (%s)", job.job_id, found.reason)
                 job.status = JobStatus.SKIPPED_EMPTY
-                job.error = f"No meeting to post: {found.reason}."
+                source = {"zoom_transcript": "Zoom's", "asr": "WhisperX", "uploaded_transcript": "uploaded",
+                          "youtube_captions": "YouTube captions"}.get(job.transcript_source or "", "unknown")
+                job.error = (f"No meeting to post: the AI judged it empty ({found.words} words spoken, "
+                             f"transcript: {source}). The AI's reason: {found.reason}" if found.asked_ai
+                             else f"No meeting to post: {found.reason} (transcript: {source}).")
                 job.error_code = "no_content"
                 update(job)
                 return

@@ -104,4 +104,5 @@ def _ask(segments: list[Segment], duration_s: float, words: int, caller) -> Cont
         return ContentCheck(True, f"the AI check failed ({type(exc).__name__}), processed anyway", words, True)
     verdict, _, reason = answer.splitlines()[0].partition("|") if answer else ("", "", "")
     empty = verdict.strip().strip("*").upper() == "EMPTY"
-    return ContentCheck(not empty, reason.strip()[:200] or answer[:200], words, True)
+    # the reason is shown in full on the page (a small scrolling box)
+    return ContentCheck(not empty, reason.strip()[:2000] or answer[:2000], words, True)
