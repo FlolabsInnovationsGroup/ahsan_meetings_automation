@@ -95,3 +95,52 @@ def test_the_autopilot_skips_an_empty_meeting_and_never_posts_or_retries_it(monk
     assert m.state == "skipped" and "12 words" in m.error
     assert len(world.submitted) == 1 and world.channel.videos == {}
 
+
+
+def test_an_ai_verdict_says_so_with_the_word_count_and_the_whole_reason(monkeypatch):
+    from decide.content import ContentCheck
+    from tests.test_pipeline import _make_job, _patch_common
+
+    monkeypatch.setenv("CONTENT_CHECK_ENABLED", "true")
+    get_settings.cache_clear()
+    _patch_common(monkeypatch, [], [])
+    long_reason = "only greetings and waiting for others " * 20
+    monkeypatch.setattr(pipeline_module, "check_content",
+                        lambda *a, **k: ContentCheck(False, long_reason.strip(), 5123, True))
+    job = _make_job("job-ai-empty")
+    pipeline_module.run_pipeline(job, lambda j: None)
+    assert job.status == JobStatus.SKIPPED_EMPTY
+    assert job.error.startswith("No meeting to post: the AI judged it empty (5123 words spoken")
+    assert job.error.endswith(long_reason.strip())  # never cut short
+
+
+def test_the_ai_reason_is_kept_in_full():
+    long_reason = "x " * 400
+    found = check_content(_talk(40), 600, FakeCaller(f"EMPTY | {long_reason}"), 150)
+    assert found.reason == long_reason.strip()
+
+
+def test_the_zoom_list_gives_the_whole_reason_a_meeting_was_skipped(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import api.main as api_main
+    from ingest import zoom
+    from tests.test_autopilot import T0, World, _meeting
+
+    world = World(monkeypatch)
+    world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
+    world.step()
+    job = api_main.job_store.get(world.meeting("m1").job_id)
+    reason = "No meeting to post: the AI judged it empty. " + "a long reason " * 60
+    job.status, job.error = JobStatus.SKIPPED_EMPTY, reason
+    api_main.job_store.update(job)
+    world.step(minutes=1)
+
+    class Client:
+        def list_recordings(self, host, start, end):
+            return [{"uuid": "m1", "topic": "Weekly Sync", "status": "ready"},
+                    {"uuid": "m2", "topic": "Other", "status": "ready"}]
+
+    monkeypatch.setattr(zoom, "get_client", lambda: Client())
+    rows = TestClient(api_main.app).get("/zoom/recordings?host=pm@flomad.com").json()["meetings"]
+    assert [(r["autopilot"], r["autopilot_reason"]) for r in rows] == [("skipped", reason), (None, None)]

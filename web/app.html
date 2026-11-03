@@ -419,6 +419,10 @@
   .zoom-list .small-btn.posted:disabled { opacity: 0.55; }
   .posted-note { margin-top: 3px; font-family: 'IBM Plex Sans'; font-size: 11px; font-weight: 600; color: var(--green); }
   .zoom-list .hook.auto { color: var(--blue); }
+  /* why the autopilot skipped a meeting: whole text, a few lines tall, scrolls */
+  .reason-box { max-height: 4.6em; overflow-y: auto; margin-top: 3px; padding: 3px 6px; font-size: 11.5px;
+    line-height: 1.35; color: var(--ink-muted); background: rgba(0, 0, 0, 0.04); border-left: 2px solid var(--blue);
+    border-radius: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
   /* the side panel: what's on YouTube and what the autopilot is doing */
   @media (min-width: 1180px) {
@@ -1375,6 +1379,16 @@ async function findZoomRecordings() {
   renderZoomRecordings(body.meetings || []);
 }
 
+// The autopilot's reason for skipping a meeting, however long: a small box
+// that scrolls (textContent only: the text can quote the AI or Zoom).
+function reasonBox(text) {
+  const box = document.createElement("div");
+  box.className = "reason-box";
+  box.textContent = text;
+  box.title = text;
+  return box;
+}
+
 function renderZoomRecordings(meetings) {
   zoomBody.textContent = "";
   zoomList.classList.toggle("visible", meetings.length > 0);
@@ -1400,6 +1414,7 @@ function renderZoomRecordings(meetings) {
       line.className = "hook auto";
       line.textContent = `Autopilot: ${m.autopilot}`;
       what.appendChild(line);
+      if (m.autopilot_reason) what.appendChild(reasonBox(m.autopilot_reason));
     }
     // without a Zoom transcript the server transcribes it itself, unless it can't
     const blocked = m.status === "source_unsupported" || (m.status === "no_transcript" && zoomRequireNative);
@@ -2308,7 +2323,8 @@ function renderAutopilot(ap) {
     if (m.state === "waiting_transcript" && m.deadline_at) label += ` (until ${sideTime(m.deadline_at)}, then WhisperX)`;
     if (m.state === "processing" && m.by_hand) label += " (a job someone started)";
     row.appendChild(sideEl("div", "state" + (m.state === "needs_attention" ? " attention" : ""), label));
-    if (m.error && m.state !== "skipped") row.appendChild(sideEl("div", "err", m.error));
+    if (m.error && m.state === "skipped") row.appendChild(reasonBox(m.error));
+    else if (m.error) row.appendChild(sideEl("div", "err", m.error));
     const acts = sideEl("div", "acts");
     if (m.state === "needs_attention" || m.state === "skipped") {
       sideButton(acts, m.state === "skipped" ? "Post it after all" : "Retry", () =>

@@ -461,6 +461,9 @@ def list_zoom_recordings(
         meeting["posted"] = ledger.meeting_state(f"zoom:{meeting.get('uuid')}")
         m = followed.get(meeting.get("uuid") or "")
         meeting["autopilot"] = _STATE_LABELS.get(m.state, m.state) if m is not None else None
+        # why it was skipped or stopped, in full (the page shows it in a small scrolling box)
+        meeting["autopilot_reason"] = (m.error if m is not None and m.state in ("skipped", "needs_attention")
+                                       else None)
     return {"host_email": host_email, "from": start.isoformat(), "to": end.isoformat(), "meetings": meetings}
 
 
