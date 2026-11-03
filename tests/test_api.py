@@ -222,7 +222,11 @@ def test_cancel_button_stops_a_running_job_and_keeps_its_files(monkeypatch):
     assert started.wait(5)
     assert client.post(f"/jobs/{job_id}/cancel").json()["result"] == "cancelling"
     assert api_main.job_queue.wait_idle(10)
-    assert client.get(f"/jobs/{job_id}").json()["status"] == "cancelled"
+    job = client.get(f"/jobs/{job_id}").json()
+    assert job["status"] == "cancelled"
+    # its error says how and when, and the job list hands it to the page
+    assert job["error"].startswith("Cancelled with its Cancel button on ") and job["error"].endswith("M.")
+    assert client.get("/jobs").json()[0]["error"] == job["error"]
     assert (get_settings().jobs_dir / job_id / "job.json").exists()
     assert client.post(f"/jobs/{job_id}/cancel").status_code == 409  # already finished
 
@@ -234,6 +238,8 @@ def test_cancel_button_clears_a_job_left_running_by_a_crash():
     assert client.post("/jobs/leftover/cancel").json()["result"] == "cancelled"
     job = client.get("/jobs/leftover").json()
     assert job["status"] == "cancelled" and job["retryable"] is True
+    assert job["error"].startswith("Cancelled with its Cancel button on ")
+    assert job["error"].endswith(" (it was no longer running).")
 
 
 def test_stop_everything_cancels_every_job_and_pauses_the_autopilot(monkeypatch):
@@ -248,7 +254,34 @@ def test_stop_everything_cancels_every_job_and_pauses_the_autopilot(monkeypatch)
     assert api_main.job_queue.wait_idle(10)
     assert [client.get(f"/jobs/{j}").json()["status"] for j in (running, "leftover2", "finished")] == [
         "cancelled", "cancelled", "done"]
+    for job_id in (running, "leftover2"):
+        assert client.get(f"/jobs/{job_id}").json()["error"].startswith("Cancelled by Stop everything on ")
+    assert client.get("/jobs/finished").json()["error"] is None
     assert client.get("/autopilot").json()["paused"] is True
+
+
+def test_a_job_cancelled_before_it_started_says_so():
+    started, release = threading.Event(), threading.Event()
+    api_main.job_queue.submit("blocker", lambda: (started.set(), release.wait(10)), max_depth=0)
+    try:
+        assert started.wait(5)
+        _write_job("waiting")
+        api_main.job_queue.submit("waiting", lambda: None, max_depth=0)
+        client = TestClient(api_main.app)
+        assert client.post("/jobs/waiting/cancel").json()["result"] == "cancelled"
+        error = client.get("/jobs/waiting").json()["error"]
+        assert error.startswith("Cancelled with its Cancel button on ") and error.endswith(", before it started.")
+    finally:
+        release.set()
+
+
+def test_cancel_times_are_on_the_teams_clock(monkeypatch):
+    monkeypatch.setenv("LOCAL_TIMEZONE", "Asia/Karachi")
+    get_settings.cache_clear()
+    assert api_main._team_time(datetime(2026, 11, 3, 18, 16, tzinfo=UTC)) == "Nov 3, 11:16 PM"
+    assert api_main._team_time(datetime(2026, 11, 4, 0, 5, tzinfo=UTC)) == "Nov 4, 5:05 AM"
+    assert api_main._team_time(datetime(2026, 11, 3, 7, 0, tzinfo=UTC)) == "Nov 3, 12:00 PM"
+    assert api_main._team_time(datetime(2026, 11, 3, 19, 0, tzinfo=UTC)) == "Nov 4, 12:00 AM"
 
 
 def test_cancel_kills_a_long_running_subprocess_via_heartbeat(monkeypatch):

@@ -483,6 +483,7 @@
   .side-section > summary:hover { color: var(--ink); }
   .side-section > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   .side-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .side-count .bad { color: var(--red); font-weight: 600; }
   .side-row .state.failed { color: var(--red); }
   .side-row .state.done { color: var(--green); }
   .side-row.current { border-left: 3px solid var(--blue); padding-left: 9px; }
@@ -681,10 +682,10 @@
       <h2 class="side-title" id="sideTitle">On YouTube</h2>
       <div class="ap-status" id="apStatus"></div>
       <div class="side-checks" id="sideChecks"></div>
-      <div id="apQueueWrap">
-        <p class="side-sub">Autopilot</p>
+      <details class="side-section" id="apSection">
+        <summary class="side-sub">Autopilot <span class="side-count" id="apCount"></span></summary>
         <div id="apQueue"></div>
-      </div>
+      </details>
       <details class="side-section" id="postedSection">
         <summary class="side-sub">Posted <span class="side-count" id="postedCount"></span></summary>
         <div id="postedList"><p class="side-empty">Loading…</p></div>
@@ -2173,6 +2174,7 @@ document.getElementById("ytRemoveFiles").addEventListener("click", async () => {
 // and what the autopilot is doing, refreshed every 30 seconds.
 const apStatus = document.getElementById("apStatus");
 const apQueue = document.getElementById("apQueue");
+const apCount = document.getElementById("apCount");
 const sideChecks = document.getElementById("sideChecks");
 const postedList = document.getElementById("postedList");
 const postedCount = document.getElementById("postedCount");
@@ -2182,8 +2184,9 @@ const SIDE_REFRESH_MS = 30000;
 const SIDE_MAX_MEETINGS = 40;
 const SIDE_MAX_JOBS = 50;
 
-// Posted and Jobs fold to one line; each stays the way this browser left it.
-["postedSection", "jobsSection"].forEach((id) => {
+// Autopilot, Posted and Jobs fold to one line; each stays the way this
+// browser left it (closed the first time).
+["apSection", "postedSection", "jobsSection"].forEach((id) => {
   const section = document.getElementById(id);
   try { section.open = localStorage.getItem(`hc_side_${id}`) === "open"; } catch (e) { /* closed */ }
   section.addEventListener("toggle", () => {
@@ -2311,6 +2314,7 @@ function renderAutopilot(ap) {
 
   apQueue.textContent = "";
   const rows = (ap.meetings || []).filter((m) => m.state !== "posted");
+  renderApCount(rows);
   if (!rows.length) {
     apQueue.appendChild(sideEl("p", "side-empty", ap.enabled ? "Nothing waiting." : "No meetings followed."));
     return;
@@ -2339,6 +2343,19 @@ function renderAutopilot(ap) {
     if (acts.childNodes.length) row.appendChild(acts);
     apQueue.appendChild(row);
   });
+}
+
+// The folded Autopilot line still tells what is in it: "· 9 meetings ·
+// 7 skipped · 1 needs attention" (that last part in red, so it isn't missed).
+function renderApCount(rows) {
+  apCount.textContent = "";
+  if (!rows.length) return;
+  const count = (state) => rows.filter((m) => m.state === state).length;
+  const skipped = count("skipped");
+  const attention = count("needs_attention");
+  apCount.append(`· ${rows.length} meeting${rows.length === 1 ? "" : "s"}`);
+  if (skipped) apCount.append(` · ${skipped} skipped`);
+  if (attention) apCount.append(" · ", sideEl("span", "bad", `${attention} need${attention === 1 ? "s" : ""} attention`));
 }
 
 function renderPosted(data) {
@@ -2429,6 +2446,7 @@ const JOB_STATE_LABELS = {
 };
 
 const FINISHED_JOB_STATES = new Set(["done", "failed", "cancelled", "skipped_desync", "skipped_empty", "decided"]);
+const STOPPED_JOB_STATES = new Set(["failed", "cancelled", "skipped_desync", "skipped_empty"]);
 const stopAllBox = document.getElementById("stopAllBox");
 
 // Shown only while something runs or waits: cancel it all and pause the
@@ -2467,6 +2485,8 @@ function renderJobs(jobs) {
     const kind = j.status === "done" ? " done" : j.status === "failed" || j.status === "cancelled" ? " failed" : "";
     row.appendChild(sideEl("div", "state" + kind,
       j.error_code && j.status === "failed" ? `${label} (${j.error_code})` : (j.stale ? `${label} (no sign of life)` : label)));
+    // why it failed, was cancelled or was skipped, in full
+    if (j.error && STOPPED_JOB_STATES.has(j.status)) row.appendChild(reasonBox(j.error));
     if (!FINISHED_JOB_STATES.has(j.status)) {
       const acts = sideEl("div", "acts");
       sideButton(acts, "Cancel", () => {

@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache, partial
 from pathlib import Path
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import (
     BackgroundTasks,
@@ -1001,7 +1002,9 @@ async def list_jobs(limit: int = 50) -> list[dict]:
             "updated_at": j.updated_at,
             "error_code": j.error_code,
             "stale": _is_stale(j),
-            # for the side panel's job list
+            # for the side panel's job list (the page shows why it failed, was
+            # cancelled or was skipped)
+            "error": j.error,
             "title": j.title,
             "meeting_date": j.meeting_date,
             "has_files": _has_files(j),
@@ -1021,18 +1024,32 @@ async def get_job(job_id: str) -> JobRecord:
     return job.model_copy(update={"stale": _is_stale(job)})
 
 
-def _cancel_job(job: JobRecord) -> str:
+def _team_time(moment: datetime | None = None) -> str:
+    """'Nov 3, 11:16 PM' on the team's clock (settings.local_timezone)."""
+    try:
+        zone = ZoneInfo(get_settings().local_timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = UTC
+    t = (moment or datetime.now(UTC)).astimezone(zone)
+    return f"{t:%b} {t.day}, {t.hour % 12 or 12}:{t:%M} {'AM' if t.hour < 12 else 'PM'}"
+
+
+def _cancel_job(job: JobRecord, how: str = "with its Cancel button") -> str:
     """Stop one unfinished job, keeping its files: 'cancelling' (running: it
     stops at its next checkpoint, within about half a minute), or
     'cancelled' (it was waiting in the queue, or its record says it runs but
-    nothing does: left over from a crash, it would block every deploy)."""
-    outcome = job_queue.cancel(job.job_id)
+    nothing does: left over from a crash, it would block every deploy).
+    Its error says how and when, e.g. "Cancelled by Stop everything on
+    Nov 3, 11:16 PM." (shown in the job list and the autopilot's list)."""
+    why = f"Cancelled {how} on {_team_time()}"
+    outcome = job_queue.cancel(job.job_id, reason=f"{why}.")
+    logger.warning("job %s: %s (%s)", job.job_id, why, outcome)
     if outcome == "signalled":
         return "cancelling"
     job.status = JobStatus.CANCELLED
     job.error_code = "cancelled"
     job.retryable = True
-    job.error = "cancelled before it started" if outcome == "dequeued" else "cancelled (it was no longer running)"
+    job.error = f"{why}, before it started." if outcome == "dequeued" else f"{why} (it was no longer running)."
     job_store.update(job)
     return "cancelled"
 
@@ -1048,7 +1065,7 @@ def stop_all_jobs() -> dict:
     for job_id in job_store.list_ids():
         job = _safe_get_job(job_id)
         if job is not None and job.status not in TERMINAL_STATUSES:
-            _cancel_job(job)
+            _cancel_job(job, how="by Stop everything")
             stopped += 1
     uploading = sum(1 for job_id in job_store.list_ids() if (j := _safe_get_job(job_id)) and j.youtube_busy)
     logger.warning("stop everything: autopilot paused, %d job(s) cancelled, %d upload(s) left running",
