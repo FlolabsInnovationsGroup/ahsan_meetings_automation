@@ -51,6 +51,8 @@ class FakeZoom:
         self.upcoming = {}
         self.schedule_error = None
         self.calls = []
+        # Zoom answers "not found" about these, while its list still shows them
+        self.not_found = set()
 
     def list_recordings(self, email, from_date, to_date):
         self.calls.append(("list", email))
@@ -63,7 +65,7 @@ class FakeZoom:
 
     def get_meeting(self, uuid):
         self.calls.append(("get", uuid))
-        if uuid not in self.meetings:
+        if uuid not in self.meetings or uuid in self.not_found:
             raise PipelineError("Zoom: recording not found", code="zoom_not_found")
         return self.meetings[uuid]
 
@@ -84,6 +86,8 @@ class World:
         self.busy = False
         self.submitted = []
         self.manual = {}
+        # starting a job for these gets "not found" from Zoom
+        self.submit_not_found = set()
         self.engine = self.restart()
         self.engine.set_enabled(True)  # the side panel's Turn on
 
@@ -102,6 +106,8 @@ class World:
     def submit(self, uuid, allow_asr):
         if self.busy:
             return None
+        if uuid in self.submit_not_found:
+            raise PipelineError("Zoom: recording not found (HTTP 404, code 3301)", code="zoom_not_found")
         job_id = f"job{len(self.submitted) + 1}"
         self.submitted.append((uuid, allow_asr))
         api_main.job_store.create(JobRecord(job_id=job_id, status=JobStatus.QUEUED, zoom_meeting_uuid=uuid))
@@ -210,11 +216,79 @@ def test_a_video_zoom_is_still_making_is_waited_for(world):
 
 
 def test_a_recording_deleted_in_zoom_is_skipped(world):
+    """Deleted = "not found" in two checks in a row and gone from Zoom's
+    recordings list."""
     world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2), transcript=False)
     world.step()
     del world.zoom.meetings["m1"]
     world.step(minutes=30)
-    assert world.meeting("m1").state == "skipped"
+    assert world.meeting("m1").state == "waiting_transcript"  # one answer is not enough
+    world.step(minutes=30)
+    m = world.meeting("m1")
+    assert m.state == "skipped" and m.error.startswith("The recording was deleted in Zoom: Zoom's recordings list")
+
+
+def test_zoom_saying_not_found_about_a_listed_recording_never_skips_it(world):
+    """Zoom answered "not found" about live recordings (still in its list):
+    the old rule skipped them as deleted (owner, 2026-11-04)."""
+    world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
+    world.zoom.not_found.add("m1")
+    for _ in range(4):
+        world.step(minutes=30)
+    m = world.meeting("m1")
+    assert m.state == "waiting_recording" and world.submitted == []
+    assert "not found" in m.error and "looks again" in m.error  # shown in the side panel
+    world.zoom.not_found.clear()  # Zoom answers again
+    world.step(minutes=30)
+    m = world.meeting("m1")
+    assert world.submitted == [("m1", False)] and m.state == "processing"
+    assert m.error is None and m.not_found_since is None
+
+
+def test_a_day_of_not_found_needs_a_person_not_a_skip(world):
+    world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
+    world.zoom.not_found.add("m1")
+    world.step()
+    for _ in range(47):
+        world.step(minutes=30)
+    assert world.meeting("m1").state == "waiting_recording"  # 23.5 h
+    world.step(minutes=30)
+    m = world.meeting("m1")
+    assert m.state == "needs_attention" and "24 hours" in m.error and "Retry or Skip" in m.error
+    world.zoom.not_found.clear()
+    world.engine.retry("m1")  # the person's Retry
+    world.step(minutes=1)
+    assert world.submitted == [("m1", False)]
+
+
+def test_not_found_when_starting_its_job_tries_again_later(world):
+    world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
+    world.submit_not_found.add("m1")
+    world.step()
+    m = world.meeting("m1")
+    assert m.state == "ready" and "code 3301" in m.error and world.submitted == []
+    world.step(minutes=5)
+    assert world.submitted == []  # waits 10 minutes
+    world.submit_not_found.clear()
+    world.step(minutes=6)
+    assert world.submitted == [("m1", False)] and world.meeting("m1").error is None
+
+
+def test_meetings_the_old_rule_skipped_as_deleted_are_looked_at_again(world):
+    from autopilot.engine import OLD_GONE_ERROR
+    from autopilot.store import Meeting
+
+    start = iso(T0 - timedelta(hours=2))
+    world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
+    world.zoom.meetings["m2"] = _meeting("m2", T0 - timedelta(hours=3))
+    world.step()  # m2 (the older one) is processing now
+    with world.engine.store.editing() as state:
+        state.meetings["m1"] = Meeting(uuid="m1", host_email=PM, topic="Weekly Sync", start_time=start,
+                                       state="skipped", error=OLD_GONE_ERROR)
+        state.meetings["m2"].state, state.meetings["m2"].error = "skipped", "Skipped by a person."
+    world.step(minutes=1)
+    assert world.submitted[-1] == ("m1", False) and world.meeting("m1").state == "processing"
+    assert world.meeting("m2").state == "skipped"  # a person's skip stays
 
 
 def test_no_zoom_check_and_no_new_job_while_a_job_runs(world):
