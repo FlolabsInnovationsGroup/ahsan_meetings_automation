@@ -60,8 +60,6 @@ logger = get_logger(__name__)
 
 HIGHLIGHT_MIN_GAP_S = 2.0
 SILENCE_LABEL = "silence (no one speaking)"
-# the one short "is there a meeting?" question gets this long
-CONTENT_CHECK_MAX_WALL_S = 300.0
 # A removed range this close to lying wholly inside detected silence is pure
 # silence (its edges are snapped to frames; the silences to 50 ms windows).
 PURE_SILENCE_SLACK_S = 0.05
@@ -149,20 +147,18 @@ def run_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
             job.transcript_path = str(job_dir / "transcript.json")
 
         if settings.content_check_enabled:
+            # only a word count: fewer than content_min_words is empty, more
+            # is a meeting, always (no AI question)
             with _stage(job, "content_check"):
-                caller.start_stage("content check", CONTENT_CHECK_MAX_WALL_S)
-                found = check_content(segments, duration, caller, settings.content_min_words,
+                found = check_content(segments, duration, settings.content_min_words,
                                       saved=job_dir / "content_check.json")
-                job.llm_usage = _add_usage(prior_usage, caller.usage.as_dict())
             if not found.has_meeting:
                 # kept on the server, never cut or posted (the autopilot skips it)
                 logger.info("job %s: no meeting in this recording (%s)", job.job_id, found.reason)
                 job.status = JobStatus.SKIPPED_EMPTY
                 source = {"zoom_transcript": "Zoom's", "asr": "WhisperX", "uploaded_transcript": "uploaded",
                           "youtube_captions": "YouTube captions"}.get(job.transcript_source or "", "unknown")
-                job.error = (f"No meeting to post: the AI judged it empty ({found.words} words spoken, "
-                             f"transcript: {source}). The AI's reason: {found.reason}" if found.asked_ai
-                             else f"No meeting to post: {found.reason} (transcript: {source}).")
+                job.error = f"No meeting to post: {found.reason} (transcript: {source})."
                 job.error_code = "no_content"
                 update(job)
                 return
