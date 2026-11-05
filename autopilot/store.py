@@ -13,9 +13,9 @@ A meeting goes:
   posting            the job is done; its videos go up
   posted             the full video and its shorts are on the channel
   needs_attention    something a person has to look at (the panel says what)
-  skipped            a person said no, no one speaks in it, or the recording
-                     was deleted in Zoom (gone from its recordings list, not
-                     just one "not found" answer)
+  skipped            a person said no, it is on the never-post list, no one
+                     speaks in it, or the recording was deleted in Zoom (gone
+                     from its recordings list, not just one "not found" answer)
 Nothing ever moves a meeting back from "posted".
 """
 
@@ -45,6 +45,8 @@ class Meeting(BaseModel):
     uuid: str
     host_email: str = ""
     topic: str = ""
+    # Zoom's meeting ID: the same for every session of a repeating meeting
+    meeting_id: str | None = None
     start_time: str | None = None
     recording_end: str | None = None
     state: MeetingState = "waiting_recording"

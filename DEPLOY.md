@@ -249,6 +249,15 @@ Setting `AUTOPILOT_START_AFTER` to a past day posts the older meetings too:
 look on the channel first, because the app only knows videos whose job
 records were still on the server when this version started.
 
+**Some meetings are never posted.** The side panel's "Never post" list starts
+with Operations (Ops), Project Management (PM), Legal, HR and 1-to-1 meetings
+(the words, and the Zoom IDs of the repeating ones). The autopilot skips any
+meeting whose title has one of those as whole words, or whose Zoom ID is
+listed, and says why. "PM" also catches a title like "Demo at 5 PM". It holds
+while the autopilot is paused too. To post one, take it off the list and press
+"Post it after all". The list covers the autopilot only: a person can still
+press Process and publish a job by hand.
+
 **Nothing is posted twice.** Every upload is written down before it starts
 (`data/state/uploads.jsonl`), with YouTube's upload link before the first
 byte; one link can make only one video, so after a crash the upload is
