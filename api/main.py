@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 import publish
 from autopilot import emails as zoom_emails
 from autopilot import loop as autopilot_loop
+from autopilot import never_post
 from autopilot import webhook as zoom_webhook
 from autopilot.engine import Engine, Hooks
 from autopilot.engine import parse as parse_stamp
@@ -458,8 +459,10 @@ def list_zoom_recordings(
     # ("posted": the full video; "partly": only shorts), and the autopilot's word
     ledger = get_ledger()
     followed = autopilot_store.read().meetings
+    listed = never_post.entries()
     for meeting in meetings:
         meeting["posted"] = ledger.meeting_state(f"zoom:{meeting.get('uuid')}")
+        meeting["never_post"] = never_post.match(meeting.get("topic"), meeting.get("meeting_id"), listed) is not None
         m = followed.get(meeting.get("uuid") or "")
         meeting["autopilot"] = _STATE_LABELS.get(m.state, m.state) if m is not None else None
         # why it was skipped or stopped, in full (the page shows it in a small scrolling box)
@@ -643,6 +646,10 @@ class ResolveRequest(BaseModel):
     url: str = Field(default="", max_length=500)
 
 
+class NeverPostRequest(BaseModel):
+    entries: list[str] = Field(max_length=never_post.MAX_ENTRIES)
+
+
 @app.get("/autopilot")
 def get_autopilot() -> dict:
     """The autopilot's switch, its last and next look at Zoom, and the
@@ -655,6 +662,7 @@ def get_autopilot() -> dict:
     meetings.sort(key=lambda m: _STATE_ORDER.index(m.state))
     open_rows = [m for m in meetings if m.state not in ("posted", "skipped")]
     done_rows = [m for m in meetings if m.state in ("posted", "skipped")][:20]
+    listed = never_post.entries()
     return {
         "enabled": state.enabled,
         "paused": state.paused,
@@ -671,12 +679,27 @@ def get_autopilot() -> dict:
         if last else None,
         "schedule": [s.model_dump() for s in state.schedule if not s.checked][:5],
         "schedule_error": state.schedule_error,
+        "never_post": listed,
         "meetings": [
             {**m.model_dump(), "label": _STATE_LABELS.get(m.state, m.state),
-             "job_exists": bool(m.job_id and _safe_get_job(m.job_id))}
+             "job_exists": bool(m.job_id and _safe_get_job(m.job_id)),
+             # the page offers no "Post it after all" for these
+             "never_post": never_post.match(m.topic, m.meeting_id, listed) is not None}
             for m in open_rows + done_rows
         ],
     }
+
+
+@app.post("/autopilot/never-post")
+def set_never_post(body: NeverPostRequest) -> dict:
+    """The side panel's never-post list: words from a meeting's title, or Zoom
+    meeting IDs. Applied at the autopilot's next step, also while it is paused."""
+    try:
+        never_post.set_entries(body.entries)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    autopilot_loop.wake()
+    return get_autopilot()
 
 
 @app.post("/autopilot/on")

@@ -34,7 +34,7 @@ from ledger import files
 from ledger.uploads import get_ledger
 from publish import run as publish_run
 
-from . import emails
+from . import emails, never_post
 from .store import Meeting, ScheduledMeeting, Store
 from .store import store as default_store
 
@@ -65,6 +65,8 @@ NOT_FOUND_GIVE_UP = timedelta(hours=24)
 # what the old rule saved when it skipped a meeting on a single "not found"
 # from Zoom (live recordings were dropped): such meetings are looked at again
 OLD_GONE_ERROR = "The recording was deleted in Zoom."
+# a meeting on the never-post list leaves any of these for "skipped"
+NOT_FINAL = ("waiting_recording", "waiting_transcript", "ready", "processing", "posting", "needs_attention")
 # written by deploy/auto-update.sh while it waits to restart the app
 DEPLOY_FLAG = ".deploying"
 DEPLOY_FLAG_MAX_AGE = timedelta(hours=2)
@@ -101,6 +103,22 @@ def parse(raw: str | None) -> datetime | None:
 def _due(next_try_at: str | None, now: datetime) -> bool:
     stamp = parse(next_try_at)
     return stamp is None or stamp <= now
+
+
+def _zoom_id(value: object) -> str | None:
+    return str(value) if value else None
+
+
+def _stop_if_listed(m: Meeting, now: datetime, listed: list[str]) -> bool:
+    """Skip a meeting on the never-post list, saying why. Its job, if one is
+    running, may finish, but nothing of it is posted."""
+    why = never_post.match(m.topic, m.meeting_id, listed)
+    if why is None:
+        return False
+    logger.warning("autopilot: %r (%s) will not be posted: %s", m.topic, m.uuid, why)
+    m.state, m.error, m.next_try_at, m.not_found_since = "skipped", f"Never posted: {why}.", None, None
+    m.updated_at = iso(now)
+    return True
 
 
 def _look_again_at_old_gone(state, now: datetime) -> None:
@@ -156,6 +174,8 @@ class Engine:
                     state.start_after = iso(_first_day(now))
                 state.switched_off = False
                 _look_again_at_old_gone(state, now)
+                # before the pause below: the list holds the moment it is saved or deployed
+                self._drop_never_post(state, now)
             if self.store.read().paused:
                 return
             self._follow_jobs(now)
@@ -190,6 +210,15 @@ class Engine:
                 if (m.state in ("waiting_recording", "waiting_transcript", "ready")
                         and m.host_email and m.host_email not in watched):
                     m.state, m.error, m.updated_at = "skipped", "Its Zoom account is no longer on autopilot.", iso(now)
+
+    def _drop_never_post(self, state, now: datetime) -> None:
+        """Meetings on the never-post list leave the queue, whatever stage they
+        are at. An upload already running can't be called back: its meeting is
+        looked at again when that round ends, so nothing more follows it."""
+        listed = never_post.entries()
+        for m in state.meetings.values():
+            if m.state in NOT_FINAL and m.uuid not in self._posting:
+                _stop_if_listed(m, now, listed)
 
     def nudge(self, uuid: str) -> None:
         """Zoom's webhook says this meeting's recording (or transcript) is
@@ -250,6 +279,8 @@ class Engine:
         handed_over = False
         try:
             job = self.hooks.get_job(job_id) if job_id else None
+            if self._never_post_this(uuid, job):
+                return
             if job is None:
                 self._finish(uuid, None, None)
                 return
@@ -270,6 +301,23 @@ class Engine:
             if not handed_over:
                 with self._posting_lock:
                     self._posting.discard(uuid)
+
+    def _never_post_this(self, uuid: str, job: JobRecord | None) -> bool:
+        """The last look before anything goes up, also at what the job knows
+        of the meeting (the title and ID it was cut under)."""
+        info = (job.zoom_meeting if job is not None else None) or {}
+        why = never_post.match(info.get("topic") or (job.title if job is not None else None), info.get("meeting_id"))
+        with self.store.editing() as state:
+            m = state.meetings.get(uuid)
+            if m is None:
+                return why is not None
+            why = why or never_post.match(m.topic, m.meeting_id)
+            if why is None:
+                return False
+            logger.warning("autopilot: not posting %r (%s): %s", m.topic, uuid, why)
+            m.state, m.error, m.next_try_at = "skipped", f"Never posted: {why}.", None
+            m.updated_at = iso(self.clock())
+            return True
 
     def _post_and_finish(self, uuid: str, job: JobRecord, plan) -> None:
         try:
@@ -347,13 +395,20 @@ class Engine:
                 listed_all = False
         with self.store.editing() as state:
             for uuid, (email, row) in found.items():
+                known = state.meetings.get(uuid)
+                if known is not None:
+                    known.meeting_id = known.meeting_id or _zoom_id(row.get("meeting_id"))
+                    continue
                 start = parse(row.get("start_time"))
-                if uuid in state.meetings or start is None or start < start_after:
+                if start is None or start < start_after:
                     continue
                 state.meetings[uuid] = Meeting(
                     uuid=uuid, host_email=email, topic=(row.get("topic") or "").strip(),
+                    meeting_id=_zoom_id(row.get("meeting_id")),
                     start_time=row.get("start_time"), first_seen_at=iso(now), updated_at=iso(now),
                 )
+            # a listed meeting is never even asked about, so nothing is spent on it
+            self._drop_never_post(state, now)
             to_look = [m.uuid for m in state.meetings.values()
                        if m.state in ("waiting_recording", "waiting_transcript")]
             to_look += [u for u in [*state.nudges, *state.nudges_later] if u not in to_look]
@@ -448,6 +503,9 @@ class Engine:
             return
         m.updated_at = iso(now)
         m.topic = (meeting.get("topic") or m.topic).strip()
+        m.meeting_id = _zoom_id(meeting.get("id")) or m.meeting_id
+        if _stop_if_listed(m, now, never_post.entries()):  # new from the webhook, or renamed in Zoom
+            return
         choice = zoom.choose_files(meeting)
         end = _recording_end(meeting, choice)
         m.recording_end = iso(end) if end else m.recording_end
@@ -562,6 +620,9 @@ class Engine:
             m = state.meetings.get(uuid)
             if m is None:
                 raise KeyError(uuid)
+            why = never_post.match(m.topic, m.meeting_id)
+            if why is not None:
+                raise ValueError(f"This meeting can't be posted: {why}. Take it off the list first.")
             if m.state in ("processing", "posted") or uuid in self._posting:
                 raise ValueError(f"This meeting is {m.state.replace('_', ' ')}; there is nothing to retry.")
             job = self.hooks.get_job(m.job_id) if m.job_id else None

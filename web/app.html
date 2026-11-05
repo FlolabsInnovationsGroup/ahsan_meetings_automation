@@ -498,6 +498,13 @@
   .retention-row input:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
   .retention-row .small-btn { padding: 4px 10px; font-size: 11.5px; }
   .retention .side-empty { margin-top: 6px; line-height: 1.5; }
+  .never-post textarea {
+    display: block; width: 100%; box-sizing: border-box; resize: vertical; margin-bottom: 6px; padding: 5px 8px;
+    background: var(--bond-dim); border: 1.5px dashed var(--ink-muted); color: var(--ink);
+    font-family: 'Courier Prime', monospace; font-size: 12.5px; line-height: 1.4;
+  }
+  .never-post textarea:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .never-post .small-btn { padding: 4px 10px; font-size: 11.5px; }
 </style>
 </head>
 <body>
@@ -685,6 +692,15 @@
       <details class="side-section" id="apSection">
         <summary class="side-sub">Autopilot <span class="side-count" id="apCount"></span></summary>
         <div id="apQueue"></div>
+      </details>
+      <details class="side-section" id="neverPostSection">
+        <summary class="side-sub">Never post <span class="side-count" id="neverPostCount"></span></summary>
+        <div class="retention never-post">
+          <label for="neverPostInput">The autopilot won't process or post a meeting matching any line:</label>
+          <textarea id="neverPostInput" rows="9" spellcheck="false" aria-describedby="neverPostNote"></textarea>
+          <button type="button" class="small-btn" id="neverPostSave">Save</button>
+          <p class="side-empty" id="neverPostNote">One per line: a word or phrase from the meeting's title, or a Zoom meeting ID. Whole words only, so "hr" doesn't match "three". Capitals and punctuation don't matter.</p>
+        </div>
       </details>
       <details class="side-section" id="postedSection">
         <summary class="side-sub">Posted <span class="side-count" id="postedCount"></span></summary>
@@ -1416,6 +1432,11 @@ function renderZoomRecordings(meetings) {
       line.textContent = `Autopilot: ${m.autopilot}`;
       what.appendChild(line);
       if (m.autopilot_reason) what.appendChild(reasonBox(m.autopilot_reason));
+    } else if (m.never_post) {
+      const line = document.createElement("div");
+      line.className = "hook auto";
+      line.textContent = "On the never-post list: the autopilot won't post it";
+      what.appendChild(line);
     }
     // without a Zoom transcript the server transcribes it itself, unless it can't
     const blocked = m.status === "source_unsupported" || (m.status === "no_transcript" && zoomRequireNative);
@@ -2184,9 +2205,9 @@ const SIDE_REFRESH_MS = 30000;
 const SIDE_MAX_MEETINGS = 40;
 const SIDE_MAX_JOBS = 50;
 
-// Autopilot, Posted and Jobs fold to one line; each stays the way this
-// browser left it (closed the first time).
-["apSection", "postedSection", "jobsSection"].forEach((id) => {
+// Autopilot, Never post, Posted and Jobs fold to one line; each stays the way
+// this browser left it (closed the first time).
+["apSection", "neverPostSection", "postedSection", "jobsSection"].forEach((id) => {
   const section = document.getElementById(id);
   try { section.open = localStorage.getItem(`hc_side_${id}`) === "open"; } catch (e) { /* closed */ }
   section.addEventListener("toggle", () => {
@@ -2263,7 +2284,47 @@ function sideButton(parent, label, onClick) {
   return btn;
 }
 
+const neverPostInput = document.getElementById("neverPostInput");
+const neverPostNote = document.getElementById("neverPostNote");
+let neverPostDirty = false; // typed and not saved yet: the refresh leaves it alone
+neverPostInput.addEventListener("input", () => { neverPostDirty = true; });
+
+function renderNeverPost(entries) {
+  const list = entries || [];
+  document.getElementById("neverPostCount").textContent = `· ${list.length} entr${list.length === 1 ? "y" : "ies"}`;
+  if (!neverPostDirty && document.activeElement !== neverPostInput) neverPostInput.value = list.join("\n");
+}
+
+async function saveNeverPost() {
+  const entries = neverPostInput.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!entries.length && !window.confirm("Empty the list? The autopilot would then post every meeting, "
+    + "including Operations, Project Management, Legal, HR and 1-to-1 meetings.")) return;
+  clearError();
+  let res, body;
+  try {
+    res = await fetch("/autopilot/never-post", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    showError("Can't reach the server: " + e.message);
+    return;
+  }
+  if (!res.ok) {
+    showError(detailText(body) || "Couldn't save the list.");
+    return;
+  }
+  neverPostDirty = false;
+  neverPostNote.textContent = "Saved. The autopilot applies it within a minute, also while paused. "
+    + "One per line: a word or phrase from the meeting's title, or a Zoom meeting ID.";
+  renderAutopilot(body);
+}
+document.getElementById("neverPostSave").addEventListener("click", saveNeverPost);
+
 function renderAutopilot(ap) {
+  renderNeverPost(ap.never_post);
   apStatus.textContent = "";
   const head = sideEl("div");
   const dot = sideEl("span", "ap-dot");
@@ -2330,7 +2391,8 @@ function renderAutopilot(ap) {
     if (m.error && m.state === "skipped") row.appendChild(reasonBox(m.error));
     else if (m.error) row.appendChild(sideEl("div", "err", m.error));
     const acts = sideEl("div", "acts");
-    if (m.state === "needs_attention" || m.state === "skipped") {
+    // nothing on the never-post list can go up with one click: take it off the list first
+    if ((m.state === "needs_attention" || m.state === "skipped") && !m.never_post) {
       sideButton(acts, m.state === "skipped" ? "Post it after all" : "Retry", () =>
         sideAction("/autopilot/meetings/retry", { uuid: m.uuid }));
     }
