@@ -34,9 +34,6 @@ auto-update.log
 .auto-update.lock
 .env.*
 !.env.example
-branch_structure.json
-temp_auto_push.bat
-temp_interactive_push.bat
 
 # Local-only credentials (SSH key, full .env copy). Never commit.
 secrets/
