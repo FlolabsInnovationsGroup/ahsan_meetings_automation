@@ -65,6 +65,9 @@ class ClipsSettings(BaseSettings):
     # cannot take back small
     upload_ahead_hours: int = Field(6, ge=0, le=168)
     review_required: bool = True  # a person must approve each clip before it is scheduled
+    # Only the starting value of the "Auto-approve Shorts" switch. Once the switch is set (page or command
+    # line) the store flag wins. When on, Shorts are approved without a person; longer clips still wait.
+    auto_approve: bool = False
 
     # --- what gets made
     shorts_per_video: int = Field(3, ge=0, le=20)

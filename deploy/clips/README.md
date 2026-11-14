@@ -84,6 +84,9 @@ Nothing is ever public by accident: every upload is private with a publish time 
 
 Approved clips get the next free slot. They upload private with a publish time, and YouTube releases them.
 
+### Auto-approve Shorts (optional, off by default)
+The "Auto-approve Shorts" switch in the page's status strip (or `python -m clips auto-approve on|off|status`) replaces your click on every Short: each draft Short is approved at once, warnings or not, and each one is logged as an `auto_approve` event so you can see which went out unreviewed. Longer clips still wait for you. The switch only stands in for the click. Every other check still runs: the rights record (a source with no basis, or one that is gone or switched off, is never approved), the channel guard, the kill switch (nothing is auto-approved while it is on), the upload breaker, the release-date gate, the posting pace and the upload preflight. CLIPS_AUTO_APPROVE only sets the starting state; once the switch has been set, the stored setting wins, so you can flip it without a restart. This is different from CLIPS_REVIEW_REQUIRED=false, which makes the schedule step take every draft clip of any kind (Shorts and longer clips) that has no warnings, and skips the approval step altogether. The research advises a person's approval on every post for the first 30 days, because the reviewer is the only check for music, spoilers and bad cuts. Keep the switch off until then.
+
 ## 12. The kill switch
 Use the Stop button on the page, or create an empty file named KILL in the data folder:
 

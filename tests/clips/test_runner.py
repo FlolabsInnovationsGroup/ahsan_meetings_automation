@@ -1014,3 +1014,159 @@ def test_tick_does_nothing_when_not_on_the_clips_folder(store, fakes):
     result = Runner(store, settings=clips_settings(), stages=stages).tick()
     assert "company folder" in result["blocked"] and "watched" not in result
     assert store.list_videos() == [] and made == []
+
+
+# ------------------------------------------------------------ auto-approve
+
+
+def _auto_runner(store, fakes, on=True):
+    r = make_runner(store, fakes)
+    if on:
+        r.set_auto_approve(True)
+    return r
+
+
+def _kinds(store, status):
+    return sorted(c.kind.value for c in clips(store, status))
+
+
+def test_auto_approve_is_off_by_default(store, fakes):
+    r = make_runner(store, fakes)
+    assert r.auto_approve_on() is False
+    r.watch()
+    r.process(limit=1)
+    assert {c.status for c in clips(store)} == {ClipStatus.DRAFT}
+    assert r.status()["auto_approve"] is False
+
+
+def test_the_flag_persists_and_wins_over_the_setting(store, fakes, monkeypatch):
+    make_runner(store, fakes).set_auto_approve(True)
+    assert make_runner(store, fakes).auto_approve_on() is True  # a new Runner object sees it
+    monkeypatch.setenv("CLIPS_AUTO_APPROVE", "true")
+    clips_settings.cache_clear()
+    other = Store(store.path)
+    assert make_runner(other, fakes).auto_approve_on() is True
+    make_runner(store, fakes).set_auto_approve(False)  # the flag says off: the setting no longer counts
+    assert make_runner(store, fakes).auto_approve_on() is False
+
+
+def test_the_setting_is_the_starting_value(store, fakes, monkeypatch):
+    monkeypatch.setenv("CLIPS_AUTO_APPROVE", "true")
+    clips_settings.cache_clear()
+    assert make_runner(store, fakes).auto_approve_on() is True
+
+
+def test_switching_writes_an_event(store, fakes):
+    r = make_runner(store, fakes)
+    r.set_auto_approve(True)
+    r.set_auto_approve(False)
+    messages = [e["message"] for e in store.list_events(kind="auto_approve")]
+    assert any("switched off" in m for m in messages) and any("switched on" in m for m in messages)
+
+
+def test_shorts_are_approved_after_process_and_longs_wait(store, fakes):
+    r = _auto_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    assert _kinds(store, ClipStatus.APPROVED) == ["short"]
+    assert _kinds(store, ClipStatus.DRAFT) == ["long"]
+    logged = store.list_events(kind="auto_approve")
+    assert {e["clip_id"] for e in logged if e["clip_id"]} == {c.id for c in clips(store, ClipStatus.APPROVED)}
+
+
+def test_a_short_with_warnings_is_approved_too(store, fakes):
+    fakes.problems = ["title too long"]
+    r = _auto_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    approved = clips(store, ClipStatus.APPROVED)
+    assert [c.kind for c in approved] == [ClipKind.SHORT]
+    assert _kinds(store, ClipStatus.DRAFT) == ["long"]
+    event = store.list_events(kind="auto_approve")[0]
+    assert "title too long" in event["data"]["warnings"] and "had warnings" in event["message"]
+
+
+def test_a_clip_rejected_during_approval_stays_rejected(store, fakes, monkeypatch):
+    r = make_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    short = next(c for c in clips(store) if c.kind is ClipKind.SHORT)
+    real = fakes.verdict
+
+    def reject_midway(ok):
+        r.reject(short.id, "no")  # the person's click lands while approve() is checking the source
+        return real(ok)
+
+    monkeypatch.setattr(fakes, "verdict", reject_midway)
+    with pytest.raises(ValueError):
+        r.approve(short.id)
+    assert store.get_clip(short.id).status is ClipStatus.REJECTED
+    r.set_auto_approve(True)
+    assert r.auto_approve_drafts() == 0
+    assert store.get_clip(short.id).status is ClipStatus.REJECTED
+
+
+def test_drafts_already_waiting_are_approved_at_schedule(store, fakes):
+    r = make_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    assert {c.status for c in clips(store)} == {ClipStatus.DRAFT}
+    r.set_auto_approve(True)
+    assert r.schedule() == 1  # the one Short got approved, then a slot
+    assert _kinds(store, ClipStatus.SCHEDULED) == ["short"]
+    assert _kinds(store, ClipStatus.DRAFT) == ["long"]
+
+
+@pytest.mark.parametrize("how", ["disabled", "deleted", "rights_none"])
+def test_a_draft_whose_source_fails_is_not_approved(store, fakes, how):
+    r = make_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    r.set_auto_approve(True)
+    if how == "disabled":
+        _switch_off(store)
+    elif how == "deleted":
+        store.delete_source("s1")
+    else:
+        fakes.ok = False  # the rights check now says no (a source with rights NONE)
+    assert r.auto_approve_drafts() == 0
+    # deleting a source already holds its clips; either way none is approved
+    assert {c.status for c in clips(store)} <= {ClipStatus.DRAFT, ClipStatus.HELD}
+    if how != "deleted":
+        with pytest.raises(ValueError, match="cannot approve"):
+            r.approve(clips(store)[0].id)  # the manual path refuses the same way
+
+
+def test_nothing_is_auto_approved_while_the_kill_switch_is_on(store, fakes):
+    r = make_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    r.set_auto_approve(True)
+    fakes.kill = True
+    assert r.auto_approve_drafts() == 0 and r.schedule() == 0
+    assert {c.status for c in clips(store)} == {ClipStatus.DRAFT}
+    fakes.kill = False
+    assert r.auto_approve_drafts() == 1
+
+
+def test_tick_reports_the_auto_approved_count(store, fakes):
+    r = _auto_runner(store, fakes)
+    result = r.tick()
+    assert result["auto_approved"] == 1  # one video per tick, one Short kept from it
+    assert result["scheduled"] == 1
+    assert _kinds(store, ClipStatus.DRAFT) == ["long"]
+
+
+def test_tick_counts_zero_when_off(store, fakes):
+    assert make_runner(store, fakes).tick()["auto_approved"] == 0
+
+
+def test_review_off_and_auto_approve_differ(store, fakes, monkeypatch):
+    # review_required=false schedules drafts of every kind straight away; auto-approve covers Shorts only
+    monkeypatch.setenv("CLIPS_REVIEW_REQUIRED", "false")
+    clips_settings.cache_clear()
+    r = _auto_runner(store, fakes)
+    r.watch()
+    r.process(limit=1)
+    assert r.schedule() == 2
+    assert _kinds(store, ClipStatus.SCHEDULED) == ["long", "short"]

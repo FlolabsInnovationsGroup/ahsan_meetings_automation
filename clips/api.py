@@ -21,7 +21,7 @@ from urllib.parse import quote, unquote, urlparse
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -247,6 +247,7 @@ def status() -> dict:
         "kill_switch": bool(_safe(lambda: guard.kill_switch_on(), False)),
         "breaker_open": bool(_safe(lambda: guard.breaker_open(store), False)),
         "tick_running": _tick_state["running"],
+        "auto_approve": bool(_safe(lambda: get_runner().auto_approve_on(), False)),
         **(_safe(lambda: _allowance_and_slots(store), {}) or {}),
     }
     for key, value in extras.items():
@@ -459,6 +460,17 @@ def breaker_reset() -> dict:
     _mod("guard").reset_breaker(store)
     store.add_event("breaker", "breaker reset by a person")
     return {"breaker_open": False}
+
+
+class AutoApproveBody(BaseModel):
+    on: StrictBool  # a real true or false, never the text "yes"
+
+
+@app.post("/api/auto-approve")
+def auto_approve(body: AutoApproveBody) -> dict:
+    """Switch Auto-approve Shorts on or off. Only on the clips folder, like the other changing routes."""
+    _require_isolated()
+    return {"auto_approve": bool(get_runner().set_auto_approve(body.on))}
 
 
 # ------------------------------------------------------------------------ tick

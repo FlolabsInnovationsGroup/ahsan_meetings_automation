@@ -189,6 +189,7 @@ class Runner:
         self._llm_ready = llm is not None
         self.settings = settings or clips_settings()
         self.stages = stages or Stages.default()
+        self._auto_approved = 0  # running count for the current tick, reported by tick()
 
     @property
     def llm(self) -> Any:
@@ -345,6 +346,8 @@ class Runner:
                     self.store.add_event(
                         "process", f"{fresh.id} failed: {exc}", source_id=fresh.source_id
                     )
+        if made:
+            self.auto_approve_drafts()  # new Shorts go through at once when the switch is on
         return made
 
     def _recover_interrupted(self) -> None:
@@ -527,6 +530,50 @@ class Runner:
         )
         self.store.save_clip(clip)
 
+    # ---------------------------------------------------------- auto-approve
+
+    def auto_approve_on(self) -> bool:
+        """The Auto-approve Shorts switch. The store flag, once set, wins over the setting."""
+        flag = self.store.get_flag("auto_approve", "")
+        if flag in ("on", "off"):
+            return flag == "on"
+        return bool(self.settings.auto_approve)
+
+    def set_auto_approve(self, on: bool) -> bool:
+        """Flip the switch (kept in the store, so it outlives this process) and log who changed it."""
+        self.store.set_flag("auto_approve", "on" if on else "off")
+        self.store.add_event("auto_approve", f"auto-approve of Shorts switched {'on' if on else 'off'}")
+        return on
+
+    def auto_approve_drafts(self) -> int:
+        """With the switch on, approve every DRAFT Short, warnings or not. Longer clips are left alone.
+
+        It calls approve(), the same path a person's click takes, so a source that is gone, switched
+        off or failing its rights check refuses here exactly as it does for a person. Nothing is
+        approved while the kill switch is on. Returns how many were approved."""
+        try:
+            if not self.auto_approve_on() or self.stages.kill_switch_on():
+                return 0
+        except Exception:
+            return 0  # cannot tell whether posting is stopped: approve nothing
+        done = 0
+        for clip in self.store.list_clips(status=ClipStatus.DRAFT, limit=100000):
+            if clip.kind is not ClipKind.SHORT:
+                continue
+            warnings = clip.error  # approve() clears it, so keep it in the log first
+            try:
+                self.approve(clip.id)
+            except (ValueError, KeyError):
+                continue  # refused like a manual approval: it stays a draft for a person
+            note = f" (had warnings: {warnings})" if warnings else ""
+            self.store.add_event(
+                "auto_approve", f"{clip.id} approved automatically, nobody reviewed it{note}",
+                clip_id=clip.id, source_id=clip.source_id, data={"warnings": warnings} if warnings else None,
+            )
+            done += 1
+        self._auto_approved += done
+        return done
+
     # -------------------------------------------------------------- schedule
 
     def schedule(self) -> int:
@@ -534,6 +581,7 @@ class Runner:
 
         A scheduled clip whose time has passed (the loop was stopped) goes back for a fresh slot:
         a missed slot is never posted late and all at once."""
+        self.auto_approve_drafts()  # drafts that were already waiting when the switch went on
         rebooked = self.store.rebook_overdue(_now() + GRACE)
         if rebooked:
             self.store.add_event(
@@ -715,6 +763,7 @@ class Runner:
             reason = str(exc) or type(exc).__name__
             self._safe_event("tick", f"not running, this process is not on the clips folder: {reason}")
             return {"blocked": reason}
+        self._auto_approved = 0
         for name, step in (
             ("watched", self.watch),
             ("processed", self.process),
@@ -728,6 +777,7 @@ class Runner:
                 result.setdefault("errors", {})[name] = str(exc)
                 self._safe_event("tick", f"{name} step failed: {exc}")
             self._beat()
+        result["auto_approved"] = self._auto_approved
         try:
             self.stages.cleanup(self.settings.media_dir, self.settings.media_retention_hours)
             self._cleanup_renders()
@@ -795,7 +845,10 @@ class Runner:
         why = self._source_problem(source, verdict)
         if why:
             raise ValueError(f"cannot approve: {why}")
-        return self.store.set_clip_status(clip_id, ClipStatus.APPROVED, error="")
+        # Compare-and-set: if a person rejected or removed it since we read it, that decision stands.
+        if not self.store.transition(clip_id, ClipStatus.DRAFT, ClipStatus.APPROVED, error=""):
+            raise ValueError(f"clip {clip_id} is no longer a draft, so it was not approved")
+        return self._get_clip(clip_id)
 
     def release(self, clip_id: str) -> Clip:
         """HELD -> APPROVED (it gets a fresh slot). Refuses unless the rights checks pass again."""
@@ -844,6 +897,7 @@ class Runner:
             "clips": counts,
             "sources": {"enabled": enabled, "disabled": len(sources) - enabled},
             "youtube_downloads": self.settings.youtube_downloads,
+            "auto_approve": self._safely(self.auto_approve_on, False),
             "youtube_sources_off": youtube,
             "next_slots": self._next_slots_iso(),
             "kill_switch": self._safely(self.stages.kill_switch_on, False),

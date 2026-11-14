@@ -36,6 +36,10 @@ label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 3
 .tile .v { font-weight: 600; word-break: break-word; }
 .tile.bad { border-color: var(--bad); }
 .tile.bad .v { color: var(--bad); }
+.tile.warn { border-color: var(--warn); }
+.tile.warn .v { color: var(--warn); }
+.tile .v button { margin-top: 6px; width: 100%; }
+.msg.warn { border-color: var(--warn); color: var(--warn); }
 .big { width: 100%; min-height: 56px; font-size: 1.05rem; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; grid-template-columns: 250px 1fr; gap: 16px; }
 @media (max-width: 680px) { .card { grid-template-columns: 1fr; } }
@@ -86,6 +90,7 @@ a { color: var(--accent); }
   </section>
 
   <h2>Review queue</h2>
+  <div id="autonote"></div>
   <div class="nav">
     <button id="prev" aria-label="Previous clip">Previous</button>
     <span id="pos" class="muted"></span>
@@ -184,14 +189,32 @@ $("tok").addEventListener("keydown", (e) => { if (e.key === "Enter") $("tokgo").
 
 /* ---------- status strip ---------- */
 function tile(k, v, bad) { return h("div", { class: "tile" + (bad ? " bad" : "") }, h("div", { class: "k" }, k), h("div", { class: "v" }, v)); }
+const AUTO_WARNING = "Every Short will be scheduled and posted without anyone looking at it, including ones with warnings. Longer clips still wait for you. Turn it on?";
+function autoTile(on) {
+  return h("div", { class: "tile" + (on ? " warn" : "") }, h("div", { class: "k" }, "Auto-approve Shorts"),
+    h("div", { class: "v" }, on ? "On" : "Off",
+      h("button", { id: "autobtn", class: on ? "" : "primary", "aria-pressed": on ? "true" : "false", onclick: () => toggleAuto(!on) },
+        on ? "Turn off" : "Turn on")));
+}
+async function toggleAuto(on) {
+  if (on && !window.confirm(AUTO_WARNING)) return;
+  try {
+    const r = await post("/api/auto-approve", { on });
+    note(r.auto_approve ? "Auto-approve is on: Shorts are approved without review." : "Auto-approve is off.");
+    await refresh();
+  } catch (e) { note(e.message, true); }
+}
 function renderStatus() {
   const s = state.status || {};
   const kill = !!s.kill_switch;
+  $("autonote").replaceChildren(...(s.auto_approve
+    ? [h("div", { class: "msg warn" }, "Auto-approve is on: Shorts are being approved automatically, without review. Longer clips still wait here for you.")] : []));
   $("strip").replaceChildren(
     ...(s.isolated === false ? [tile("Data folder", "Not the clips folder: sign-in and posting are off", true)] : []),
     tile("Channel", s.channel ? s.channel.title || s.channel.id : "Not connected", !s.channel),
     tile("Posting", kill ? "Stopped" : "Running", kill),
     tile("Breaker", s.breaker_open ? "Open (uploads paused)" : "Closed", s.breaker_open),
+    autoTile(!!s.auto_approve),
     tile("Posts allowed today", s.allowed_today ?? "-"),
     tile("Next slots", (s.next_slots || []).map(when).join(", ") || "-"),
     tile("Waiting for review", state.clips.length)

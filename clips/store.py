@@ -269,6 +269,26 @@ class Store:
             self._write_clip(conn, clip)
         return clip
 
+    def transition(self, clip_id: str, from_status: ClipStatus, to_status: ClipStatus, **fields: Any) -> bool:
+        """Move a clip from one status to another in one locked step, only if it is still in from_status.
+
+        False when the clip is unknown or has moved on (for example a person rejected it a moment
+        ago), so a slow caller never overwrites a newer decision."""
+        unknown = [name for name in fields if name not in Clip.model_fields]
+        if unknown:
+            raise ValueError(f"Clip has no field {unknown[0]!r}")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT json FROM clips WHERE id = ? AND status = ?", (clip_id, ClipStatus(from_status).value)
+            ).fetchone()
+            if row is None:
+                return False
+            data = Clip.model_validate_json(row[0]).model_dump()
+            data.update(fields)
+            data.update(status=ClipStatus(to_status), updated_at=_now())
+            self._write_clip(conn, Clip.model_validate(data))
+            return True
+
     def claim_upload(self, clip_id: str) -> bool:
         """Take a SCHEDULED clip for upload: SCHEDULED -> UPLOADING in one locked step.
 

@@ -76,6 +76,14 @@ class FakeRunner:
         self.ticked = threading.Event()
         self.gate = threading.Event()
         self.gate.set()
+        self.auto = False
+
+    def auto_approve_on(self):
+        return self.auto
+
+    def set_auto_approve(self, on):
+        self.auto = on
+        return on
 
     def status(self):
         return {"clips": len(self.store.clips)}
@@ -513,3 +521,46 @@ def test_page_shows_that_youtube_downloads_are_off_next_to_the_source(client, mo
 
 def test_page_script_renders_the_download_note(client):
     assert "download_note" in client.get("/").text
+
+
+# ------------------------------------------------------------ auto-approve
+
+
+def test_status_shows_auto_approve_and_the_route_flips_it(client, world):
+    assert client.get("/api/status").json()["auto_approve"] is False
+    assert client.post("/api/auto-approve", json={"on": True}).json() == {"auto_approve": True}
+    assert world.runner.auto is True
+    assert client.get("/api/status").json()["auto_approve"] is True
+    assert client.post("/api/auto-approve", json={"on": False}).json() == {"auto_approve": False}
+    assert client.get("/api/status").json()["auto_approve"] is False
+
+
+def test_auto_approve_route_needs_the_token(client, world, monkeypatch):
+    set_token(monkeypatch)
+    assert client.post("/api/auto-approve", json={"on": True}).status_code == 401
+    assert client.post("/api/auto-approve", json={"on": True}, headers={"X-API-Key": "wrong"}).status_code == 401
+    assert world.runner.auto is False
+    ok = client.post("/api/auto-approve", json={"on": True}, headers={"X-API-Key": "secret"})
+    assert ok.status_code == 200 and world.runner.auto is True
+
+
+def test_auto_approve_route_is_refused_off_the_clips_folder(client, world):
+    world.guard.isolated = False
+    assert client.post("/api/auto-approve", json={"on": True}).status_code == 503
+    assert world.runner.auto is False
+
+
+@pytest.mark.parametrize("body", [{}, {"on": "yes"}, {"on": None}, {"on": 1}, {"state": True}])
+def test_auto_approve_route_refuses_a_bad_body(client, world, body):
+    assert client.post("/api/auto-approve", json=body).status_code == 422
+    assert world.runner.auto is False
+    assert client.post("/api/auto-approve", content="not json").status_code == 422
+
+
+def test_page_has_the_auto_approve_switch_and_the_confirmation(client):
+    page = client.get("/").text
+    assert "Auto-approve Shorts" in page and "/api/auto-approve" in page
+    assert (
+        "Every Short will be scheduled and posted without anyone looking at it, including ones with warnings. "
+        "Longer clips still wait for you. Turn it on?"
+    ) in page

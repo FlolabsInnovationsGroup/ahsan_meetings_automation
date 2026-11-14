@@ -84,6 +84,8 @@ def _parser() -> argparse.ArgumentParser:
     kill.add_argument("reason", nargs="*")
     sub.add_parser("resume", help="turn the kill switch off")
     sub.add_parser("breaker-reset", help="close the upload circuit breaker")
+    auto = sub.add_parser("auto-approve", help="approve every Short without a person: on, off or status")
+    auto.add_argument("state", choices=["on", "off", "status"])
     return p
 
 
@@ -265,7 +267,19 @@ def _cmd_breaker_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_auto_approve(args: argparse.Namespace) -> int:
+    runner = _runner()
+    if args.state != "status":
+        runner.set_auto_approve(args.state == "on")
+    on = runner.auto_approve_on()
+    _out(f"auto-approve of Shorts is {'ON' if on else 'off'}")
+    if on and args.state == "on":
+        _out("every Short will be scheduled and posted without anyone looking, warnings included; longer clips still wait")
+    return 0
+
+
 _COMMANDS = {
+    "auto-approve": _cmd_auto_approve,
     "init": _cmd_init,
     "status": _cmd_status,
     "sources": _cmd_sources,

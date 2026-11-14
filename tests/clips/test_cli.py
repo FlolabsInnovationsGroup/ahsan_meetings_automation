@@ -250,3 +250,31 @@ def test_kill_says_which_videos_could_not_be_pulled_back(env, guard, capsys):
     assert code == 0
     assert "1 uploaded video(s)" in out and "could NOT" in out
     assert "https://studio.youtube.com/video/vid9/edit" in out
+
+
+def test_auto_approve_command(env, capsys):
+    runner, _store, _fakes = env
+    code, out, _ = run(capsys, "auto-approve", "status")
+    assert code == 0 and "off" in out and runner.auto_approve_on() is False
+    code, out, _ = run(capsys, "auto-approve", "on")
+    assert code == 0 and "ON" in out and "without anyone looking" in out
+    assert runner.auto_approve_on() is True
+    code, out, _ = run(capsys, "auto-approve", "status")
+    assert "ON" in out
+    code, out, _ = run(capsys, "auto-approve", "off")
+    assert code == 0 and "off" in out and runner.auto_approve_on() is False
+
+
+def test_auto_approve_command_rejects_other_words_and_needs_the_clips_folder(env, guard, capsys):
+    code, _, _ = run(capsys, "auto-approve", "maybe")
+    assert code != 0
+    guard.isolated = False
+    code, _, err = run(capsys, "auto-approve", "on")
+    assert code == 1 and "not the clips folder" in err
+    assert env[0].auto_approve_on() is False
+
+
+def test_status_command_shows_the_switch(env, capsys):
+    env[0].set_auto_approve(True)
+    code, out, _ = run(capsys, "status")
+    assert code == 0 and json.loads(out)["auto_approve"] is True

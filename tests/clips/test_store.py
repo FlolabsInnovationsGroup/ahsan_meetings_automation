@@ -253,6 +253,17 @@ def test_claim_upload_is_won_once(store):
     assert store.claim_upload("nope") is False
 
 
+def test_transition_only_moves_a_clip_still_in_the_from_status(store):
+    clip = store.save_clip(mk_clip(status=ClipStatus.DRAFT))
+    store.set_clip_status(clip.id, ClipStatus.REJECTED)
+    assert store.transition(clip.id, ClipStatus.DRAFT, ClipStatus.APPROVED) is False
+    assert store.get_clip(clip.id).status is ClipStatus.REJECTED
+    other = store.save_clip(mk_clip(status=ClipStatus.DRAFT, error="x"))
+    assert store.transition(other.id, ClipStatus.DRAFT, ClipStatus.APPROVED, error="") is True
+    assert store.get_clip(other.id).status is ClipStatus.APPROVED and store.get_clip(other.id).error == ""
+    assert store.transition("nope", ClipStatus.DRAFT, ClipStatus.APPROVED) is False
+
+
 def test_claim_upload_refuses_clips_that_are_not_scheduled(store):
     for status in (ClipStatus.DRAFT, ClipStatus.APPROVED, ClipStatus.HELD, ClipStatus.UPLOADED):
         clip = store.save_clip(mk_clip(status=status))
