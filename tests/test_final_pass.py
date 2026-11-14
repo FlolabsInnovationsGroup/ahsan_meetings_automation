@@ -175,11 +175,6 @@ def test_a_cost_row_only_grows_when_an_older_snapshot_arrives_late():
         assert tuple(put(3, 0.3)) == (5, 0.5)  # the older snapshot does not lower it
         assert tuple(put(7, 0.7)) == (7, 0.7)
         assert tuple(put(7, 0.7)) == (7, 0.7)  # recording again changes nothing
-        costs_db.upsert_event(con, kind="compute", key="compute:j1", at="2026-11-01T10:00:00+00:00",
-                              day="2026-11-01", seconds=90.0, grows_by="seconds")
-        costs_db.upsert_event(con, kind="compute", key="compute:j1", at="2026-11-01T10:00:00+00:00",
-                              day="2026-11-01", seconds=40.0, grows_by="seconds")
-        assert con.execute("SELECT seconds FROM events WHERE key='compute:j1'").fetchone()[0] == 90.0
 
 
 def test_the_channel_scan_says_when_it_stopped_at_its_page_cap(monkeypatch):

@@ -545,7 +545,6 @@
   .cost-table td { padding: 2px 3px; }
   .cost-table input[type="number"] { width: 58px; }
   .cost-table input.cost-model { width: 100%; min-width: 90px; }
-  .cost-gap { margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -766,7 +765,7 @@
         <div id="releaseList"><p class="side-empty">Open to load.</p></div>
       </details>
       <details class="side-section" id="costsSection">
-        <summary class="side-sub">Costs <span class="side-count" id="costsCount"></span></summary>
+        <summary class="side-sub">AI costs <span class="side-count" id="costsCount"></span></summary>
         <div class="retention costs">
           <div class="retention-row">
             <select id="costsRange" aria-label="Period">
@@ -784,19 +783,13 @@
           <p class="side-empty" id="costsNote"></p>
           <div id="costsBody"><p class="side-empty">Open to load.</p></div>
           <details class="cost-editor" id="costsEditor">
-            <summary class="side-sub">Prices and fixed costs</summary>
+            <summary class="side-sub">Model prices</summary>
             <p class="side-empty">US dollars per 1M tokens. A model id matches every model that starts with it.</p>
             <table class="cost-table">
               <thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cache read</th><th>Cache write</th><th></th></tr></thead>
               <tbody id="costsPriceRows"></tbody>
             </table>
             <button type="button" class="small-btn" id="costsAddPrice">Add model</button>
-            <p class="side-empty cost-gap">Fixed costs, US dollars a month (shared out by the day):</p>
-            <table class="cost-table">
-              <thead><tr><th>Name</th><th>$ / month</th><th>Count</th><th></th></tr></thead>
-              <tbody id="costsFixedRows"></tbody>
-            </table>
-            <button type="button" class="small-btn" id="costsAddFixed">Add cost</button>
             <button type="button" class="small-btn" id="costsSave">Save</button>
             <p class="side-empty" id="costsSaveNote"></p>
           </details>
@@ -3102,7 +3095,7 @@ urlInput.addEventListener("keydown", (e) => {
   const rest = params.toString();
   try { history.replaceState(null, "", rest ? `?${rest}` : window.location.pathname); } catch (e) { /* not important */ }
 })();
-// ---- Costs: what the app costs over the last N days (GET /costs, /costs/settings)
+// ---- AI costs: what the AI tokens cost over the last N days (GET /costs, /costs/settings)
 (function costsSection() {
   const section = document.getElementById("costsSection");
   const select = document.getElementById("costsRange");
@@ -3110,7 +3103,6 @@ urlInput.addEventListener("keydown", (e) => {
   const body = document.getElementById("costsBody");
   const editor = document.getElementById("costsEditor");
   const priceRows = document.getElementById("costsPriceRows");
-  const fixedRows = document.getElementById("costsFixedRows");
   const note = document.getElementById("costsNote");
   const DAYS_KEY = "hc_costs_days";
   const BAR_DAYS = 31; // the bar list shows the latest month; the numbers cover the whole range
@@ -3149,22 +3141,15 @@ urlInput.addEventListener("keydown", (e) => {
   function render(r) {
     body.textContent = "";
     const t = r.totals;
-    document.getElementById("costsCount").textContent = `· ${usd(t.total_usd)} in ${r.days} day${r.days === 1 ? "" : "s"}`;
-    const big = sideEl("div", "cost-total", usd(t.total_usd));
-    body.appendChild(big);
-    body.appendChild(sideEl("p", "side-empty", `${r.start} to ${r.end}, today included`));
-    body.appendChild(line("AI", usd(t.ai_usd)));
-    if (t.tools_usd) body.appendChild(line("Other tools", usd(t.tools_usd)));
-    body.appendChild(line("Fixed costs (share)", usd(t.fixed_usd)));
-    const u = r.uploads;
-    body.appendChild(line("Uploads", `${u.count} (${u.full} full video${u.full === 1 ? "" : "s"}, ${u.shorts} Short${u.shorts === 1 ? "" : "s"})`));
-    body.appendChild(line("Busiest day", u.busiest_day_uploads ? `${u.busiest_day_uploads} of ${u.limit_per_day} a day` : "none"));
-    body.appendChild(line("Compute time", `${r.compute_hours} h`));
+    const days = r.range.days;
+    document.getElementById("costsCount").textContent = `· ${usd(t.ai_usd)} in ${days} day${days === 1 ? "" : "s"}`;
+    body.appendChild(sideEl("div", "cost-total", usd(t.ai_usd)));
+    body.appendChild(sideEl("p", "side-empty", `${r.range.start} to ${r.range.end}, today included`));
+    body.appendChild(line("AI calls", `${num(t.calls)} (${num(t.input_tokens)} in / ${num(t.output_tokens)} out tokens)`));
     body.appendChild(line("Meetings", String(r.meetings.count)));
-    if (r.meetings.count) {
-      body.appendChild(line("Per meeting", `${usd(r.meetings.avg_usd)} (${usd(r.meetings.avg_usd_with_fixed)} with fixed)`));
-    }
-    body.appendChild(line(r.projection.based_on_days < r.days ? `A 30-day month at this pace (based on ${r.projection.based_on_days} day${r.projection.based_on_days === 1 ? "" : "s"} of data)` : "A 30-day month at this pace", usd(r.projection.month_usd)));
+    if (r.meetings.count) body.appendChild(line("Per meeting", usd(r.meetings.avg_usd)));
+    const based = r.projection.based_on_days;
+    body.appendChild(line(based < days ? `A 30-day month at this pace (based on ${based} day${based === 1 ? "" : "s"} of data)` : "A 30-day month at this pace", usd(r.projection.month_usd)));
     if (r.unpriced_models.length) {
       body.appendChild(sideEl("p", "cost-warn",
         `Price unknown for ${r.unpriced_models.join(", ")}. Its AI cost is not counted: add its price below.`));
@@ -3182,7 +3167,7 @@ urlInput.addEventListener("keydown", (e) => {
       fill.style.width = `${Math.round((d.usd / max) * 100)}%`;
       track.appendChild(fill);
       row.appendChild(track);
-      row.appendChild(sideEl("span", "cost-val", `${usd(d.usd)}${d.uploads ? ` · ${d.uploads} up` : ""}`));
+      row.appendChild(sideEl("span", "cost-val", usd(d.usd)));
       bars.appendChild(row);
     });
     body.appendChild(bars);
@@ -3213,7 +3198,7 @@ urlInput.addEventListener("keydown", (e) => {
     render(data);
   }
 
-  // ---- the prices and fixed costs editor
+  // ---- the model prices editor
   function cell(input) { const td = document.createElement("td"); td.appendChild(input); return td; }
   function field(value, type, label, cls) {
     const el = document.createElement("input");
@@ -3237,26 +3222,12 @@ urlInput.addEventListener("keydown", (e) => {
     tr.appendChild(removeButton(tr));
     priceRows.appendChild(tr);
   }
-  function addFixedRow(f) {
-    const tr = document.createElement("tr");
-    tr.appendChild(cell(field(f.name, "text", "Name", "cost-model")));
-    tr.appendChild(cell(field(f.usd_per_month, "number", "Dollars a month")));
-    const on = document.createElement("input");
-    on.type = "checkbox";
-    on.checked = f.active !== false;
-    on.setAttribute("aria-label", "Counted");
-    tr.appendChild(cell(on));
-    tr.appendChild(removeButton(tr));
-    fixedRows.appendChild(tr);
-  }
   async function loadEditor() {
     let res, data;
     try { res = await fetch("/costs/settings"); data = await res.json(); } catch (e) { return; }
     if (!res.ok) return;
     priceRows.textContent = "";
-    fixedRows.textContent = "";
     data.prices.forEach(addPriceRow);
-    data.fixed_costs.forEach(addFixedRow);
   }
   function tableRows(tbody) { return Array.from(tbody.querySelectorAll("tr")).map((tr) => Array.from(tr.querySelectorAll("input"))); }
   async function save() {
@@ -3264,15 +3235,13 @@ urlInput.addEventListener("keydown", (e) => {
       model: c[0].value.trim(), input: parseFloat(c[1].value), output: parseFloat(c[2].value),
       cache_read: parseFloat(c[3].value), cache_write: parseFloat(c[4].value),
     }));
-    const fixed = tableRows(fixedRows).map((c) => ({ name: c[0].value.trim(), usd_per_month: parseFloat(c[1].value), active: c[2].checked }));
-    const blank = prices.some((p) => Number.isNaN(p.input) || Number.isNaN(p.output) || Number.isNaN(p.cache_read) || Number.isNaN(p.cache_write))
-      || fixed.some((f) => Number.isNaN(f.usd_per_month));
+    const blank = prices.some((p) => Number.isNaN(p.input) || Number.isNaN(p.output) || Number.isNaN(p.cache_read) || Number.isNaN(p.cache_write));
     if (blank) { document.getElementById("costsSaveNote").textContent = "Fill in every number (0 is fine)."; return; }
     let res, data;
     try {
       res = await fetch("/costs/settings", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prices, fixed_costs: fixed }),
+        body: JSON.stringify({ prices }),
       });
       data = await res.json().catch(() => ({}));
     } catch (e) { document.getElementById("costsSaveNote").textContent = "Can't reach the server."; return; }
@@ -3290,7 +3259,6 @@ urlInput.addEventListener("keydown", (e) => {
   document.getElementById("costsApply").addEventListener("click", load);
   custom.addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
   document.getElementById("costsAddPrice").addEventListener("click", () => addPriceRow({ model: "", input: 0, output: 0, cache_read: 0, cache_write: 0 }));
-  document.getElementById("costsAddFixed").addEventListener("click", () => addFixedRow({ name: "", usd_per_month: 0, active: true }));
   document.getElementById("costsSave").addEventListener("click", save);
   if (section.open) { load(); loadEditor(); }
 })();

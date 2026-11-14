@@ -23,13 +23,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.config import get_settings
 from decide.pricing import PRICES
 
-# What the owner pays every month whatever the app does (editable in the side panel).
-DEFAULT_FIXED_COSTS = [("Server (AWS EC2 t3.large, Frankfurt)", 70.08)]
-
-# YouTube's limits (checked 2026-11-14): uploads have their own bucket of 100 a
-# day, and the general Data API quota is 10,000 units a day.
-DEFAULT_SETTINGS = {"youtube_uploads_per_day": 100, "youtube_quota_units_per_day": 10000}
-
 MAX_ROWS = 50
 
 _SCHEMA = """
@@ -139,18 +132,13 @@ def connect():
 
 
 def _seed(con: sqlite3.Connection) -> None:
-    """Once per database (PRAGMA user_version): the built-in prices and the
-    server's monthly cost. Seeding once, not on every start, lets the owner
+    """Once per database (PRAGMA user_version): the built-in model prices. Seeding once, not on every start, lets the owner
     delete a row for good."""
     if con.execute("PRAGMA user_version").fetchone()[0] >= 1:
         return
     stamp = now_iso()
     for model, (inp, out, read, write) in PRICES.items():
         con.execute("INSERT OR IGNORE INTO prices VALUES (?,?,?,?,?,?)", (model, inp, out, read, write, stamp))
-    for name, usd in DEFAULT_FIXED_COSTS:
-        con.execute("INSERT INTO fixed_costs (name, usd_per_month, active) VALUES (?,?,1)", (name, usd))
-    for key, value in DEFAULT_SETTINGS.items():
-        con.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (key, value))
     con.execute("PRAGMA user_version=1")
 
 
@@ -242,15 +230,12 @@ def event_keys(prefix: str) -> set[str]:
 
 
 def read_config() -> dict:
-    """What the side panel edits: prices, fixed monthly costs, limits."""
+    """What the side panel edits: the model prices."""
     with connect() as con:
         prices = [{"model": r["model"], "input": r["input"], "output": r["output"],
                    "cache_read": r["cache_read"], "cache_write": r["cache_write"], "updated_at": r["updated_at"]}
                   for r in con.execute("SELECT * FROM prices ORDER BY model")]
-        fixed = [{"id": r["id"], "name": r["name"], "usd_per_month": r["usd_per_month"],
-                  "active": bool(r["active"])} for r in con.execute("SELECT * FROM fixed_costs ORDER BY id")]
-        settings = {r["key"]: r["value"] for r in con.execute("SELECT * FROM settings ORDER BY key")}
-    return {"prices": prices, "fixed_costs": fixed, "settings": settings}
+    return {"prices": prices}
 
 
 def _number(value, what: str) -> float:
@@ -268,11 +253,10 @@ def _name(value, what: str) -> str:
     return text
 
 
-def write_config(*, prices: list | None = None, fixed_costs: list | None = None,
-                 settings: dict | None = None) -> None:
-    """Replace the given parts (None leaves a part alone). Raises ValueError
-    with a plain message, and changes nothing, when anything is off."""
-    clean_prices = clean_fixed = clean_settings = None
+def write_config(*, prices: list | None = None) -> None:
+    """Replace the prices (None leaves them alone). Raises ValueError with a
+    plain message, and changes nothing, when anything is off."""
+    clean_prices = None
     if prices is not None:
         if not isinstance(prices, list) or len(prices) > MAX_ROWS:
             raise ValueError(f"Prices: at most {MAX_ROWS} models.")
@@ -287,20 +271,6 @@ def write_config(*, prices: list | None = None, fixed_costs: list | None = None,
             nums = tuple(_number(row.get(f), f"The {f.replace('_', ' ')} price of {model}")
                          for f in ("input", "output", "cache_read", "cache_write"))
             clean_prices.append((model, nums))
-    if fixed_costs is not None:
-        if not isinstance(fixed_costs, list) or len(fixed_costs) > MAX_ROWS:
-            raise ValueError(f"Fixed costs: at most {MAX_ROWS} rows.")
-        clean_fixed = []
-        for row in fixed_costs:
-            if not isinstance(row, dict):
-                raise ValueError("Each fixed cost needs a name and a monthly amount.")  # noqa: TRY004
-            name = _name(row.get("name"), "A fixed cost")
-            clean_fixed.append((name, _number(row.get("usd_per_month"), f"The monthly cost of {name}"),
-                                0 if row.get("active") is False else 1))
-    if settings is not None:
-        if not isinstance(settings, dict) or len(settings) > MAX_ROWS:
-            raise ValueError(f"Settings: at most {MAX_ROWS} values.")
-        clean_settings = [(_name(k, "A setting"), _number(v, f"The setting {k}")) for k, v in settings.items()]
     stamp = now_iso()
     with connect() as con:
         if clean_prices is not None:
@@ -312,9 +282,3 @@ def write_config(*, prices: list | None = None, fixed_costs: list | None = None,
                 when = same[1] if same and same[0] == nums else stamp  # the date a price last changed
                 con.execute("INSERT INTO prices VALUES (?,?,?,?,?,?)", (model, *nums, when))
             reprice_ai_events(con)
-        if clean_fixed is not None:
-            con.execute("DELETE FROM fixed_costs")
-            con.executemany("INSERT INTO fixed_costs (name, usd_per_month, active) VALUES (?,?,?)", clean_fixed)
-        if clean_settings is not None:
-            con.execute("DELETE FROM settings")
-            con.executemany("INSERT INTO settings VALUES (?,?)", clean_settings)

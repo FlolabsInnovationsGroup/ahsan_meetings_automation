@@ -414,14 +414,11 @@ def _check_words_are_within_youtubes_rules(server, videos):
         assert not any(ANY_TIME.search(line) for line in lines[:first]), lines[:first]
 
 
-def _check_the_cost_meter_counts_every_upload(server, videos):
+def _check_the_cost_meter_counts_every_cut_once(server, videos):
     end = max(date.today(), MONDAY + timedelta(days=30))
     report = costs.report(400, today=end)
-    assert report["uploads"]["count"] == len(videos)
-    assert report["uploads"]["shorts"] == sum(1 for v in videos if v.kind == "short")
-    assert report["uploads"]["full"] == sum(1 for v in videos if v.kind == "full")
-    week_days = {(MONDAY + timedelta(days=i)).isoformat() for i in range(6)}
-    assert sum(r["uploads"] for r in report["per_day"] if r["day"] in week_days) == len(videos)
+    assert report["totals"]["ai_usd"] > 0 and report["totals"]["total_usd"] == report["totals"]["ai_usd"]
+    assert not {"uploads", "compute_hours"} & set(report) and "fixed_usd" not in report["totals"]
     # every job that was cut is counted once (the held copy's job too: it was cut)
     cut = {j.job_id for j in map(job_store.get, job_store.list_ids()) if j is not None}
     assert report["meetings"]["count"] == len(cut) == len(PUBLIC)
@@ -463,7 +460,7 @@ def test_a_real_week_with_the_default_publishing_settings(week):
         _check_each_short_follows_its_full_video_and_links_to_it,
         _check_words_are_within_youtubes_rules,
         _check_every_short_either_went_up_or_waits_for_a_person,
-        _check_the_cost_meter_counts_every_upload,
+        _check_the_cost_meter_counts_every_cut_once,
     ):
         check(week, videos)
 

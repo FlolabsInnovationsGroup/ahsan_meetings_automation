@@ -1014,16 +1014,14 @@ def _folder_bytes(folder: Path) -> int:
 
 
 class CostSettingsRequest(BaseModel):
-    """Any of the three parts; the ones sent replace what is stored."""
+    """The model prices (per 1M tokens); the list sent replaces what is stored."""
 
     prices: list[dict] | None = None
-    fixed_costs: list[dict] | None = None
-    settings: dict | None = None
 
 
 @app.get("/costs")
 def get_costs(days: int = 30) -> dict:
-    """What the app cost over the last `days` days (today is day 1)."""
+    """What the AI tokens cost over the last `days` days (today is day 1)."""
     try:
         return costs.report(days)
     except ValueError as exc:
@@ -1032,21 +1030,21 @@ def get_costs(days: int = 30) -> dict:
 
 @app.get("/costs/settings")
 def get_cost_settings() -> dict:
-    """The model prices, the fixed monthly costs and the YouTube limits."""
+    """The model prices."""
     return costs.read_config()
 
 
 @app.post("/costs/settings")
 def set_cost_settings(body: CostSettingsRequest) -> dict:
     try:
-        costs.write_config(prices=body.prices, fixed_costs=body.fixed_costs, settings=body.settings)
+        costs.write_config(prices=body.prices)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return costs.read_config()
 
 
 def _backfill_costs() -> None:
-    """At startup, in the background: every job still on disk and every upload so far."""
+    """At startup, in the background: every job still on disk."""
     try:
         costs.backfill(_safe_get_job(job_id) for job_id in job_store.list_ids())
     except Exception:
