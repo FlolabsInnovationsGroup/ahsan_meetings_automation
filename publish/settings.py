@@ -19,7 +19,20 @@ from dataclasses import asdict, dataclass, fields
 
 from ledger import prefs
 
-TITLE_STYLES = ("topic_first", "meeting_date")
+# Every choice setting: name -> the values it accepts.
+_CHOICES: dict[str, tuple[str, ...]] = {
+    "title_style": ("topic_first", "meeting_date"),
+    "shorts_style": ("classic", "new", "alternate"),
+    "shorts_top_text": ("title", "none"),
+    "shorts_layout": ("auto", "fit"),
+    "shorts_screen_zoom": ("whole_slide", "zoom"),
+    "shorts_speaker_layout": ("full", "panel"),
+    "thumbnail_mode": ("off", "test", "custom"),
+    "series_mode": ("allow_list", "allow_all"),
+    "series_archive_privacy": ("unlisted", "skip"),
+    "shorts_link_target": ("topic", "full"),
+}
+TITLE_STYLES = _CHOICES["title_style"]
 
 
 @dataclass(frozen=True)
@@ -32,9 +45,9 @@ class Publishing:
     # be caught in YouTube Studio before anyone sees it.
     review_hours: float = 12.0
     # At least this long between two videos going public.
-    min_gap_hours: float = 2.5
+    min_gap_hours: float = 2.0
     # At most this many videos go public on one day (team time zone)...
-    max_per_day: int = 5
+    max_per_day: int = 6
     # ...of which at most this many are Shorts.
     shorts_per_day: int = 3
     # Slots only between these hours (team time zone, settings.local_timezone);
@@ -72,6 +85,81 @@ class Publishing:
     # Language of the titles and of the speech.
     language: str = "en"
 
+    # --- Shorts look (render/shorts look; "new style" fields only matter when
+    # a Short is made in the new style) --------------------------------------
+    # classic, new, or alternate (one of each per meeting, logged to compare).
+    shorts_style: str = "alternate"
+    shorts_hook_seconds: float = 2.5
+    shorts_top_text: str = "title"
+    shorts_end_line: str = "Full meeting on our channel"
+    shorts_caption_px: int = 80
+    shorts_caption_max_chars: int = 28
+    shorts_layout: str = "auto"
+    shorts_screen_zoom: str = "whole_slide"
+    shorts_speaker_layout: str = "full"
+    shorts_hd: bool = True
+    shorts_trim_pauses: bool = True
+    shorts_max_pause_s: float = 0.6
+
+    # --- sound ---------------------------------------------------------------
+    shorts_loudness: bool = True
+    full_loudness: bool = True
+    loudness_target_lufs: float = -14.0
+    audio_denoise: bool = False
+
+    # --- full video look -------------------------------------------------------
+    full_hd: bool = False
+    full_hook_overlay: bool = False
+
+    # --- thumbnails ------------------------------------------------------------
+    thumbnail_mode: str = "test"
+    thumbnail_shorts: bool = False
+    thumbnail_faces: bool = False
+    thumbnail_label: bool = True
+
+    # --- caption tracks --------------------------------------------------------
+    captions_full: bool = True
+    captions_shorts: bool = False
+
+    # --- translations ----------------------------------------------------------
+    # Off until the owner consents (YouTube's developer rules).
+    translations: bool = False
+    translation_languages: str = "es,pt,hi,id,ja,de"
+
+    # --- playlists -------------------------------------------------------------
+    playlists: bool = True
+    playlist_shorts: bool = True
+    playlist_cuts: bool = True
+    playlist_full_template: str = "FloLabs {series}: team meetings"
+    playlist_shorts_template: str = "FloLabs {series}: Shorts"
+    playlist_cuts_template: str = "FloLabs {series}: topics"
+
+    # --- teams -----------------------------------------------------------------
+    series_mode: str = "allow_list"
+    series_archive_privacy: str = "unlisted"
+
+    # --- topic cuts --------------------------------------------------------------
+    topic_cuts: bool = True
+    topic_cuts_per_meeting: int = 1
+    topic_min_minutes: float = 5.0
+    topic_max_minutes: float = 20.0
+    topic_min_score: float = 7.0
+    topic_cold_open: bool = True
+    topic_front_door: bool = True
+    shorts_link_target: str = "topic"
+
+    # --- views -----------------------------------------------------------------
+    views_pull: bool = True
+    views_include_other: bool = True
+    views_watch_time: bool = True
+    # Rankings stay off until YouTube accepts the derived-metrics amendment.
+    views_rankings: bool = False
+
+    # --- YouTube quota and follow-ups --------------------------------------------
+    quota_daily_units: int = 10000
+    quota_reserve_units: int = 2000
+    extras_retry_days: int = 14
+
 
 DEFAULTS = Publishing()
 
@@ -88,7 +176,22 @@ _RANGES: dict[str, tuple[float, float]] = {
     "shorts_per_meeting": (0, 10),
     "hold_over_minutes": (0, 24 * 60),
     "hold_under_minutes": (0, 24 * 60),
+    "shorts_hook_seconds": (0, 5),
+    "shorts_caption_px": (56, 110),
+    "shorts_caption_max_chars": (16, 40),
+    "shorts_max_pause_s": (0.3, 2.0),
+    "loudness_target_lufs": (-23, -10),
+    "topic_cuts_per_meeting": (0, 3),
+    "topic_min_minutes": (2, 30),
+    "topic_max_minutes": (5, 40),
+    "topic_min_score": (0, 10),
+    "quota_daily_units": (1000, 1000000),
+    "quota_reserve_units": (0, 9000),
+    "extras_retry_days": (1, 30),
 }
+END_LINE_LIMIT = 40  # characters
+PLAYLIST_LIMIT = 150  # characters, with a 50-character series filled in
+_PLAYLIST_TEMPLATES = ("playlist_full_template", "playlist_shorts_template", "playlist_cuts_template")
 _CATEGORIES = {"1", "2", "10", "15", "17", "19", "20", "22", "23", "24", "25", "26", "27", "28"}
 LINKS_LIMIT = 1000  # characters
 
@@ -107,9 +210,35 @@ def _check(name: str, value):
         if not low <= value <= high:
             raise ValueError(f"{name}: choose between {low:g} and {high:g}.")
         return int(value) if isinstance(default, int) else float(value)
-    if name == "title_style":
-        if value not in TITLE_STYLES:
-            raise ValueError(f"title_style: one of {', '.join(TITLE_STYLES)}.")
+    if name in _CHOICES:
+        if value not in _CHOICES[name]:
+            raise ValueError(f"{name}: one of {', '.join(_CHOICES[name])}.")
+        return value
+    if name == "shorts_end_line":
+        value = str(value).strip()
+        if len(value) > END_LINE_LIMIT:
+            raise ValueError(f"shorts_end_line: at most {END_LINE_LIMIT} characters.")
+        if "<" in value or ">" in value:
+            raise ValueError("shorts_end_line: no < or > signs.")
+        return value
+    if name == "translation_languages":
+        codes = [c.strip() for c in str(value).split(",")]
+        if not 1 <= len(codes) <= 10:
+            raise ValueError("translation_languages: between 1 and 10 language codes.")
+        for c in codes:
+            if not (2 <= len(c) <= 8 and all(ch.isascii() and (ch.isalnum() or ch == "-") for ch in c)):
+                raise ValueError(f"translation_languages: '{c}' is not a language code such as es or pt-BR.")
+        if len({c.lower() for c in codes}) != len(codes):
+            raise ValueError("translation_languages: each language only once.")
+        return ",".join(codes)
+    if name in _PLAYLIST_TEMPLATES:
+        value = str(value).strip()
+        if value.count("{series}") != 1 or value.replace("{series}", "").count("{") or value.replace("{series}", "").count("}"):
+            raise ValueError(f"{name}: use {{series}} exactly once and no other braces.")
+        if "<" in value or ">" in value:
+            raise ValueError(f"{name}: no < or > signs.")
+        if len(value.replace("{series}", "x" * 50)) > PLAYLIST_LIMIT:
+            raise ValueError(f"{name}: too long (a playlist name is at most {PLAYLIST_LIMIT} characters).")
         return value
     if name == "category_id":
         value = str(value).strip()
@@ -136,11 +265,20 @@ def _cross_check(values: dict) -> None:
         raise ValueError("The release window must start before it ends.")
     if values["shorts_per_day"] > values["max_per_day"]:
         raise ValueError("Shorts per day can't be more than videos per day.")
+    if values["topic_min_minutes"] >= values["topic_max_minutes"]:
+        raise ValueError("A topic cut's shortest length must be less than its longest.")
+    if values["quota_reserve_units"] >= values["quota_daily_units"]:
+        raise ValueError("The quota kept in reserve must be less than the daily quota.")
+    main = str(values["language"]).split("-")[0].lower()
+    if any(c.split("-")[0].lower() == main for c in str(values["translation_languages"]).split(",")):
+        raise ValueError("Translations can't include the video's own language.")
 
 
 # About how many public meetings the team has in a week (research/youtube-growth),
 # for the warning below.
 WEEKLY_MEETINGS = 9
+# About what share of meetings make a topic cut (score and length rules).
+TOPIC_SHARE = 0.6
 
 
 def capacity_warning(p: Publishing | None = None) -> str | None:
@@ -154,10 +292,31 @@ def capacity_warning(p: Publishing | None = None) -> str | None:
     if shorts > 7 * p.shorts_per_day:
         return (f"About {WEEKLY_MEETINGS} public meetings a week with {p.shorts_per_meeting} Shorts each is "
                 f"{shorts} Shorts, but only {7 * p.shorts_per_day} fit in a week: some Shorts would be skipped.")
-    if WEEKLY_MEETINGS + shorts > 7 * p.max_per_day:
-        return (f"About {WEEKLY_MEETINGS} public meetings a week make {WEEKLY_MEETINGS + shorts} videos, "
+    cuts = WEEKLY_MEETINGS * TOPIC_SHARE * p.topic_cuts_per_meeting if p.topic_cuts else 0
+    videos = WEEKLY_MEETINGS + cuts + shorts
+    if videos > 7 * p.max_per_day:
+        if not cuts:
+            return (f"About {WEEKLY_MEETINGS} public meetings a week make {WEEKLY_MEETINGS + shorts} videos, "
+                    f"but only {7 * p.max_per_day} fit in a week: some would be skipped.")
+        return (f"About {WEEKLY_MEETINGS} public meetings a week with topic cuts make about {round(videos)} videos, "
                 f"but only {7 * p.max_per_day} fit in a week: some would be skipped.")
+    if p.min_gap_hours > 0:
+        fit = int((p.window_end_hour - p.window_start_hour) // p.min_gap_hours) + 1
+        if fit < p.max_per_day:
+            return (f"Only {fit} videos fit in the release hours with {p.min_gap_hours:g} h between them, "
+                    f"but videos per day is {p.max_per_day}.")
     return None
+
+
+def _without_main_language(values: dict) -> None:
+    """Drop the video's own language from the translation list, so a list the
+    owner never chose (the default, or a file saved before this check existed)
+    can't clash with the language they did choose."""
+    main = str(values["language"]).split("-")[0].lower()
+    kept = [c for c in str(values["translation_languages"]).split(",") if c.split("-")[0].lower() != main]
+    if not kept:
+        kept = [c for c in DEFAULTS.translation_languages.split(",") if c.split("-")[0].lower() != main]
+    values["translation_languages"] = ",".join(kept)
 
 
 def current() -> Publishing:
@@ -170,6 +329,7 @@ def current() -> Publishing:
                 values[name] = _check(name, saved[name])
             except ValueError:
                 pass  # a damaged value keeps its default
+    _without_main_language(values)
     try:
         _cross_check(values)
     except ValueError:
@@ -187,6 +347,8 @@ def save(changes: dict) -> Publishing:
     values = asdict(current())
     for name, value in changes.items():
         values[name] = _check(name, value)
+    if "translation_languages" not in changes:
+        _without_main_language(values)  # only an explicit list is refused for clashing
     _cross_check(values)
     prefs.set_publishing(values)
     return Publishing(**values)
@@ -194,3 +356,63 @@ def save(changes: dict) -> Publishing:
 
 def as_dict(p: Publishing | None = None) -> dict:
     return asdict(p or current())
+
+
+@dataclass(frozen=True)
+class ShortsLook:
+    """How one Short is rendered; a frozen snapshot so a render can't change mid-way."""
+    style: str
+    hook_seconds: float
+    top_text: str
+    end_line: str
+    caption_px: int
+    caption_max_chars: int
+    layout: str
+    screen_zoom: str
+    speaker_layout: str
+    hd: bool
+    loudness: bool
+    target_lufs: float
+    denoise: bool
+    trim_pauses: bool
+    max_pause_s: float
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class FullLook:
+    """How a full video (and topic cut) is rendered."""
+    loudness: bool
+    target_lufs: float
+    hd: bool
+    hook_overlay: bool
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class Looks:
+    shorts: ShortsLook
+    full: FullLook
+
+    def as_dict(self) -> dict:
+        return {"shorts": self.shorts.as_dict(), "full": self.full.as_dict()}
+
+
+def looks(p: Publishing | None = None) -> Looks:
+    """The look choices in force (a snapshot), for the render code and manifests."""
+    p = p or current()
+    return Looks(
+        shorts=ShortsLook(
+            style=p.shorts_style, hook_seconds=p.shorts_hook_seconds, top_text=p.shorts_top_text,
+            end_line=p.shorts_end_line, caption_px=p.shorts_caption_px,
+            caption_max_chars=p.shorts_caption_max_chars, layout=p.shorts_layout,
+            screen_zoom=p.shorts_screen_zoom, speaker_layout=p.shorts_speaker_layout, hd=p.shorts_hd,
+            loudness=p.shorts_loudness, target_lufs=p.loudness_target_lufs, denoise=p.audio_denoise,
+            trim_pauses=p.shorts_trim_pauses, max_pause_s=p.shorts_max_pause_s),
+        full=FullLook(loudness=p.full_loudness, target_lufs=p.loudness_target_lufs, hd=p.full_hd,
+                      hook_overlay=p.full_hook_overlay),
+    )

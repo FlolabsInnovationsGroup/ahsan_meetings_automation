@@ -41,12 +41,13 @@ import ledger.files
 import publish.run
 import publish.schedule
 from api.jobs import job_store
-from autopilot import emails
+from autopilot import emails, never_post
 from autopilot.store import store as autopilot_store
 from core.config import get_settings
 from core.timeline import fmt_clock
 from ingest import zoom as zoom_module
 from ledger.uploads import get_ledger
+from publish import series
 from publish import settings as pub_settings
 from tests.fake_channel import FakeChannel
 from tests.test_never_post_real_path import (
@@ -271,6 +272,10 @@ def week(monkeypatch):
     monkeypatch.setattr(running.engine, "clock", lambda: _Clock.at)
     running.engine.set_enabled(True)
     emails.set_autopilot(BUDDY, True)
+    # the owner has these teams on the Teams list already (a new team would wait for a person)
+    for m in WEEK:
+        if never_post.match(m.topic, m.zoom_id) is None:
+            series.set_row(series.series_key(m.topic), tier="public")
     yield running
     assert api_main.job_queue.wait_idle(15), "a test left a job running"
 

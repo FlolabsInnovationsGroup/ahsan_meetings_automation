@@ -47,6 +47,7 @@ def upload_once(
     category_id: str | None = None,
     language: str | None = None,
     recording_date: str | None = None,
+    localizations: dict | Callable[[], dict | None] | None = None,
 ) -> Upload:
     """Upload `item` unless the ledger says it is (or may be) on the channel.
     Returns the published record. Raises uploads.Refused subclasses when it
@@ -60,7 +61,8 @@ def upload_once(
 
     A meeting on the never-post list is refused first, before the journal is
     touched, so the refusal leaves nothing claimed or stuck as "uploading"."""
-    # the job's title, and what Zoom called the meeting (topic and ID), as match_job looks at them
+    # the job's title, and what Zoom called the meeting (topic and ID), as match_job looks at them.
+    # Every kind of item (full, short, topic cut) carries both, so this last look covers them all.
     why = never_post.match(item.meeting) or never_post.match(item.topic, item.meeting_id)
     if why is not None:
         raise NeverPost(f"Not uploaded: {why}.")
@@ -94,6 +96,18 @@ def upload_once(
                     )
                 else:
                     start = outcome
+            if callable(localizations):
+                # only a new upload asks for translations (after the never-post
+                # check and the journal claim); a resumed one keeps what its link
+                # was made with and never recomputes them
+                wanted = None
+                if attempt.resume_uri is None:
+                    try:
+                        wanted = localizations()
+                    except Exception as exc:  # noqa: BLE001 - translations are optional
+                        logger.warning("upload %s: translations skipped (%s)", key, type(exc).__name__)
+            else:
+                wanted = localizations if attempt.resume_uri is None else None
             try:
                 video_id = youtube.upload_video(
                     path, title, description, privacy, on_progress,  # type: ignore[arg-type]
@@ -102,7 +116,7 @@ def upload_once(
                     start_byte=start,
                     on_session=lambda link: ledger.session_started(key, link),
                     publish_at=publish_at, notify=notify, category_id=category_id, language=language,
-                    recording_date=recording_date,
+                    recording_date=recording_date, **({"localizations": wanted} if wanted else {}),
                 )
             except Exception as exc:
                 ledger.stopped(key, youtube.friendly_error(exc))

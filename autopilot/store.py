@@ -72,6 +72,12 @@ class Meeting(BaseModel):
     # a person pressed "Post it after all": the next posting round skips the
     # hold rules (length, already on the channel) once; never the never-post list
     hold_cleared: bool = False
+    # the meeting's team (publish/series.py key), and whether it waits for a
+    # person to say whether this team's meetings may be posted
+    series_key: str | None = None
+    series_hold: bool = False
+    # a person let this one meeting through although its name has no team in it
+    series_cleared: bool = False
 
 
 class ScheduledMeeting(BaseModel):

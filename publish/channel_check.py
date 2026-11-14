@@ -3,6 +3,8 @@ report two kinds of problem.
 
 - "listed": a video that is public or unlisted (or private but scheduled to go public)
   whose title matches the never-post list. A leak, to be fixed in YouTube Studio.
+- "archive_public": a public (or scheduled) video of a team set to archive, which
+  should be unlisted. Public videos of a team set to never are "listed" too.
 - "unknown": a video the app has no record of posting (uploaded by hand or by
   something else), so a person can tell whether it belongs there.
 
@@ -45,9 +47,20 @@ def _build_service():
     return build("youtube", "v3", credentials=youtube._load_credentials(), cache_discovery=False)
 
 
+def _spend(units: int, kind: str) -> None:
+    """Count the quota of a list call (an essential call: the scan always runs)."""
+    try:
+        from publish import quota
+
+        quota.spend(units, kind, essential=True)
+    except Exception as exc:  # noqa: BLE001 - counting must never stop the scan
+        logger.warning("could not count %d quota unit(s) for %s: %s", units, kind, exc)
+
+
 def _videos(service) -> tuple[list[dict], bool]:
     """Every upload of the channel (the newest 2000 at most), and whether the
     scan stopped at that cap with more still left."""
+    _spend(1, "channels.list")
     channels = service.channels().list(part="contentDetails", mine=True).execute().get("items", [])
     if not channels:
         return [], False
@@ -58,9 +71,11 @@ def _videos(service) -> tuple[list[dict], bool]:
         params = {"part": "contentDetails", "playlistId": playlist, "maxResults": PAGE_SIZE}
         if token:
             params["pageToken"] = token
+        _spend(1, "playlistItems.list")
         page = service.playlistItems().list(**params).execute()
         ids = [item["contentDetails"]["videoId"] for item in page.get("items", [])]
         if ids:
+            _spend(1, "videos.list")
             listing = service.videos().list(part="snippet,status", id=",".join(ids)).execute()
             for video in listing.get("items", []):
                 snippet, status = video.get("snippet") or {}, video.get("status") or {}
@@ -104,13 +119,41 @@ def _match_known(known, listed_words) -> str | None:
     return never_post.match(known.meeting, None, listed_words)
 
 
+def _team_tier(known) -> tuple[str, str]:
+    """(tier, team name) of the team behind a video the app posted:
+    'public' | 'archive' | 'never' | 'unknown'. Never raises."""
+    try:
+        from publish import series
+
+        job = None
+        if known.job_id:
+            try:
+                from api.jobs import job_store
+
+                job = job_store.get(known.job_id)
+            except Exception:  # noqa: BLE001 - a missing job: use what the ledger kept
+                job = None
+        topic = known.meeting
+        if job is not None:
+            info = getattr(job, "zoom_meeting", None)
+            topic = (info.get("topic") if isinstance(info, dict) else None) or job.title or topic
+            tier = series.tier_for_job(job)
+        else:
+            tier = series.tier_of(topic, None)
+        row = series.lookup(topic)
+        return tier, (row.label if row and row.label else series.series_key(topic))
+    except Exception as exc:  # noqa: BLE001 - the team check must never stop the scan
+        logger.warning("could not look up the team of a posted video: %s", exc)
+        return "unknown", ""
+
+
 def check_channel(service=None) -> dict:
     """Scan the channel now, save the result and return it."""
     videos, truncated = _videos(service or _build_service())
     posted = {u.video_id: u for u in get_ledger().posted() if u.video_id}
     ours = set(posted)
     listed_words = never_post.entries()
-    listed, unknown = [], []
+    listed, unknown, archive_public = [], [], []
     counts = {"total": len(videos), "public": 0, "private": 0, "unlisted": 0, "scheduled": 0}
     for v in videos:
         scheduled = v["privacy"] == "private" and bool(v["publish_at"])
@@ -126,12 +169,18 @@ def check_channel(service=None) -> dict:
                 # look at the meeting the app cut the video from, and at what its job
                 # knows of it (the Zoom topic and meeting ID)
                 why = _match_known(known, listed_words)
+            if not why and known is not None and (v["privacy"] == "public" or scheduled):
+                tier, team = _team_tier(known)
+                if tier == "never":
+                    why = f'Team "{team}" is set to never'
+                elif tier == "archive":
+                    archive_public.append(item)
             if why:
                 listed.append({**item, "reason": why[0].upper() + why[1:]})
         if v["id"] not in ours:
             unknown.append(item)
     result = {"checked_at": files.now_iso(), "counts": counts, "listed": listed, "unknown": unknown,
-              "truncated": truncated}
+              "archive_public": archive_public, "truncated": truncated}
     files.write_json(_path(), result)
     logger.info("channel check: %d videos, %d from never-post meetings, %d not uploaded by the app",
                 len(videos), len(listed), len(unknown))

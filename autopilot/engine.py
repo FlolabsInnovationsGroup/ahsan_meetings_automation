@@ -128,6 +128,60 @@ def _stop_if_listed(m: Meeting, now: datetime, listed: list[str]) -> bool:
     return True
 
 
+def _series_verdict(m: Meeting, tier: str, now: datetime) -> bool:
+    """Apply a team's tier to a meeting that has not gone up yet: never and
+    skipped archive teams stop it, a new team under allow_list waits for a
+    person. True = stopped here. Never-post is always checked before this."""
+    from publish import series
+    from publish import settings as publishing
+
+    cfg = publishing.current()
+    row = series.lookup_key(m.series_key or "")
+    label = (row.label if row else "") or m.topic or "this team"
+    if tier == "never":
+        logger.warning("autopilot: %r (%s) is a never-tier team: not posted", m.topic, m.uuid)
+        m.state, m.error, m.next_try_at, m.not_found_since = (
+            "skipped", f'Never posted: the team "{label}" is set to never in the Teams list.', None, None)
+        m.series_hold = False
+    elif tier == "archive" and cfg.series_archive_privacy == "skip":
+        m.state, m.error, m.next_try_at, m.not_found_since = (
+            "skipped", f'Not posted: "{label}" is an archive team.', None, None)
+        m.series_hold = False
+    elif tier == "unknown" and cfg.series_mode == "allow_list" and not (m.series_cleared and not m.series_key):
+        # a name with no team left in it (e.g. "Weekly Team Sync") is unknown too; a person who
+        # pressed "Post it after all" on it (series_cleared) has decided that one meeting
+        logger.info("autopilot: %r (%s) is held: %s", m.topic, m.uuid, "a new team" if m.series_key else "no team in its name")
+        m.state, m.next_try_at, m.series_hold = "needs_attention", None, True
+        m.error = (f'Held for a person: "{label}" is a new team. Post this series from now on, or Skip.'
+                   if m.series_key else
+                   "Held for a person: this meeting's name has no team in it. Post it after all, or Skip.")
+    else:
+        return False
+    m.updated_at = iso(now)
+    return True
+
+
+def _series_gate(m: Meeting, now: datetime) -> bool:
+    """The team check, right after the never-post list and before any file is
+    looked at or any CPU is spent. True = stop here."""
+    from publish import series
+
+    series.seed_once()
+    key = series.series_key(m.topic)
+    if m.series_key != (key or None):
+        series.note_seen(m.topic)  # once per team name a meeting shows, not once per check
+    m.series_key = key or None
+    return _series_verdict(m, series.tier_of(m.topic, m.meeting_id), now)
+
+
+def _row_key(m: Meeting) -> str | None:
+    """The team row a meeting belongs to now (names may have been merged)."""
+    from publish import series
+
+    row = series.lookup(m.topic)
+    return row.key if row else m.series_key
+
+
 def _look_again_at_old_gone(state, now: datetime) -> None:
     """Meetings the old rule skipped as deleted on a single "not found" from
     Zoom (their recordings were there) are looked at again in the next check,
@@ -232,6 +286,19 @@ class Engine:
             if m.state in NOT_FINAL and m.uuid not in self._posting:
                 _stop_if_listed(m, now, listed)
 
+    def _drop_never_series(self, state, now: datetime, fresh: list[str]) -> None:
+        """Brand-new meetings of a never-tier team are skipped before Zoom is
+        asked about them, so nobody is asked about them either."""
+        from publish import series
+
+        for uuid in fresh:
+            m = state.meetings.get(uuid)
+            if m is None or m.state not in ("waiting_recording", "waiting_transcript"):
+                continue
+            if series.tier_of(m.topic, m.meeting_id) == "never":
+                m.series_key = series.series_key(m.topic) or None
+                _series_verdict(m, "never", now)
+
     def nudge(self, uuid: str) -> None:
         """Zoom's webhook says this meeting's recording (or transcript) is
         ready: look at it in the next check, which is due at once."""
@@ -293,6 +360,9 @@ class Engine:
             job = self.hooks.get_job(job_id) if job_id else None
             if self._never_post_this(uuid, job):
                 return
+            stopped, tier = self._series_check(uuid, job)
+            if stopped:
+                return
             if job is None:
                 self._finish(uuid, None, None)
                 return
@@ -304,7 +374,10 @@ class Engine:
             with publish_run.PUBLISH_LOCK:
                 if job.youtube_busy:
                     return  # a person is publishing it right now; look again next step
-                plan = publish_run.plan_everything(job, get_settings().autopilot_privacy, by="autopilot")
+                if tier == "archive":  # archive teams: the full video only, unlisted
+                    plan = publish_run.plan_everything(job, "unlisted", by="autopilot", kinds={"full"})
+                else:
+                    plan = publish_run.plan_everything(job, get_settings().autopilot_privacy, by="autopilot")
                 if plan is None:
                     self._finish(uuid, job, None)
                     return
@@ -336,6 +409,22 @@ class Engine:
             m.state, m.error, m.next_try_at = "skipped", f"Never posted: {why}.", None
             m.updated_at = iso(self.clock())
             return True
+
+    def _series_check(self, uuid: str, job: JobRecord | None) -> tuple[bool, str]:
+        """The team's tier looked at again right before posting (it may have
+        changed since the meeting was processed): (stopped, tier)."""
+        from publish import series
+
+        with self.store.editing() as state:
+            m = state.meetings.get(uuid)
+            if m is None:
+                tier = series.tier_for_job(job) if job is not None else "unknown"
+                return tier == "never", tier
+            m.series_key = series.series_key(m.topic) or m.series_key
+            tier = series.tier_of(m.topic, m.meeting_id)
+            if tier == "unknown" and not series.series_key(m.topic) and job is not None:
+                tier = series.tier_for_job(job)
+            return _series_verdict(m, tier, self.clock()), tier
 
     def _hold_for_person(self, uuid: str, job: JobRecord) -> bool:
         """Odd meetings wait for a person instead of going up: a final video
@@ -415,6 +504,11 @@ class Engine:
             if m is None:
                 return
             m.updated_at = iso(now)
+            if verdict == "left" and job is not None and job.youtube_status == "published":
+                from publish import series
+
+                if series.tier_of(m.topic, m.meeting_id) == "archive":
+                    verdict = "done"  # archive teams get the full video only: no Shorts are left to post
             if verdict == "done":
                 m.state, m.error, m.posted_at, m.next_try_at = "posted", None, iso(now), None
                 m.hold_cleared = False
@@ -446,6 +540,9 @@ class Engine:
         return any(m.state == "waiting_transcript" and _due(m.deadline_at, now) for m in state.meetings.values())
 
     def _check_zoom(self, now: datetime) -> None:
+        from publish import series
+
+        series.seed_once()  # before the new meetings are stored, so a new team is not seeded as known
         state = self.store.read()
         start_after = parse(state.start_after) or _first_day(now)
         watched = emails.autopilot_emails()
@@ -467,6 +564,7 @@ class Engine:
             except Exception as exc:  # noqa: BLE001 — one account's trouble must not stop the others
                 errors.append(f"{email}: {exc}")
                 listed_all = False
+        fresh: list[str] = []
         with self.store.editing() as state:
             for uuid, (email, row) in found.items():
                 known = state.meetings.get(uuid)
@@ -481,8 +579,10 @@ class Engine:
                     meeting_id=_zoom_id(row.get("meeting_id")),
                     start_time=row.get("start_time"), first_seen_at=iso(now), updated_at=iso(now),
                 )
+                fresh.append(uuid)
             # a listed meeting is never even asked about, so nothing is spent on it
             self._drop_never_post(state, now)
+            self._drop_never_series(state, now, fresh)
             to_look = [m.uuid for m in state.meetings.values()
                        if m.state in ("waiting_recording", "waiting_transcript")]
             to_look += [u for u in [*state.nudges, *state.nudges_later] if u not in to_look]
@@ -579,6 +679,8 @@ class Engine:
         m.topic = (meeting.get("topic") or m.topic).strip()
         m.meeting_id = _zoom_id(meeting.get("id")) or m.meeting_id
         if _stop_if_listed(m, now, never_post.entries()):  # new from the webhook, or renamed in Zoom
+            return
+        if _series_gate(m, now):  # a never or new team stops here, before any CPU is spent
             return
         choice = zoom.choose_files(meeting)
         end = _recording_end(meeting, choice)
@@ -697,10 +799,23 @@ class Engine:
             why = never_post.match(m.topic, m.meeting_id)
             if why is not None:
                 raise ValueError(f"This meeting can't be posted: {why}. Take it off the list first.")
+            was_series_hold = m.series_hold
+            if m.series_hold:
+                from publish import series
+                from publish import settings as publishing
+
+                if (series.tier_of(m.topic, m.meeting_id) == "unknown"
+                        and publishing.current().series_mode == "allow_list"):
+                    if m.series_key:
+                        raise ValueError("Decide the team first: Post this series from now on, or Skip.")
+                    # no team in the name: a team can't be allowed, so the person's "Post it after
+                    # all" is the decision for this one meeting
+                    m.series_cleared = True
+                m.series_hold = False  # the team was decided meanwhile
             if m.state in ("processing", "posted") or uuid in self._posting:
                 raise ValueError(f"This meeting is {m.state.replace('_', ' ')}; there is nothing to retry.")
             job = self.hooks.get_job(m.job_id) if m.job_id else None
-            was_held = (m.error or "").startswith("Held for a person")
+            was_held = (m.error or "").startswith("Held for a person") and not was_series_hold
             m.hold_cleared = False  # a fresh render has not been seen by a person yet
             if job is not None and job.status == JobStatus.DONE and not job.files_deleted:
                 m.state, m.post_attempts = "posting", 0
@@ -723,8 +838,46 @@ class Engine:
                 raise KeyError(uuid)
             if m.state in ("processing", "posting", "posted") or uuid in self._posting:
                 raise ValueError(f"This meeting is {m.state.replace('_', ' ')} and can't be skipped now.")
-            m.state, m.error = "skipped", "Skipped by a person."
+            m.state, m.error, m.series_hold, m.series_cleared = "skipped", "Skipped by a person.", False, False
             return m.model_copy()
+
+    def allow_series(self, key: str) -> list[Meeting]:
+        """Post this team from now on: its held meetings carry on (the same
+        way as Retry). A skipped meeting is never brought back."""
+        from publish import series
+
+        row = series.set_row(key, tier="public")
+        released: list[Meeting] = []
+        with self.store.editing() as state:
+            for m in state.meetings.values():
+                if not m.series_hold or _row_key(m) != row.key:
+                    continue
+                m.series_hold = False
+                job = self.hooks.get_job(m.job_id) if m.job_id else None
+                if job is not None and job.status == JobStatus.DONE and not job.files_deleted:
+                    m.state, m.post_attempts = "posting", 0
+                else:
+                    m.state = "waiting_recording"  # looked at again in the next check, which is due now
+                    if m.uuid not in state.nudges:
+                        state.nudges.append(m.uuid)
+                m.next_try_at, m.error, m.not_found_since = None, None, None
+                m.updated_at = iso(self.clock())
+                released.append(m.model_copy())
+        return released
+
+    def never_series(self, key: str) -> list[Meeting]:
+        """Never post this team: its held meetings are skipped."""
+        from publish import series
+
+        row = series.set_row(key, tier="never")
+        stopped: list[Meeting] = []
+        with self.store.editing() as state:
+            for m in state.meetings.values():
+                if m.series_hold and _row_key(m) == row.key:
+                    m.series_key = row.key
+                    _series_verdict(m, "never", self.clock())
+                    stopped.append(m.model_copy())
+        return stopped
 
     def after_check(self, job_id: str, source: str = "") -> None:
         """A person settled an upload in the posted list: the meeting it held

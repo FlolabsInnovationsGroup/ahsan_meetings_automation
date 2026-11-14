@@ -256,6 +256,12 @@
   .shorts-grid video { aspect-ratio: 9 / 16; object-fit: contain; }
   .shorts-grid figcaption { font-family: 'IBM Plex Sans'; font-size: 12px; margin-top: 5px; line-height: 1.35; }
   .shorts-grid figcaption a { color: var(--ink-muted); font-size: 11.5px; }
+  .topics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .topics-grid figure { margin: 0; }
+  .topics-grid video { aspect-ratio: 16 / 9; object-fit: contain; }
+  .topics-grid figcaption { font-family: 'IBM Plex Sans'; font-size: 12px; margin-top: 5px; line-height: 1.35; }
+  .topics-grid figcaption a { color: var(--ink-muted); font-size: 11.5px; }
+  .yt-row video.yt-preview { display: block; width: 100%; max-width: 360px; aspect-ratio: 16 / 9; margin-top: 8px; background: #000; }
 
   .opt {
     display: flex; align-items: center; gap: 8px; margin-top: 10px;
@@ -457,6 +463,9 @@
   .side-row .state { font-size: 11.5px; color: var(--blue); }
   .side-row .state.attention { color: var(--red); font-weight: 600; }
   .side-row .err { font-size: 11.5px; color: var(--red); margin-top: 2px; overflow-wrap: anywhere; }
+  .team-card { display: grid; gap: 6px; }
+  .team-field { display: grid; grid-template-columns: 96px 1fr; gap: 6px; align-items: center; }
+  .team-field-label { color: var(--ink-muted); font-size: 11.5px; }
   .side-row .acts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 5px; }
   .side-row ul { list-style: none; margin: 4px 0 0; padding: 0; }
   .side-row li { margin: 2px 0; overflow-wrap: anywhere; }
@@ -660,6 +669,11 @@
             <p class="marked-transcript-legend">Every cut of a second or more, labelled with its time in the original recording and why it went.</p>
             <video id="removedVideo" controls preload="none"></video>
           </details>
+          <div class="shorts-wrap" id="topicsWrap">
+            <p class="marked-transcript-label">Topic cuts</p>
+            <p class="marked-transcript-legend">One topic of the meeting as its own video: a short cold open, a title card, then the topic from its start.</p>
+            <div class="topics-grid" id="topicsGrid"></div>
+          </div>
           <div class="shorts-wrap" id="shortsWrap">
             <p class="marked-transcript-label">Shorts</p>
             <p class="marked-transcript-legend">Vertical clips with captions, ready to post.</p>
@@ -675,6 +689,7 @@
             <p class="marked-transcript-label">Publish to YouTube</p>
             <p class="marked-transcript-legend" id="publishLegend"></p>
             <p class="error-note" id="ytNever" role="alert" style="display:none"></p>
+            <p class="hint" id="ytSeriesNote" style="display:none"></p>
             <div class="yt-connect" id="ytConnect"></div>
             <div class="yt-form" id="ytForm">
               <label class="yt-field" for="ytPrivacy">Visibility
@@ -748,6 +763,14 @@
           <p class="side-empty" id="neverPostNote">One per line: a word or phrase from the meeting's title, or a Zoom meeting ID. Whole words only, so "hr" doesn't match "three". Capitals and punctuation don't matter.</p>
         </div>
       </details>
+      <details class="side-section" id="seriesSection">
+        <summary class="side-sub">Teams <span class="side-count" id="seriesCount"></span></summary>
+        <div class="retention pub-set team-panel">
+          <div id="seriesHeld"></div>
+          <p class="side-empty" id="seriesNote">Open to load.</p>
+          <div id="seriesList"></div>
+        </div>
+      </details>
       <details class="side-section" id="channelCheckSection">
         <summary class="side-sub">Channel check <span class="side-count" id="channelCheckCount"></span></summary>
         <div class="retention channel-check">
@@ -793,6 +816,37 @@
             <button type="button" class="small-btn" id="costsSave">Save</button>
             <p class="side-empty" id="costsSaveNote"></p>
           </details>
+        </div>
+      </details>
+      <details class="side-section" id="viewsSection">
+        <summary class="side-sub">Views <span class="side-count" id="viewsCount"></span></summary>
+        <div class="retention costs">
+          <div class="retention-row">
+            <select id="viewsRange" aria-label="Period">
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="custom">Custom</option>
+            </select>
+            <span id="viewsCustomRow" hidden>
+              <input type="number" id="viewsCustom" min="1" max="3650" step="1" value="30" inputmode="numeric" aria-label="Number of days" />
+              <span>days</span>
+              <button type="button" class="small-btn" id="viewsApply">Apply</button>
+            </span>
+          </div>
+          <div class="retention-row" id="viewsTabs" role="tablist">
+            <button type="button" class="small-btn" data-by="video" aria-pressed="true">By video</button>
+            <button type="button" class="small-btn" data-by="format" aria-pressed="false">By format</button>
+            <button type="button" class="small-btn" data-by="team" aria-pressed="false">By team</button>
+          </div>
+          <p class="side-empty" id="viewsNote"></p>
+          <div id="viewsBody"><p class="side-empty">Open to load.</p></div>
+          <div id="viewsBest" hidden></div>
+          <div class="retention-row">
+            <span class="side-empty" id="viewsPulled"></span>
+            <button type="button" class="small-btn" id="viewsPull">Pull now</button>
+          </div>
+          <div id="viewsReconnect"></div>
         </div>
       </details>
       <details class="side-section" id="postedSection">
@@ -946,6 +1000,8 @@ const removedSummary = document.getElementById("removedSummary");
 const removedVideo = document.getElementById("removedVideo");
 const shortsWrap = document.getElementById("shortsWrap");
 const shortsGrid = document.getElementById("shortsGrid");
+const topicsWrap = document.getElementById("topicsWrap");
+const topicsGrid = document.getElementById("topicsGrid");
 const slugEl = document.getElementById("slug");
 const markedTranscriptWrap = document.getElementById("markedTranscriptWrap");
 const markedTranscriptEl = document.getElementById("markedTranscript");
@@ -1228,6 +1284,7 @@ async function launch(request) {
   resultEl.classList.remove("visible");
   removedWrap.classList.remove("visible");
   shortsWrap.classList.remove("visible");
+  topicsWrap.classList.remove("visible");
   markedTranscriptWrap.classList.remove("visible");
   picksEl.classList.remove("visible");
   chaptersWrap.classList.remove("visible");
@@ -1737,6 +1794,44 @@ function renderResults(job) {
   });
   shortsWrap.classList.toggle("visible", shorts.length > 0);
   if (shorts.length) loadShortTitles(id, has("shorts/shorts.json"));
+
+  topicsGrid.textContent = "";
+  const cuts = Object.keys(arts).filter((n) => /^topic\/topic_\d+\.mp4$/.test(n) && has(n)).sort();
+  cuts.forEach((name) => {
+    const fig = document.createElement("figure");
+    fig.dataset.name = name;
+    const v = document.createElement("video");
+    v.controls = true;
+    v.preload = "metadata";
+    v.src = artifactUrl(id, name);
+    fig.appendChild(v);
+    const cap = document.createElement("figcaption");
+    cap.textContent = name.replace("topic/", "");
+    cap.appendChild(document.createElement("br"));
+    addLink(cap, artifactUrl(id, name, true), "download", { download: true });
+    fig.appendChild(cap);
+    topicsGrid.appendChild(fig);
+  });
+  topicsWrap.classList.toggle("visible", cuts.length > 0);
+  if (cuts.length) loadTopicTitles(id);
+}
+
+// The cut's own title from the render's manifest, when the page can read it (a nicety).
+async function loadTopicTitles(jobId) {
+  try {
+    const res = await fetch(`/jobs/${jobId}/publish`);
+    if (!res.ok) return;
+    const options = await res.json();
+    (options.topics || []).forEach((t) => {
+      const fig = topicsGrid.querySelector(`figure[data-name="topic/topic_${String(t.index).padStart(2, "0")}.mp4"]`);
+      if (!fig || !t.title) return;
+      const title = document.createElement("div");
+      title.textContent = t.title;
+      fig.querySelector("figcaption").prepend(title);
+    });
+  } catch (e) {
+    /* titles are a nicety */
+  }
 }
 
 async function loadShortTitles(jobId, available) {
@@ -1895,6 +1990,66 @@ let publishOptions = null; // the last GET /jobs/{id}/publish, kept current whil
 let publishRows = []; // one per video that can be published: { key, kind, index, check, title, desc, ... }
 let publishTimer = null;
 let ytDisconnectBtn = null;
+
+// YouTube permissions. Which permission each extra needs is decided on the server
+// (GET /youtube/status: granted, missing, features, reconnect_for); this keeps the
+// last answer and says "Reconnect to turn on ..." for a feature that is not granted.
+// An older server without those fields counts as "not granted".
+let ytStatusCache = null;
+const YT_FEATURE_WORDS = {
+  captions: "caption tracks", playlists: "playlists", edit: "changing videos after upload",
+  analytics: "watch time and view analytics", thumbnails: "thumbnails", translations: "translated titles",
+};
+
+function ytRememberStatus(status) {
+  if (status && typeof status === "object") ytStatusCache = status;
+}
+
+async function ytRefreshStatus() {
+  try {
+    const res = await fetch("/youtube/status");
+    if (res.ok) ytRememberStatus(await res.json());
+  } catch (e) {
+    /* keep the last answer */
+  }
+  return ytStatusCache;
+}
+
+function ytFeatureGranted(feature) {
+  const st = ytStatusCache || (publishOptions && publishOptions.youtube) || null;
+  if (!st || !st.connected) return false;
+  if (st.features && typeof st.features[feature] === "boolean") return st.features[feature];
+  if (Array.isArray(st.missing)) return !st.missing.includes(feature);
+  return feature === "thumbnails" || feature === "translations" ? true : false;
+}
+
+function ytReconnectHref() {
+  return "/youtube/connect?return_to=" + encodeURIComponent(location.pathname + location.search);
+}
+
+// A small note "Reconnect to turn on <feature>" with the link, or null when granted.
+function ytReconnectNote(feature) {
+  if (ytFeatureGranted(feature)) return null;
+  const note = sideEl("div", "hint", "Reconnect to turn on " + (YT_FEATURE_WORDS[feature] || feature) + ". ");
+  const link = sideEl("a", "", "Reconnect");
+  link.href = ytReconnectHref();
+  note.appendChild(link);
+  return note;
+}
+
+// The channel line's permission words: "upload, read, edit, analytics", or what is missing.
+function ytPermissionText(yt) {
+  const has = (f) => ytFeatureGranted(f);
+  const have = ["upload", "read"];
+  if (has("edit")) have.push("edit");
+  if (has("analytics")) have.push("analytics");
+  const missing = [];
+  if (!has("edit")) missing.push("edit (caption tracks, playlists)");
+  if (!has("analytics")) missing.push("analytics");
+  let text = "Permissions: " + have.join(", ");
+  if (missing.length) text += ". Missing: " + missing.join(", ");
+  return text;
+}
 // Bumped whenever the panel is reset (a new job starts), so a request that was
 // already in flight for the old job can tell its answer is stale.
 let publishGen = 0;
@@ -1953,17 +2108,29 @@ function buildPublish(jobId) {
   publishWrap.classList.add("visible");
   publishLegend.textContent = o.files_deleted
     ? "The files were removed from the server. The YouTube links stay here."
-    : "Shorts go up first, then the full video, whose description lists the shorts. Public videos on the release plan go up the other way round: the full video first.";
+    : "Shorts go up first, then the full video, whose description lists the shorts. Public videos on the release plan go up the other way round: the full video is uploaded first, then its topic cut (which goes public first and tells subscribers), then the Shorts.";
   if (o.release && o.release.timezone) teamZone = o.release.timezone;
   renderConnect(jobId);
   // a meeting on the never-post list can't be posted: say so in red (the server refuses it too)
   const ytNever = document.getElementById("ytNever");
   ytNever.textContent = o.never_post ? `On the never-post list: ${o.never_post}. It can't be posted.` : "";
   ytNever.style.display = o.never_post ? "block" : "none";
+  // a new or archive team can still be posted by hand: say what the autopilot would do with it
+  const ytSeriesNote = document.getElementById("ytSeriesNote");
+  const team = o.series && !o.never_post ? o.series : null;
+  let teamNote = "";
+  if (team && team.tier === "unknown" && team.key) {
+    teamNote = `"${team.label}" is a new team, not in the Teams list yet. You can post this by hand; the autopilot would wait for you to decide the team.`;
+  } else if (team && team.tier === "archive") {
+    teamNote = `"${team.label}" is an archive team: the autopilot posts its full meeting unlisted only.`;
+  }
+  ytSeriesNote.textContent = teamNote;
+  ytSeriesNote.style.display = teamNote ? "block" : "none";
 
   ytList.textContent = "";
   publishRows = [];
-  const posted = o.full.status === "published" || o.shorts.some((s) => s.status === "published");
+  const posted = o.full.status === "published" || o.shorts.some((s) => s.status === "published")
+    || (o.topics || []).some((t) => t.status === "published");
   if (o.full.available || o.full.status) {
     addPublishRow("full", "full", o.full, {
       label: "Full video",
@@ -1976,6 +2143,18 @@ function buildPublish(jobId) {
       label: `Short ${s.index}`,
       index: s.index,
       meta: s.at ? `starts at ${s.at} in the full video` : s.available ? "not in the cleaned meeting" : "",
+    });
+  });
+  (o.topics || []).forEach((t) => {
+    if (!t.available && !t.status) return;
+    addPublishRow(`topic:${t.index}`, "topic", t, {
+      label: `Topic cut ${t.index}`,
+      index: t.index,
+      meta: [t.duration_s ? `about ${Math.max(1, Math.round(t.duration_s / 60))} min` : "",
+        t.at ? `starts at ${t.at} in the full video` : ""].filter(Boolean).join(" · "),
+      video: t.available && t.status !== "published" ? `/jobs/${encodeURIComponent(jobId)}/artifacts/topic/topic_${String(t.index).padStart(2, "0")}.mp4` : "",
+      front: t.front_door ? "Goes public first and tells subscribers. The full meeting follows a little later, without a notification, and this cut links to it." : "",
+      note: "The full meeting's link is added to this description when it is uploaded.",
     });
   });
   publishRows.forEach((r) => {
@@ -1991,7 +2170,7 @@ function buildPublish(jobId) {
       // everything left is ticked; never what the posted list blocks
       // (a Short the release plan skipped stays unticked: a person chooses it)
       r.check.checked = !!r.item.available && r.item.status !== "published" && r.item.status !== "skipped"
-        && !r.item.blocked;
+        && !r.item.blocked && r.item.ok !== false; // a cut whose suggested words fail a check starts unticked
     }
   });
 
@@ -2027,7 +2206,15 @@ function renderConnect(jobId) {
     }
   } else {
     youtubeSignInError = "";
-    text.textContent = "Channel: " + (yt.channel_title || "connected");
+    ytRememberStatus(yt);
+    text.textContent = "Channel: " + (yt.channel_title || "connected") + ". " + ytPermissionText(yt);
+    if (!(yt.features && yt.features.captions && yt.features.playlists && yt.features.edit && yt.features.analytics)) {
+      const re = document.createElement("a");
+      re.className = "small-btn";
+      re.textContent = "Reconnect";
+      re.href = ytReconnectHref();
+      ytConnect.appendChild(re);
+    }
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "small-btn";
@@ -2095,9 +2282,26 @@ function addPublishRow(key, kind, item, opts) {
     note.textContent = opts.note;
     details.appendChild(note);
   }
+  let front = null;
+  if (opts.front) {
+    // a topic cut that goes public first and tells subscribers (the release plan's front door)
+    front = document.createElement("p");
+    front.className = "yt-note";
+    front.textContent = opts.front;
+    row.insertBefore(front, title);
+  }
+  let preview = null;
+  if (opts.video) {
+    preview = document.createElement("video");
+    preview.className = "yt-preview";
+    preview.controls = true;
+    preview.preload = "none";
+    preview.src = opts.video;
+    row.insertBefore(preview, title);
+  }
   row.appendChild(err);
   ytList.appendChild(row);
-  const entry = { key, kind, index: opts.index, item, check, title, desc, details, chip, err, dirty: false };
+  const entry = { key, kind, index: opts.index, item, check, title, desc, details, chip, err, dirty: false, front, preview };
   const markEdited = () => { entry.dirty = true; };
   title.addEventListener("input", markEdited);
   desc.addEventListener("input", markEdited);
@@ -2110,7 +2314,9 @@ function refreshPublishRows() {
   const o = publishOptions;
   const canEdit = o.youtube.configured && o.youtube.connected && !o.files_deleted && !o.busy;
   publishRows.forEach((r) => {
-    const item = r.kind === "full" ? o.full : o.shorts.find((s) => s.index === r.index);
+    const item = r.kind === "full" ? o.full
+      : r.kind === "topic" ? (o.topics || []).find((t) => t.index === r.index)
+      : o.shorts.find((s) => s.index === r.index);
     r.item = item;
     const posted = item.status === "published";
     const editable = canEdit && item.available && !posted && !item.blocked;
@@ -2118,6 +2324,8 @@ function refreshPublishRows() {
     if (posted || item.blocked) r.check.checked = false;
     r.title.disabled = r.desc.disabled = !editable;
     r.title.hidden = r.details.hidden = posted || !item.available || !!item.blocked;
+    if (r.preview) r.preview.hidden = posted || !item.available || !!item.blocked;
+    if (r.front) r.front.hidden = posted || !item.available || !!item.blocked;
     setChip(r, item);
   });
   ytMore.classList.toggle("visible", !o.files_deleted && !o.busy);
@@ -2196,12 +2404,14 @@ async function publishNow() {
   const picked = pickedRows();
   if (!currentJobId || !picked.length) return;
   clearYtError();
-  const body = { privacy: ytPrivacy.value, delete_after: ytDelete.checked, shorts: [] };
+  const body = { privacy: ytPrivacy.value, delete_after: ytDelete.checked, shorts: [], topics: [] };
   if (ytPrivacy.value === "public" && ytRightAway.checked) body.right_away = true;
   picked.forEach((r) => {
     if (r.kind === "full") {
       body.title = r.title.value;
       body.description = r.desc.value;
+    } else if (r.kind === "topic") {
+      body.topics.push({ index: r.index, title: r.title.value, description: r.desc.value });
     } else {
       body.shorts.push({ index: r.index, title: r.title.value, description: r.desc.value });
     }
@@ -2281,6 +2491,7 @@ function applyJobToPublish(job) {
   const o = publishOptions;
   if (!o) return;
   const states = job.youtube_shorts || {};
+  const cutStates = job.youtube_topics || {};
   Object.assign(o.full, {
     status: job.youtube_status, progress: job.youtube_progress, url: job.youtube_url, error: job.youtube_error,
   });
@@ -2289,8 +2500,14 @@ function applyJobToPublish(job) {
     Object.assign(s, { status: st.status || null, progress: st.progress || 0, url: st.url || null, error: st.error || null,
       publish_at: st.publish_at || null });
   });
+  (o.topics || []).forEach((t) => {
+    const st = cutStates[String(t.index)] || {};
+    Object.assign(t, { status: st.status || null, progress: st.progress || 0, url: st.url || null, error: st.error || null,
+      publish_at: st.publish_at || null });
+  });
   o.files_deleted = !!job.files_deleted;
-  o.busy = UPLOAD_WAITING.includes(job.youtube_status) || Object.values(states).some((st) => UPLOAD_WAITING.includes(st.status));
+  o.busy = UPLOAD_WAITING.includes(job.youtube_status) || Object.values(states).some((st) => UPLOAD_WAITING.includes(st.status))
+    || Object.values(cutStates).some((st) => UPLOAD_WAITING.includes(st.status));
   refreshPublishRows();
 }
 
@@ -2385,6 +2602,7 @@ async function loadSide() {
     const ap = apRes.ok ? await apRes.json().catch(() => null) : null;
     if (ap) renderAutopilot(ap);
     const posted = await fetch("/posted").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    await loadFollowUps();
     if (posted) renderPosted(posted);
     const jobs = await fetch(`/jobs?limit=${SIDE_MAX_JOBS}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     if (jobs) renderJobs(jobs);
@@ -2511,6 +2729,7 @@ function renderChannelCheck(r) {
   const leaks = (r.listed || []).length;
   document.getElementById("channelCheckCount").textContent = leaks ? `· ${leaks} to fix` : "";
   channelCheckBody.appendChild(channelCheckList("Public, unlisted or scheduled videos from never-post meetings", r.listed || [], true, true));
+  channelCheckBody.appendChild(channelCheckList("Public videos from teams meant to be unlisted (archive)", r.archive_public || [], false, false));
   channelCheckBody.appendChild(channelCheckList("Videos the app didn't upload", r.unknown || [], false, false));
 }
 
@@ -2574,6 +2793,86 @@ const PUB_GROUPS = [
     ["category_id", "select", "YouTube category", "Where YouTube files the videos.", PUB_CATEGORIES],
     ["language", "text", "Language code", "For example en or en-GB."],
   ]],
+  ["Shorts look", [
+    ["shorts_style", "select", "Shorts style", "Classic (today's), new (hook card, cropped slides, bigger captions, HD, levelled sound), or alternate (one of each per meeting, logged, so the two can be compared).",
+      [["alternate", "Alternate new and classic (recommended)"], ["new", "New"], ["classic", "Classic"]]],
+    ["shorts_hook_seconds", "number", "Hook card seconds", "How long the on-screen hook shows, large, from the first frame; 0 = none (new style)."],
+    ["shorts_top_text", "select", "Text at the top after the hook", "A small title at the top for the rest of the Short, or nothing (new style).",
+      [["title", "Small title"], ["none", "Nothing"]]],
+    ["shorts_end_line", "text", "End line", "Shown over the last 2.5 s instead of an end card; adds no length. Up to 40 characters, no < or >; empty = none (new style)."],
+    ["shorts_caption_px", "number", "Caption size (pixels)", "Caption size on the 1080-wide Short, 56-110 (new style)."],
+    ["shorts_caption_max_chars", "number", "Longest caption chunk (characters)", "16-40; captions never wrap to more than 2 lines (new style)."],
+    ["shorts_layout", "select", "Picture layout", "Auto crops to the slide or speaker, chosen per clip from the picture; fit keeps the whole meeting frame, as today (new style).",
+      [["auto", "Auto crop"], ["fit", "Whole frame"]]],
+    ["shorts_screen_zoom", "select", "Screen shares", "The whole slide 1080 wide, or a closer 960-wide crop (bigger text, cuts slide edges) (new style).",
+      [["whole_slide", "Whole slide"], ["zoom", "Zoom in"]]],
+    ["shorts_speaker_layout", "select", "Speaker view", "Fill the whole vertical frame, or a 4:5 panel over a blurred copy (new style).",
+      [["full", "Fill the frame"], ["panel", "Panel"]]],
+    ["shorts_hd", "check", "High-quality Shorts", "About 1.5x the render time, still about a minute per Short (new style)."],
+    ["shorts_trim_pauses", "check", "Shorten pauses", "Shorten pauses inside a Short (new style)."],
+    ["shorts_max_pause_s", "number", "Longest pause (seconds)", "A pause longer than this (0.3-2) is shortened to 0.2 s (new style)."],
+  ]],
+  ["Sound", [
+    ["shorts_loudness", "check", "Level the sound of Shorts", "Level each Short's sound to the loudness target (new style)."],
+    ["full_loudness", "check", "Level the sound of full videos", "Level the meeting sound to the loudness target (intro and outro keep their own level)."],
+    ["loudness_target_lufs", "number", "Loudness target (LUFS)", "-23 to -10. YouTube plays videos at about -14 and turns louder ones down."],
+    ["audio_denoise", "check", "Reduce background noise", "Light noise reduction on new-style Shorts (Zoom already reduces noise; try it on a few first)."],
+  ]],
+  ["Full video look", [
+    ["full_hd", "check", "High-quality full videos", "About 2x the render time (a 2-hour meeting can take over an hour longer)."],
+    ["full_hook_overlay", "check", "Topic over the start of the highlights reel", "Show the topic large over the first 3 s of the highlights reel at the start of the full video."],
+  ]],
+  ["Thumbnails", [
+    ["thumbnail_mode", "select", "Custom thumbnails for full videos", "Off: YouTube picks. Test: half get ours, half YouTube's (fair split per team, recorded per video). Custom: all get ours.",
+      [["test", "Test: half and half (recommended)"], ["custom", "Custom for all"], ["off", "Off"]]],
+    ["thumbnail_shorts", "check", "Thumbnails on Shorts too", "Set a custom thumbnail on Shorts once YouTube has finished processing them (new in the API, unproven)."],
+    ["thumbnail_faces", "check", "Allow faces", "Allow a camera or gallery frame (people's faces) when the moment has no shared screen; off = a text card in the team's colour."],
+    ["thumbnail_label", "check", "Add a short label", "A 2-5 word label (from the checked title or hook) and the team chip on the thumbnail."],
+  ]],
+  ["Caption tracks", [
+    ["captions_full", "check", "Caption track for full videos", "Our own English caption track from the kept transcript. Needs the reconnect; 400 quota units each."],
+    ["captions_shorts", "check", "Caption track for Shorts", "Shorts already have burned-in captions; 400 units each."],
+  ]],
+  ["Translations", [
+    ["translations", "check", "Translate titles and descriptions", "Sent with the upload, one AI call per video. YouTube's rules require your consent to add translations."],
+    ["translation_languages", "text", "Languages", "1-10 codes separated by commas (es, pt, hi, id, ja, de = Spanish, Portuguese, Hindi, Indonesian, Japanese, German); not the video's own language. Review after 8 weeks."],
+  ]],
+  ["Playlists", [
+    ["playlists", "check", "Team playlists for full videos", "Each public full video goes into its team's playlist, created on first use, added when the video goes public. Needs the reconnect; 50 units per add."],
+    ["playlist_shorts", "check", "Team Shorts playlists", "Also keep a Shorts playlist per team."],
+    ["playlist_cuts", "check", "Team topic-cut playlists", "Also keep a topic-cuts playlist per team."],
+    ["playlist_full_template", "text", "Full-meetings playlist name", "Must contain {series} once (the team name); no < or >."],
+    ["playlist_shorts_template", "text", "Shorts playlist name", "Must contain {series} once (the team name); no < or >."],
+    ["playlist_cuts_template", "text", "Topic-cuts playlist name", "Must contain {series} once (the team name); no < or >."],
+  ]],
+  ["Teams", [
+    ["series_mode", "select", "Teams that post", "Allow list: a meeting from a team that isn't in the Teams list waits for you. Allow all: every team posts unless it is on the never-post list.",
+      [["allow_list", "Only teams on the list (recommended)"], ["allow_all", "Every team"]]],
+    ["series_archive_privacy", "select", "Archive teams", "The full meeting uploaded unlisted (no Shorts, no topic cut, no playlists), or nothing processed at all.",
+      [["unlisted", "Upload unlisted"], ["skip", "Skip"]]],
+  ]],
+  ["Topic cuts", [
+    ["topic_cuts", "check", "Make topic cuts", "A 5-20 minute single-topic video from the meeting's best chapter, posted on the release plan."],
+    ["topic_cuts_per_meeting", "number", "Topic cuts per meeting", "0-3; 0 = none. Each adds a few minutes of rendering."],
+    ["topic_min_minutes", "number", "Shortest cut (minutes)", "2-30, less than the longest."],
+    ["topic_max_minutes", "number", "Longest cut (minutes)", "5-40; also caps the render time."],
+    ["topic_min_score", "number", "Lowest best-moment score", "0-10. Only make a cut when its best moment scored at least this (the AI's score)."],
+    ["topic_cold_open", "check", "Open on the best moment", "The cut opens on its best 15-40 seconds, then a title card, then the topic from its start."],
+    ["topic_front_door", "check", "Topic cut goes first", "The topic cut goes public first and tells subscribers; the full meeting follows a few hours later without a notification."],
+    ["shorts_link_target", "select", "Where Shorts link to", "A Short whose clip is inside a topic cut links to the cut; otherwise to the full meeting at that time.",
+      [["topic", "The topic cut when there is one"], ["full", "Always the full meeting"]]],
+  ]],
+  ["Views", [
+    ["views_pull", "check", "Read view counts daily", "Once a day, read the view, like and comment counts of the channel's videos (1 quota unit per 50 videos)."],
+    ["views_include_other", "check", "Include older videos", "Also count videos the app didn't upload, so older hits show as a baseline."],
+    ["views_watch_time", "check", "Watch time", "Engaged views, watch time and average view duration per video. Works after you reconnect YouTube with the analytics permission."],
+    ["views_rankings", "check", "Rankings and suggestions", "Show which teams, topics, formats and Short styles do best. Turn on only after YouTube accepts the derived-metrics amendment."],
+  ]],
+  ["YouTube quota", [
+    ["quota_daily_units", "number", "Daily quota (units)", "1000-1000000: the Google Cloud project's daily YouTube quota (shared units, not the upload calls)."],
+    ["quota_reserve_units", "number", "Quota kept in reserve (units)", "0-9000 and below the daily quota. Kept free each day for read-backs, the channel check and recovering cut-off uploads; thumbnails, captions and playlists stop when only this much is left."],
+    ["extras_retry_days", "number", "Days a waiting extra keeps retrying", "1-30. How long a waiting thumbnail, caption track or playlist add retries (or waits for the reconnect) before it is shown as given up."],
+  ]],
 ];
 const pubSection = document.getElementById("pubSection");
 const pubForm = document.getElementById("pubForm");
@@ -2628,14 +2927,56 @@ function pubBuild() {
     if (!pubDefaults) return;
     // The links, language and category are the owner's own content, not a
     // recommendation, so resetting the schedule must not wipe them.
-    const keep = ["links_text", "language", "category_id"];
+    const keep = ["links_text", "language", "category_id", "series_mode", "translation_languages", "shorts_end_line",
+      "playlist_full_template", "playlist_shorts_template", "playlist_cuts_template"];
     pubFill(Object.fromEntries(Object.entries(pubDefaults).filter(([k]) => !keep.includes(k))));
     pubStatus.textContent = "Recommended settings filled in (your links, language and category are kept). Press Save to keep them.";
   });
 }
 
+// EP3: under the Caption tracks, Playlists and Views groups, "Reconnect to turn on ..."
+// when that permission is missing; and today's quota line at the top of the quota group.
+// Safe to call again (it removes its own earlier lines first); never throws.
+let pubDecorateGen = 0;
+async function pubDecorate() {
+  const gen = ++pubDecorateGen;
+  try {
+    const heads = {};
+    pubForm.querySelectorAll("h4").forEach((h) => { heads[h.textContent] = h; });
+    await ytRefreshStatus();
+    if (gen !== pubDecorateGen) return;
+    // Only the newest call writes: collect everything first, then clear and append once.
+    let quotaLine = null;
+    const qh = heads["YouTube quota"];
+    if (qh) {
+      const res = await fetch("/publishing/quota");
+      if (gen !== pubDecorateGen) return;
+      if (res.ok) {
+        const q = await res.json();
+        if (gen !== pubDecorateGen) return;
+        if (typeof q.used === "number" && typeof q.daily_units === "number") {
+          quotaLine = sideEl("p", "hint pub-ep3 pub-quota-line",
+            `Used today: ${q.used.toLocaleString("en-US")} of ${q.daily_units.toLocaleString("en-US")} units ` +
+            `(${(q.reserve_units || 0).toLocaleString("en-US")} kept free)` +
+            (q.exhausted_until ? ". YouTube said the quota is used up; extras wait until it resets." : ""));
+        }
+      }
+    }
+    pubForm.querySelectorAll(".pub-ep3").forEach((el) => el.remove());
+    [["Caption tracks", "captions"], ["Playlists", "playlists"], ["Views", "analytics"]].forEach(([heading, feature]) => {
+      const h = heads[heading];
+      const note = h ? ytReconnectNote(feature) : null;
+      if (note) { note.classList.add("pub-ep3"); h.after(note); }
+    });
+    if (quotaLine) qh.after(quotaLine);
+  } catch (e) {
+    /* a server without these routes: show nothing extra */
+  }
+}
+
 async function loadPublishing() {
   if (!pubStatus) pubBuild();
+  pubDecorate();
   let res, body;
   try {
     res = await fetch("/publishing/settings");
@@ -2712,7 +3053,7 @@ async function loadRelease() {
   }
   rows.forEach((b) => {
     const row = sideEl("div", "side-row");
-    row.appendChild(sideEl("div", "what", `${b.at_team} · ${b.kind === "full" ? "Full video" : "Short"}`));
+    row.appendChild(sideEl("div", "what", `${b.at_team} · ${b.kind === "full" ? "Full video" : b.kind === "topic" ? "Topic cut" : "Short"}`));
     row.appendChild(sideEl("div", "when",
       [b.meeting || "a meeting", b.notify ? "tells subscribers" : "no notification"].join(" · ")));
     releaseList.appendChild(row);
@@ -2798,7 +3139,15 @@ function renderAutopilot(ap) {
     else if (m.error) row.appendChild(sideEl("div", "err", m.error));
     const acts = sideEl("div", "acts");
     // nothing on the never-post list can go up with one click: take it off the list first
-    if ((m.state === "needs_attention" || m.state === "skipped") && !m.never_post) {
+    if (m.series_hold && m.series_key && m.state === "needs_attention" && !m.never_post) {
+      // a new team: the decision is about the team, not this one meeting
+      sideButton(acts, "Post this series from now on", () => sideAction("/series/allow", { key: m.series_key }));
+      sideButton(acts, "Never post this team", () => {
+        if (window.confirm(`Never post the team "${m.series_label || m.topic || "this team"}"? Its waiting meetings are skipped.`)) {
+          sideAction("/series/never", { key: m.series_key });
+        }
+      });
+    } else if ((m.state === "needs_attention" || m.state === "skipped") && !m.never_post) {
       // a held meeting's message says "Post it after all", so its button says the same
       const held = m.state === "needs_attention" && (m.error || "").startsWith("Held for a person");
       sideButton(acts, m.state === "skipped" || held ? "Post it after all" : "Retry", () =>
@@ -2836,12 +3185,50 @@ function addScheduledNote(li, entry) {
   }
 }
 
+// EP3: what each follow-up (thumbnail, caption track, playlist) did, one line under
+// its video, with a Retry button for a skipped or given-up one. Text only.
+let followUps = {};
+
+function followUpFor(url) {
+  const m = typeof url === "string" ? url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/)([\w-]{6,})/) : null;
+  return m ? followUps[m[1]] || null : null;
+}
+
+function addFollowUpLines(li, url) {
+  const row = followUpFor(url);
+  if (!row || !Array.isArray(row.tasks) || !row.tasks.length) return;
+  row.tasks.forEach((t) => {
+    const line = sideEl("div", "when follow-up", String(t.text || ""));
+    if (t.can_retry && t.id) {
+      line.append(" ");
+      sideButton(line, "Retry", async () => {
+        try {
+          const res = await fetch(`/publishing/extras/${encodeURIComponent(t.id)}/retry`, { method: "POST" });
+          if (res.ok) await loadSide();
+        } catch (e) { /* try again later */ }
+      });
+    }
+    li.appendChild(line);
+  });
+}
+
+async function loadFollowUps() {
+  try {
+    const res = await fetch("/publishing/extras");
+    const body = res.ok ? await res.json() : null;
+    followUps = {};
+    ((body && body.videos) || []).forEach((v) => { if (v && v.video_id) followUps[v.video_id] = v; });
+  } catch (e) {
+    followUps = {};
+  }
+}
+
 function renderPosted(data) {
   if (data.timezone) teamZone = data.timezone;
   sideChecks.textContent = "";
   (data.needs_check || []).forEach((c) => {
     const row = sideEl("div", "side-row");
-    const what = c.kind === "full" ? "the full video" : `short ${c.short}`;
+    const what = c.kind === "full" ? "the full video" : c.kind === "topic" ? `topic cut ${c.short}` : `short ${c.short}`;
     const cutOff = c.state === "interrupted";
     row.appendChild(sideEl("div", "what",
       `${cutOff ? "Cut off mid-upload" : "Check YouTube"}: ${what} of ${c.meeting || "a meeting"}`));
@@ -2892,7 +3279,9 @@ function renderPosted(data) {
     });
     const summary = sideEl("summary");
     summary.appendChild(sideEl("div", "what", g.meeting || "(no title)"));
-    const count = [g.full ? "full video" : "", g.shorts.length ? `${g.shorts.length} Short${g.shorts.length === 1 ? "" : "s"}` : ""]
+    const cuts = g.topics || [];
+    const count = [g.full ? "full video" : "", cuts.length ? `${cuts.length} topic cut${cuts.length === 1 ? "" : "s"}` : "",
+      g.shorts.length ? `${g.shorts.length} Short${g.shorts.length === 1 ? "" : "s"}` : ""]
       .filter(Boolean).join(" + ");
     summary.appendChild(sideEl("div", "when", [g.meeting_date || sideTime(g.last_posted_at), count].filter(Boolean).join(" · ")));
     row.appendChild(summary);
@@ -2902,13 +3291,23 @@ function renderPosted(data) {
       li.appendChild(sideEl("span", "tag-full", "FULL"));
       sideLink(li, g.full.url, g.full.title || "Full video");
       addScheduledNote(li, g.full);
+      addFollowUpLines(li, g.full.url);
       list.appendChild(li);
     }
+    cuts.forEach((t) => {
+      const li = sideEl("li");
+      li.append(`Topic cut ${t.topic}: `);
+      sideLink(li, t.url, t.title || "topic cut");
+      addScheduledNote(li, t);
+      addFollowUpLines(li, t.url);
+      list.appendChild(li);
+    });
     g.shorts.forEach((s) => {
       const li = sideEl("li");
       li.append(`Short ${s.short}: `);
       sideLink(li, s.url, s.title || "short");
       addScheduledNote(li, s);
+      addFollowUpLines(li, s.url);
       list.appendChild(li);
     });
     row.appendChild(list);
@@ -3262,9 +3661,421 @@ urlInput.addEventListener("keydown", (e) => {
   document.getElementById("costsSave").addEventListener("click", save);
   if (section.open) { load(); loadEditor(); }
 })();
+(function viewsSection() {
+  const section = document.getElementById("viewsSection");
+  const select = document.getElementById("viewsRange");
+  const custom = document.getElementById("viewsCustom");
+  const body = document.getElementById("viewsBody");
+  const note = document.getElementById("viewsNote");
+  const pulled = document.getElementById("viewsPulled");
+  const reconnect = document.getElementById("viewsReconnect");
+  const tabs = Array.from(document.querySelectorAll("#viewsTabs button"));
+  const DAYS_KEY = "hc_views_days";
+  const BY_KEY = "hc_views_by";
+  const FORMAT_WORDS = { full: "Full", short: "Short", topic: "Topic cut", other: "Other" };
+  let by = "video";
+  try { const b = localStorage.getItem(BY_KEY); if (["video", "format", "team"].includes(b)) by = b; } catch (e) { /* default */ }
+
+  function num(n) { return n === null || n === undefined ? "" : Number(n).toLocaleString(); }
+  function when(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  function mins(s) { return s === null || s === undefined ? "" : Math.floor(s / 60) + ":" + String(Math.round(s % 60)).padStart(2, "0"); }
+
+  try { section.open = localStorage.getItem("hc_side_viewsSection") === "open"; } catch (e) { /* closed */ }
+  let saved = "30";
+  try { saved = localStorage.getItem(DAYS_KEY) || "30"; } catch (e) { /* default */ }
+  if (["7", "30", "90"].includes(saved)) select.value = saved;
+  else { select.value = "custom"; custom.value = /^\d+$/.test(saved) ? saved : "30"; }
+  syncCustom();
+  syncTabs();
+
+  function syncCustom() { document.getElementById("viewsCustomRow").hidden = select.value !== "custom"; }
+  function syncTabs() { tabs.forEach((t) => t.setAttribute("aria-pressed", t.dataset.by === by ? "true" : "false")); }
+  function chosenDays() {
+    if (select.value !== "custom") return Number(select.value);
+    const n = Number(custom.value);
+    return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : null;
+  }
+
+  function cell(tag, text, cls) { return sideEl(tag, cls || "", text); }
+  function table(headers) {
+    const wrap = sideEl("div", "views-scroll");
+    wrap.style.overflowX = "auto";
+    const t = document.createElement("table");
+    t.className = "cost-table";
+    const head = document.createElement("tr");
+    headers.forEach((h) => head.appendChild(cell("th", h)));
+    const thead = document.createElement("thead");
+    thead.appendChild(head);
+    t.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    t.appendChild(tbody);
+    wrap.appendChild(t);
+    return { wrap, tbody };
+  }
+  function addRow(tbody, cells) {
+    const tr = document.createElement("tr");
+    cells.forEach((c) => {
+      if (c instanceof Node) { const td = document.createElement("td"); td.appendChild(c); tr.appendChild(td); }
+      else tr.appendChild(cell("td", c));
+    });
+    tbody.appendChild(tr);
+  }
+
+  function renderVideos(r, watch) {
+    const heads = ["Video", "Format", "Team", "Public", "Views", "Total", "Likes", "Comments", "Short style"];
+    if (watch) heads.push("Engaged", "Minutes", "Avg length", "Avg %", "Subs");
+    const t = table(heads);
+    r.videos.filter((v) => v.has_data).forEach((v) => {
+      const link = sideEl("a", "", v.title);
+      link.href = "https://www.youtube.com/watch?v=" + encodeURIComponent(v.video_id);
+      link.target = "_blank";
+      link.rel = "noopener";
+      const views = v.partial_since ? num(v.views) + " (since " + v.partial_since + ")" : num(v.views);
+      const row = [link, FORMAT_WORDS[v.kind] || v.kind, v.team, v.goes_public || "", views, num(v.total_views),
+        num(v.likes), num(v.comments), v.short_style || ""];
+      if (watch) {
+        const w = v.watch;
+        row.push(w ? num(w.engaged_views) : "", w ? num(w.minutes_watched) : "", w ? mins(w.avg_view_duration_s) : "",
+          w && w.avg_view_pct !== null ? String(w.avg_view_pct) : "", w ? num(w.subs_gained) : "");
+      }
+      addRow(t.tbody, row);
+    });
+    body.appendChild(t.wrap);
+  }
+
+  function renderGroups(r, label) {
+    const t = table([label, "Videos", "Views", "Total", "Likes", "Comments"]);
+    r.groups.forEach((g) => addRow(t.tbody, [FORMAT_WORDS[g.label] || g.label, num(g.videos), num(g.views),
+      num(g.total_views), num(g.likes), num(g.comments)]));
+    body.appendChild(t.wrap);
+  }
+
+  function render(r) {
+    body.textContent = "";
+    reconnect.textContent = "";
+    const days = r.range.days;
+    document.getElementById("viewsCount").textContent = `· ${num(r.totals.views)} in ${days} day${days === 1 ? "" : "s"}`;
+    body.appendChild(sideEl("p", "side-empty", `${r.range.start} to ${r.range.end}, today included. Counts are what YouTube reports, nothing more.`));
+    if (!r.totals.videos) body.appendChild(sideEl("p", "side-empty", "No numbers yet. Press Pull now once YouTube is connected."));
+    else if (by === "video") renderVideos(r, ytFeatureGranted("analytics") && r.watch !== null);
+    else renderGroups(r, by === "format" ? "Format" : "Team");
+    if (r.short_styles.length) {
+      body.appendChild(sideEl("p", "side-sub", "Short styles"));
+      const t = table(["Style", "Shorts", "Views", "Likes", "Comments"]);
+      r.short_styles.forEach((g) => addRow(t.tbody, [g.label, num(g.videos), num(g.views), num(g.likes), num(g.comments)]));
+      body.appendChild(t.wrap);
+    }
+    if (r.watch) {
+      body.appendChild(sideEl("p", "side-empty",
+        `Watch time in this period: ${num(r.watch.engaged_views)} engaged views, ${num(r.watch.minutes_watched)} minutes watched, ${num(r.watch.subs_gained)} subscribers gained.`));
+    }
+    if (r.watch_status) body.appendChild(sideEl("p", "side-empty", r.watch_status));
+    const rc = ytReconnectNote("analytics");
+    if (rc) reconnect.appendChild(rc);
+    pulled.textContent = r.last_pull_at
+      ? `Pulled ${when(r.last_pull_at)}, ${num(r.units_today)} quota unit${r.units_today === 1 ? "" : "s"} today`
+      : `Not pulled yet, ${num(r.units_today)} quota units today`;
+  }
+
+  async function load() {
+    const days = chosenDays();
+    if (!days) { note.textContent = "Days: a whole number from 1 to 3650."; return; }
+    note.textContent = "";
+    try { localStorage.setItem(DAYS_KEY, String(days)); localStorage.setItem(BY_KEY, by); } catch (e) { /* not important */ }
+    let res, data;
+    try {
+      res = await fetch(`/views?days=${days}&by=${encodeURIComponent(by)}`);
+      data = await res.json().catch(() => ({}));
+    } catch (e) { body.textContent = "Can't reach the server."; return; }
+    if (!res.ok) { body.textContent = detailText(data) || "Couldn't load the views."; return; }
+    render(data);
+    loadBest();
+  }
+
+  // "What does best": hidden unless the Rankings and suggestions setting is on.
+  async function loadBest() {
+    const box = document.getElementById("viewsBest");
+    let data = {};
+    try {
+      const res = await fetch("/views/suggestions");
+      data = res.ok ? await res.json().catch(() => ({})) : {};
+    } catch (e) { data = {}; }
+    box.textContent = "";
+    if (!data || !data.enabled) { box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(sideEl("p", "side-sub", "What does best"));
+    box.appendChild(sideEl("p", "side-empty",
+      `Medians of the views a video had 7 and 28 days after it went public, for groups of at least ${data.min_videos} videos with ${data.min_data_days} days of data. These are suggestions only: nothing changes unless you change it. Shown because YouTube's derived-metrics amendment is accepted.`));
+    const sentences = data.suggestions || [];
+    if (!sentences.length) box.appendChild(sideEl("p", "side-empty", "Not enough data yet for suggestions."));
+    sentences.forEach((s) => box.appendChild(sideEl("p", "", s)));
+    const groups = [["Teams (full meetings)", data.teams], ["Formats", data.formats]];
+    groups.forEach(([title, list]) => {
+      if (!list || !list.length) return;
+      const t = table([title, "Videos", "Day 7", "Day 28"]);
+      list.forEach((g) => addRow(t.tbody, [(FORMAT_WORDS[g.label] || g.label) + (g.rank ? " (" + g.rank + ")" : ""),
+        num(g.videos), num(g.d7_median), g.d28_median === null ? "" : num(g.d28_median)]));
+      box.appendChild(t.wrap);
+    });
+    [["Short styles", data.short_styles], ["Thumbnails", data.thumbnail_arms], ["Title styles", data.title_styles]].forEach(([title, list]) => {
+      if (!list || !list.length) return;
+      const t = table([title, "Videos", "Day 7"]);
+      list.forEach((g) => addRow(t.tbody, [g.arm, num(g.videos), num(g.d7_median)]));
+      box.appendChild(t.wrap);
+    });
+  }
+
+  async function pullNow() {
+    const button = document.getElementById("viewsPull");
+    button.disabled = true;
+    note.textContent = "Pulling…";
+    try {
+      const res = await fetch("/views/pull", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      note.textContent = res.ok ? (data.ok ? "Pulled." : "The pull stopped: " + (data.error || "unknown reason")) : (detailText(data) || "Couldn't pull.");
+    } catch (e) { note.textContent = "Can't reach the server."; }
+    button.disabled = false;
+    await load();
+  }
+
+  section.addEventListener("toggle", () => {
+    try { localStorage.setItem("hc_side_viewsSection", section.open ? "open" : "closed"); } catch (e) { /* not important */ }
+    if (section.open) load();
+  });
+  select.addEventListener("change", () => { syncCustom(); if (select.value !== "custom") load(); });
+  document.getElementById("viewsApply").addEventListener("click", load);
+  custom.addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+  tabs.forEach((t) => t.addEventListener("click", () => { by = t.dataset.by; syncTabs(); load(); }));
+  document.getElementById("viewsPull").addEventListener("click", pullNow);
+  if (section.open) load();
+})();
 resumeFromUrl();
 loadEmails();
 loadSide();
+</script>
+<script>
+// Teams (side panel): decide new teams, set tiers, merge spellings, hashtags.
+// Built with createElement and textContent only.
+(function () {
+  const section = document.getElementById("seriesSection");
+  const heldBox = document.getElementById("seriesHeld");
+  const listBox = document.getElementById("seriesList");
+  const note = document.getElementById("seriesNote");
+  const count = document.getElementById("seriesCount");
+  const TIERS = [["public", "Public"], ["archive", "Archive (unlisted)"], ["never", "Never"]];
+  const KINDS = [["full", "Full meetings"], ["cuts", "Topic cuts"], ["shorts", "Shorts"]];
+  let editing = false; // a card has unsaved changes: the refresh leaves the list alone
+  let teamRanks = {}; // team name -> "top" | "middle" | "bottom" (empty when rankings are off)
+
+  try { section.open = localStorage.getItem("hc_side_seriesSection") === "open"; } catch (e) { /* closed */ }
+  section.addEventListener("toggle", () => {
+    try { localStorage.setItem("hc_side_seriesSection", section.open ? "open" : "closed"); } catch (e) { /* not important */ }
+  });
+
+  async function call(path, payload) {
+    clearError();
+    let res, body;
+    try {
+      res = await fetch(path, {
+        method: payload === undefined ? "GET" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload === undefined ? undefined : JSON.stringify(payload),
+      });
+      body = await res.json().catch(() => ({}));
+    } catch (e) {
+      showError("Can't reach the server: " + e.message);
+      return null;
+    }
+    if (!res.ok) {
+      showError(detailText(body) || "That didn't work.");
+      return null;
+    }
+    return body;
+  }
+
+  async function act(path, payload) {
+    const body = await call(path, payload);
+    if (body) editing = false;
+    if (body) render(body);
+    loadSide();
+  }
+
+  function button(parent, label, className, onClick) {
+    const btn = sideEl("button", className, label);
+    btn.type = "button";
+    btn.addEventListener("click", onClick);
+    parent.appendChild(btn);
+    return btn;
+  }
+
+  function parseTags(text) {
+    return text.split(/[\s,]+/).filter(Boolean).map((t) => (t.startsWith("#") ? t : "#" + t));
+  }
+
+  function option(text, value) {
+    const opt = sideEl("option", "", text);
+    opt.value = value;
+    return opt;
+  }
+
+  function renderHeld(held) {
+    heldBox.textContent = "";
+    held.forEach((team) => {
+      const box = sideEl("div", "side-row team-held");
+      box.appendChild(sideEl("div", "what", `Waiting for you: ${team.label}`));
+      box.appendChild(sideEl("div", "state attention", "A new team. Its meetings are held until you decide."));
+      team.meetings.forEach((m) => {
+        box.appendChild(sideEl("div", "when", `${m.topic || "(no topic)"} ${sideTime(m.start_time)}`));
+      });
+      const acts = sideEl("div", "acts");
+      button(acts, "Post this series from now on", "small-btn ap-on", () => act("/series/allow", { key: team.key }));
+      button(acts, "Skip", "small-btn", async () => {
+        for (const m of team.meetings) {
+          const body = await call("/autopilot/meetings/skip", { uuid: m.uuid });
+          if (!body) break;
+        }
+        act("/series");
+      });
+      button(acts, "Never post this team", "link-btn", () => {
+        if (window.confirm(`Never post the team "${team.label}"? Its waiting meetings are skipped, and so is every later one.`)) {
+          act("/series/never", { key: team.key });
+        }
+      });
+      box.appendChild(acts);
+      heldBox.appendChild(box);
+    });
+  }
+
+  function field(card, labelText, control) {
+    const wrap = sideEl("label", "team-field");
+    wrap.appendChild(sideEl("span", "team-field-label", labelText));
+    wrap.appendChild(control);
+    card.appendChild(wrap);
+    return control;
+  }
+
+  function renderRow(row, all) {
+    const card = sideEl("div", "side-row team-card");
+    if (teamRanks[row.label]) {
+      const rankWord = { top: "Top third", middle: "Middle third", bottom: "Bottom third" }[teamRanks[row.label]];
+      if (rankWord) card.appendChild(sideEl("div", "side-empty", "Views rank: " + rankWord + " (day-7 median, full meetings)"));
+    }
+    if (row.never_post) {
+      card.appendChild(sideEl("div", "err", "On the never-post list: never posted"));
+    }
+    const was = { label: row.label, tier: row.tier || "", tags: (row.hashtags || []).join(" ") };
+    const save = sideEl("button", "small-btn", "Save");
+    save.type = "button";
+    save.hidden = true;
+
+    const label = sideEl("input");
+    label.type = "text";
+    label.value = row.label;
+    label.maxLength = 60;
+    field(card, "Name", label);
+
+    const tier = sideEl("select");
+    if (!row.tier) tier.appendChild(option("Not decided yet", ""));
+    TIERS.forEach(([value, text]) => tier.appendChild(option(text, value)));
+    tier.value = row.tier || "";
+    field(card, "Posts as", tier);
+
+    const tags = sideEl("input");
+    tags.type = "text";
+    tags.value = was.tags;
+    tags.placeholder = "#Robotics #IoT (at most 2)";
+    field(card, "Hashtags", tags);
+
+    const same = sideEl("select");
+    same.appendChild(option("(not a spelling of another team)", ""));
+    all.filter((other) => other.key !== row.key).forEach((other) => same.appendChild(option(other.label, other.key)));
+    same.addEventListener("change", () => {
+      if (!same.value) return;
+      const target = all.find((other) => other.key === same.value);
+      if (window.confirm(`Treat "${row.label}" as the same team as "${target ? target.label : same.value}"? The two lists become one.`)) {
+        act("/series/merge", { alias: row.key, into: same.value });
+      } else {
+        same.value = "";
+      }
+    });
+    field(card, "Same team as", same);
+
+    card.appendChild(sideEl("div", "when",
+      `Seen ${row.seen} time${row.seen === 1 ? "" : "s"}` + (row.last_seen ? `, last ${sideTime(row.last_seen)}` : "")));
+    if (row.aliases && row.aliases.length) card.appendChild(sideEl("div", "when", "Also written as: " + row.aliases.join(", ")));
+    if (row.meetings_waiting) {
+      card.appendChild(sideEl("div", "state attention", `${row.meetings_waiting} meeting${row.meetings_waiting === 1 ? "" : "s"} waiting`));
+    }
+
+    const lists = sideEl("div", "team-playlists");
+    KINDS.forEach(([kind, text]) => {
+      const id = (row.playlists || {})[kind] || "";
+      lists.appendChild(sideEl("div", "when", `${text} playlist: ${id || "not made yet"}`));
+    });
+    const reconnect = ytReconnectNote("playlists");
+    if (reconnect) lists.appendChild(reconnect);
+    card.appendChild(lists);
+
+    const changed = () => {
+      const different = label.value.trim() !== was.label || tier.value !== was.tier
+        || parseTags(tags.value).join(" ") !== was.tags;
+      save.hidden = !different;
+      if (different) editing = true;
+    };
+    [label, tier, tags].forEach((el) => { el.addEventListener("input", changed); el.addEventListener("change", changed); });
+    save.addEventListener("click", () => {
+      const change = { key: row.key };
+      if (label.value.trim() !== was.label) change.label = label.value.trim();
+      if (tier.value !== was.tier && tier.value) change.tier = tier.value;
+      if (parseTags(tags.value).join(" ") !== was.tags) change.hashtags = parseTags(tags.value);
+      act("/series", { rows: [change] });
+    });
+    const acts = sideEl("div", "acts");
+    acts.appendChild(save);
+    card.appendChild(acts);
+    return card;
+  }
+
+  function render(data) {
+    const held = data.held || [];
+    const waiting = held.reduce((n, team) => n + team.meetings.length, 0);
+    count.textContent = "";
+    count.append(`· ${data.rows.length} team${data.rows.length === 1 ? "" : "s"}`);
+    if (waiting) count.append(" · ", sideEl("span", "bad", `${waiting} waiting`));
+    renderHeld(held);
+    if (editing) return;
+    listBox.textContent = "";
+    note.textContent = data.rows.length ? (data.mode === "allow_list"
+      ? "A meeting from a team that isn't here waits for you. Public teams post; archive teams post unlisted; never teams don't post."
+      : "Every team posts unless it is on the never-post list.") : "No teams yet. They appear as meetings are seen.";
+    data.rows.forEach((row) => listBox.appendChild(renderRow(row, data.rows)));
+  }
+
+  async function load() {
+    const body = await call("/series");
+    // rank badges come from "What does best"; none when that setting is off
+    teamRanks = {};
+    try {
+      const res = await fetch("/views/suggestions");
+      const best = res.ok ? await res.json().catch(() => ({})) : {};
+      (best.teams || []).forEach((t) => { if (t.rank) teamRanks[t.label] = t.rank; });
+    } catch (e) { teamRanks = {}; }
+    if (body) render(body);
+  }
+
+  const originalLoadSide = window.loadSide;
+  if (typeof originalLoadSide === "function") {
+    window.loadSide = async function () {
+      await originalLoadSide.apply(this, arguments);
+      await load();
+    };
+  }
+  load();
+})();
 </script>
 </body>
 </html>

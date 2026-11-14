@@ -85,7 +85,7 @@ def test_the_window_follows_a_daylight_saving_change(monkeypatch):
 def test_two_videos_are_at_least_the_gap_apart():
     first = schedule.book("a", "full", "m1", now=NOW)
     second = schedule.book("b", "short", "m1", now=NOW)
-    assert second.at - first.at == timedelta(hours=2.5)
+    assert second.at - first.at == timedelta(hours=2.0)  # default gap is 2 h (owner decision 2026-11-14; was 2.5)
     pub_settings.save({"min_gap_hours": 0})
     assert schedule.book("c", "full", "m2", now=NOW).at == first.at  # no gap asked: the same quarter hour
 
@@ -244,3 +244,55 @@ def test_a_booking_keeps_the_meeting_name_and_old_rows_still_load():
         {"key": "old", "kind": "full", "source": "zoom:x", "at": at(17, 12).isoformat(), "notify": True}]})
     old = schedule.get("old")
     assert old is not None and old.meeting == ""
+
+
+# ------------------------------------------------------------------ topic cuts
+
+
+def test_a_topic_cut_counts_toward_the_day_cap_but_not_the_shorts_cap():
+    pub_settings.save({"max_per_day": 3, "shorts_per_day": 1, "min_gap_hours": 1})
+    first = schedule.book("t", "topic", "m1", now=NOW)
+    schedule.book("s", "short", "m1", now=NOW)
+    schedule.book("f", "full", "m1", now=NOW)  # three on the first day: the cap
+    assert schedule.book("x", "topic", "m2", now=NOW).at.day == first.at.day + 1  # a topic can't be a 4th
+    # a topic never used the one Shorts slot of the day
+    pub_settings.save({"max_per_day": 6, "shorts_per_day": 1, "min_gap_hours": 1})
+    schedule.release("t"), schedule.release("f"), schedule.release("s"), schedule.release("x")
+    for n in range(3):
+        schedule.book(f"t{n}", "topic", "m", now=NOW)
+    assert schedule.book("s1", "short", "m", now=NOW).at.day == NOW.day
+
+
+def test_the_first_full_video_or_topic_cut_of_the_day_notifies():
+    cut = schedule.book("cut", "topic", "m1", now=NOW)
+    full = schedule.book("full", "full", "m1", now=NOW)
+    short = schedule.book("short", "short", "m1", now=NOW)
+    assert cut.notify is True and full.notify is False and short.notify is False
+    # the other way round: a full video first, then a cut the same day
+    other = schedule.book("full2", "full", "m2", now=at(17, 0))
+    cut2 = schedule.book("cut2", "topic", "m2", now=at(17, 0))
+    assert other.notify is True and cut2.notify is False
+
+
+def test_quiet_forces_no_notification():
+    quiet = schedule.book("full", "full", "m1", now=NOW, quiet=True)
+    assert quiet.notify is False
+    # it did not use up the day's notification
+    assert schedule.book("cut", "topic", "m1", now=NOW).notify is True
+
+
+def test_a_booking_that_notified_is_made_quiet_when_a_cut_takes_the_notification():
+    first = schedule.book("full", "full", "m1", now=NOW)
+    assert first.notify is True
+    again = schedule.book("full", "full", "m1", now=NOW, quiet=True)
+    assert again.at == first.at and again.notify is False
+    assert schedule.get("full").notify is False
+
+
+def test_a_schedule_file_with_topic_rows_and_an_old_one_both_load():
+    schedule.book("cut", "topic", "m1", now=NOW)
+    assert schedule.get("cut").kind == "topic"
+    from ledger import files
+    files.write_json(schedule._path(), {"bookings": [
+        {"key": "old", "kind": "short", "source": "zoom:x", "at": at(17, 12).isoformat(), "notify": False}]})
+    assert schedule.get("old").kind == "short"

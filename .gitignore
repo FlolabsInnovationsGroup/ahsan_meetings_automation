@@ -8,6 +8,10 @@ storage/jobs/*
 # what is on YouTube and the autopilot's state (local runs / the server)
 storage/state/
 storage/state-backup/
+# a YouTube connection made on a local run (a real refresh token) and local
+# transcripts: never committed
+storage/youtube_token.json
+storage/transcripts/
 data/
 deploy/caddy.env
 # the Caddyfile Caddy was last started with (deploy/auto-update.sh)

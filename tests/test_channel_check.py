@@ -171,3 +171,42 @@ def test_a_zoom_id_entry_flags_a_renamed_meeting_through_its_job(monkeypatch):
     result = channel_check.check_channel(service)
     assert [v["id"] for v in result["listed"]] == ["H" * 11]
     assert "84116996599" in result["listed"][0]["reason"]
+
+
+# ------------------------------------------------------------ team tiers
+
+
+def _ours_for(video_id, meeting):
+    item = uploads.Item(f"zoom:{video_id}|full", f"zoom:{video_id}", "full", "no-such-job", meeting)
+    get_ledger().begin(item, title="A topic title", privacy="public", by="test")
+    get_ledger().published(item.key, video_id, by="test")
+
+
+def test_a_public_video_of_a_never_tier_team_is_flagged():
+    from publish import series
+
+    series.set_row("gamma", label="Gamma", tier="never")
+    _ours_for("G" * 11, "Gamma Team Meeting (2026-11-03)")
+    result = channel_check.check_channel(FakeService([_video("G" * 11, "A topic title | FloLabs Gamma")]))
+    assert [v["id"] for v in result["listed"]] == ["G" * 11]
+    assert result["listed"][0]["reason"] == 'Team "Gamma" is set to never'
+    assert result["archive_public"] == []
+
+
+def test_a_public_video_of_an_archive_team_is_listed_for_unlisting():
+    from publish import series
+
+    series.set_row("delta", label="Delta", tier="archive")
+    series.set_row("omega", label="Omega", tier="public")
+    _ours_for("D" * 11, "Delta Team Meeting (2026-11-03)")
+    _ours_for("O" * 11, "Omega Team Meeting (2026-11-03)")
+    _ours_for("U" * 11, "Delta Team Meeting (2026-11-10)")
+    service = FakeService([
+        _video("D" * 11, "A topic | FloLabs Delta"),
+        _video("O" * 11, "A topic | FloLabs Omega"),
+        _video("U" * 11, "A topic | FloLabs Delta", "unlisted"),
+    ])
+    result = channel_check.check_channel(service)
+    assert [v["id"] for v in result["archive_public"]] == ["D" * 11]
+    assert result["archive_public"][0]["studio_url"].endswith("/edit")
+    assert result["listed"] == []

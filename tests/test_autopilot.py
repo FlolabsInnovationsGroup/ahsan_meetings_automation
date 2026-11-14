@@ -24,6 +24,7 @@ from core.models import JobRecord, JobStatus
 from ingest import zoom
 from ledger import uploads
 from ledger.uploads import get_ledger
+from publish import settings as publishing
 from tests.fake_channel import Crash, FakeChannel
 from tests.test_publish import _finished_job
 
@@ -88,6 +89,9 @@ class World:
         self.manual = {}
         # starting a job for these gets "not found" from Zoom
         self.submit_not_found = set()
+        # most tests are not about the new-team hold (a name with no team in it is held under
+        # allow_list too): tests of the hold switch allow_list back on
+        publishing.save({"series_mode": "allow_all"})
         self.engine = self.restart()
         self.engine.set_enabled(True)  # the side panel's Turn on
 
@@ -127,6 +131,7 @@ class World:
     def step(self, minutes=0):
         self.now += timedelta(minutes=minutes)
         self.engine.step()
+        api_main.autopilot_store._state = None  # the page's own store (the team check reads it) must not keep a stale copy
 
     def meeting(self, uuid):
         return self.engine.store.read().meetings.get(uuid)

@@ -252,9 +252,13 @@ def run_pipeline(job: JobRecord, update: "callable[[JobRecord], None]") -> None:
                 final_name=final_video_name(title, job.meeting_date),
                 intro=clips.intro,
                 outro=clips.outro,
+                recording_type=(job.zoom_meeting or {}).get("recording_type"),
+                job_id=job.job_id,
             ),
             reel=reel,
             chapter_fn=chapter_fn if settings.chapters_enabled else None,
+            moments=moments,
+            segments=segments,
         ))
     except Exception as exc:
         logger.exception("job %s failed", job.job_id)

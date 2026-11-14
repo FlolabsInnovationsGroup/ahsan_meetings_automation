@@ -97,7 +97,7 @@ def _fake_ffmpeg(monkeypatch, written, output_audio_s, output_s=None):
     and `output_s` as the video's and the file's (default: frames/25, as
     ffmpeg writes it)."""
 
-    def fake_part(src, part, fps, w, h, graph, dest, overlays=None):
+    def fake_part(src, part, fps, w, h, graph, dest, overlays=None, hd=False):
         dest.write_bytes(b"v")
         written[dest.name] = part.frames
 
@@ -113,7 +113,7 @@ def _fake_ffmpeg(monkeypatch, written, output_audio_s, output_s=None):
         n = written.get(path.name)
         return StreamHeader(n, None, "25/1", 320, 180, "yuv420p", "MD5:x", 7.0, n, 48000, 2, "flac", None)
 
-    def fake_aac(chunks, dest, graph, content_s=0.0):
+    def fake_aac(chunks, dest, graph, content_s=0.0, gains=None):
         dest.write_bytes(b"a")
 
     def fake_mux(video, audio, dest, content_s=0.0):

@@ -474,3 +474,58 @@ def complement(edl: EditDecisionList, video_min_gap_s: float | None = None) -> l
     if edl.source_duration > cursor:
         add(cursor, edl.source_duration)
     return removed
+
+
+def slice_edl(
+    edl: EditDecisionList, start_frame: int, end_frame: int, min_piece_frames: int | None = None
+) -> EditDecisionList:
+    """The part of a frame-grid EDL inside source frames [start_frame,
+    end_frame), frame-exact, as its own validated EDL (for a topic cut).
+
+    A fragment left at either end shorter than `min_piece_frames` (default
+    max(2 * fade_frames + 1, 1 s)) is dropped, or, when the whole range it was
+    cut from is at most 2 s long, put back whole. fps, fade_frames and
+    total_frames stay; only the silence cuts inside the span are kept."""
+    if edl.fps is None:
+        raise ValueError("slice_edl needs a frame-grid EDL")
+    if end_frame <= start_frame:
+        raise ValueError(f"empty slice: {start_frame}..{end_frame}")
+    fps = parse_rate(edl.fps)
+    d = edl.fade_frames
+    if min_piece_frames is None:
+        min_piece_frames = max(2 * d + 1, round_half_up(fps))
+    pieces: list[tuple[int, int, int, int]] = []  # clipped start, end, original start, end
+    for r in edl.ranges:
+        s, e = max(r.start_frame, start_frame), min(r.end_frame, end_frame)
+        if e > s:
+            pieces.append((s, e, r.start_frame, r.end_frame))
+    two_s = 2 * round_half_up(fps)
+    for idx in (len(pieces) - 1, 0):  # the last end first, so indexes stay put
+        if not 0 <= idx < len(pieces):
+            continue
+        s, e, os_, oe = pieces[idx]
+        if e - s >= min_piece_frames:
+            continue
+        if (s, e) != (os_, oe) and oe - os_ <= two_s and oe - os_ >= min_piece_frames:
+            pieces[idx] = (os_, oe, os_, oe)
+        else:
+            pieces.pop(idx)
+    if not pieces:
+        raise ValueError(f"nothing is kept between source frames {start_frame} and {end_frame}")
+    first, last = pieces[0][0], pieces[-1][1]
+    out = EditDecisionList(
+        ranges=[
+            EDLRange(start=float(Fraction(s) / fps), end=float(Fraction(e) / fps), start_frame=s, end_frame=e)
+            for s, e, _, _ in pieces
+        ],
+        source_duration=edl.source_duration,
+        fps=edl.fps,
+        fade_frames=d,
+        total_frames=edl.total_frames,
+        silence_cuts=[
+            (a, b) for a, b in edl.silence_cuts
+            if float(Fraction(first) / fps) <= (a + b) / 2 < float(Fraction(last) / fps)
+        ],
+    )
+    validate_edl(out)
+    return out

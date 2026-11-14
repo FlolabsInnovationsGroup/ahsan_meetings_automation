@@ -63,6 +63,36 @@ def _record_job(job: JobRecord) -> None:
                         provider=provider, model=model, usd=usd, grows_by="calls", **fields)
 
 
+def record_call(key: str, usage: dict, *, job_id: str = "", meeting: str = "") -> None:
+    """Record the AI usage of one extra call that no job's own usage covers
+    (translations). `key` is the event's identity ("ai:translate:<item key>"):
+    recording the same key again updates that row, never adds one."""
+    try:
+        _record_call(key, usage or {}, job_id, meeting)
+    except Exception:
+        logger.exception("cost meter: could not record %s", key)
+
+
+def _record_call(key: str, usage: dict, job_id: str, meeting: str) -> None:
+    calls = int(usage.get("calls") or 0)
+    if not calls:
+        return
+    moment = datetime.now(UTC)
+    fields = {
+        "calls": calls, "input_tokens": int(usage.get("prompt_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "cache_read_tokens": int(usage.get("cache_read_tokens") or 0),
+        "cache_write_tokens": int(usage.get("cache_write_tokens") or 0)}
+    with db.connect() as con:
+        provider, model = _llm_now()
+        usd = db.usd_for(db.load_prices(con), model, calls=calls, input_tokens=fields["input_tokens"],
+                         output_tokens=fields["output_tokens"], cache_read=fields["cache_read_tokens"],
+                         cache_write=fields["cache_write_tokens"])
+        db.upsert_event(con, kind="ai", key=key, at=moment.isoformat(timespec="seconds"),
+                        day=db.local_day(moment), job_id=job_id, meeting=meeting, provider=provider,
+                        model=model, usd=usd, grows_by="calls", **fields)
+
+
 def backfill(jobs) -> None:
     """Startup: record every job still on disk."""
     for job in jobs:

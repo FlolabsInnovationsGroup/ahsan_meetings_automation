@@ -167,13 +167,19 @@ def _reread(job_id) -> JobRecord:
 
 
 def test_status_reports_not_configured_and_not_connected():
-    assert yt.youtube_status() == {"configured": False, "connected": False, "channel_title": None}
+    status = yt.youtube_status()
+    assert (status["configured"], status["connected"], status["channel_title"]) == (False, False, None)
+    assert status["granted"] == [] and status["reconnect_for"] == []
 
 
 def test_status_reports_connected_channel(configured, client):
     _connect_fake_channel("FloLabs Channel")
-    assert client.get("/youtube/status").json() == {
-        "configured": True, "connected": True, "channel_title": "FloLabs Channel"}
+    body = client.get("/youtube/status").json()
+    assert (body["configured"], body["connected"], body["channel_title"]) == (True, True, "FloLabs Channel")
+    # a token from before the wider permissions: upload and read only, so the extras ask for a reconnect
+    assert body["features"] == {"captions": False, "playlists": False, "edit": False, "analytics": False}
+    assert body["reconnect_for"] == ["caption tracks", "playlists", "changing videos after upload",
+                                     "view analytics"]
 
 
 def test_return_to_only_allows_local_paths():
@@ -196,11 +202,18 @@ def test_connect_redirects_to_google_with_offline_access(configured, client):
     assert "access_type=offline" in location
     assert "redirect_uri=https%3A%2F%2Fcutter.example.com%2Fyoutube%2Fcallback" in location
     assert "youtube.upload" in location
+    assert "youtube.force-ssl" in location
+    assert "include_granted_scopes=true" in location
 
 
-def test_the_permission_asked_for_stays_upload_and_read_only():
+def test_the_permissions_asked_for_are_upload_read_edit_and_analytics():
     assert yt.SCOPES == ["https://www.googleapis.com/auth/youtube.upload",
-                         "https://www.googleapis.com/auth/youtube.readonly"]
+                         "https://www.googleapis.com/auth/youtube.readonly",
+                         "https://www.googleapis.com/auth/youtube.force-ssl",
+                         "https://www.googleapis.com/auth/yt-analytics.readonly"]
+    for wider in ("https://www.googleapis.com/auth/youtube", "https://www.googleapis.com/auth/youtubepartner",
+                  "https://www.googleapis.com/auth/yt-analytics-monetary.readonly"):
+        assert wider not in yt.SCOPES
 
 
 def test_callback_rejects_unknown_state(configured, client):
@@ -919,3 +932,13 @@ def test_the_job_files_zip_member_names_match_the_artifacts():
     with zipfile.ZipFile(job.bundle_path) as zf:
         names = set(zf.namelist())
     assert {FINAL, "shorts/short_01.mp4", "manifest.json"} <= names
+
+
+def test_insert_body_adds_localizations_only_when_set_and_a_language_is_given():
+    base = yt.insert_body("T", "D", "private", language="en")
+    assert "localizations" not in base
+    assert yt.insert_body("T", "D", "private", language="en", localizations={}) == base
+    assert yt.insert_body("T", "D", "private", localizations={"es": {"title": "t", "description": "d"}}) ==         yt.insert_body("T", "D", "private")
+    body = yt.insert_body("T", "D", "private", language="en", localizations={"es": {"title": "t", "description": "d"}})
+    assert body["localizations"] == {"es": {"title": "t", "description": "d"}}
+    assert body["snippet"]["defaultLanguage"] == "en"

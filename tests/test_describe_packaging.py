@@ -217,3 +217,80 @@ def test_half_of_the_main_words_is_enough_and_one_in_four_is_not():
     text = "the camera calibration drifted again"
     assert describe._grounded("Camera calibration tooling pipeline", text)  # 2 of 4
     assert not describe._grounded("Camera tooling pipeline automation", text)  # 1 of 4
+
+
+# ------------------------------------------------ packaging from the team registry
+
+
+def _team(name, **fields):
+    from publish import series
+
+    series.set_row(name, **fields)
+
+
+def test_a_label_override_changes_the_title_and_the_description_line():
+    _team("multi modal perception", label="Perception Lab")
+    job = _job(rows=[_row(1)])
+    assert describe.series_label(job) == "FloLabs Perception Lab"
+    assert describe.full_title(job).endswith("| FloLabs Perception Lab")
+    assert "Perception Lab team meeting, 4 November 2026." in describe.full_description(job)
+
+
+def test_a_label_with_a_flolabs_prefix_is_not_doubled():
+    _team("multi modal perception", label="FloLabs Perception Lab")
+    assert describe.series_label(_job()) == "FloLabs Perception Lab"
+
+
+def test_registry_hashtags_are_used_capped_and_valid():
+    _team("multi modal perception", hashtags=["#Percept", "#Vision"])
+    job = _job(rows=[_row(1, title="Moving the session store to Redis ESP32")])
+    tags = describe._hashtags(job, "#ESP32").split()
+    assert tags == ["#FloLabs", "#Percept", "#Vision"]
+    assert all(re.fullmatch(r"#[A-Za-z0-9]+", t) for t in tags)
+    assert "#shorts" not in describe._hashtags(job, "#shorts").lower()
+
+
+def test_without_a_registry_tag_the_camel_case_tag_stays():
+    assert describe._series_tag(_job()) == "#MultiModalPerception"
+
+
+def test_the_old_label_still_counts_as_a_duplicate_title():
+    job = _job(rows=[_row(1)])
+    old = "Moving the session store to Redis | FloLabs Multi-modal perception"
+    _team("multi modal perception", label="Perception Lab")
+    variants = describe.title_variants(job)
+    assert old.lower() in variants
+    assert "moving the session store to redis | flolabs perception lab" in variants
+
+
+def test_short_info_style_defaults_to_classic_and_reads_new():
+    job = _job(rows=[_row(1), _row(2, style="new", layout="speaker", screen_hook_shown=True)])
+    first, second = describe.load_shorts(job)
+    assert (first.style, first.layout, first.screen_hook_shown) == ("classic", "", False)
+    assert (second.style, second.layout, second.screen_hook_shown) == ("new", "speaker", True)
+
+
+def test_best_moment_range_is_the_moment_behind_the_title():
+    rows = [_row(1, text="we talked about lunch plans and the weather today"),
+            dict(_row(2, title="Camera calibration drift", hook="", text="the camera calibration drift got worse"),
+                 source_start=70.0, source_end=95.0)]
+    job = _job(rows=rows)
+    assert describe.full_title(job).startswith("Camera calibration drift | ")
+    assert describe.best_moment_range(job) == (70.0, 95.0)
+
+
+def test_best_moment_range_falls_back_to_the_reel_and_none():
+    job = _job(highlights=[{"final_at_s": 1, "source_start": 5, "source_end": 19, "title": "Calibrating cameras"}])
+    assert describe.best_moment_range(job) == (5.0, 19.0)
+    assert describe.best_moment_range(_job(job_id="d-2")) is None
+
+
+def test_a_never_post_word_in_a_registry_label_is_still_caught():
+    from autopilot import never_post
+
+    never_post.set_entries(["projectx"])
+    _team("multi modal perception", label="Projectx Lab")
+    job = _job(rows=[_row(1)])
+    assert never_post.match(describe.full_title(job)) is not None
+    assert never_post.match(describe.series_label(job)) is not None
+    assert never_post.match(describe.full_description(job)) is not None

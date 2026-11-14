@@ -25,6 +25,8 @@ What counts as the same video (the owner's rule, 2026-10-26):
   of a meeting is on the channel (or on its way), shorts that another job cut
   from the same meeting are never posted; the first job's other shorts still
   can be.
+- topic cuts follow the same one-run rule as shorts, among topic cuts. A topic
+  cut is never the meeting's full video: it does not make a meeting "posted".
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ from . import files
 
 logger = get_logger(__name__)
 
-Kind = Literal["full", "short"]
+Kind = Literal["full", "short", "topic"]
 # uploading: a thread of this process is sending it (or the process died doing so)
 # interrupted: stopped after YouTube gave an upload link; resuming uses that link
 # failed: stopped before any byte left; uploading again is safe
@@ -90,6 +92,10 @@ class Item:
     # right before an upload (publish/once.py); `meeting` is only the job's title
     topic: str | None = None
     meeting_id: str | None = None
+    # how a Short was drawn; kept in the posted list for the views comparison.
+    # Never part of `key`: a re-render must not upload the same Short again.
+    style: str | None = None
+    layout: str | None = None
 
 
 @dataclass
@@ -116,6 +122,8 @@ class Upload:
     # are told then; None when it was not scheduled (publish/schedule.py).
     publish_at: str | None = None
     notify: bool | None = None
+    style: str | None = None
+    layout: str | None = None
     # Not saved: set on the record upload_once returns when YouTube's answer
     # about a new upload differs from what was asked (publish/once.py).
     warning: str | None = None
@@ -152,11 +160,23 @@ def full_item(job: JobRecord) -> Item:
                 topic=topic, meeting_id=meeting_id)
 
 
-def short_item(job: JobRecord, index: int, start: float | None = None, end: float | None = None) -> Item:
+def short_item(job: JobRecord, index: int, start: float | None = None, end: float | None = None,
+               style: str | None = None, layout: str | None = None) -> Item:
     source = source_of(job)
     clip = (float(start), float(end)) if start is not None and end is not None else None
     topic, meeting_id = _zoom_names(job)
     return Item(f"{source}|short|{job.job_id}|{index}", source, "short", job.job_id, job.title, job.meeting_date,
+                index, clip, topic, meeting_id, style, layout)
+
+
+def topic_item(job: JobRecord, index: int, start: float | None = None, end: float | None = None) -> Item:
+    """A topic cut (topic/topic_NN.mp4) of the job's meeting. Carries the Zoom
+    topic and meeting ID like the others, so the last never-post check
+    (publish/once.py) covers it."""
+    source = source_of(job)
+    clip = (float(start), float(end)) if start is not None and end is not None else None
+    topic, meeting_id = _zoom_names(job)
+    return Item(f"{source}|topic|{job.job_id}|{index}", source, "topic", job.job_id, job.title, job.meeting_date,
                 index, clip, topic, meeting_id)
 
 
@@ -167,6 +187,7 @@ def marker_for(key: str) -> str:
 
 
 def video_url(kind: Kind, video_id: str) -> str:
+    # a topic cut is a normal (landscape) video: youtu.be, like the full video
     return f"https://youtube.com/shorts/{video_id}" if kind == "short" else f"https://youtu.be/{video_id}"
 
 
@@ -232,6 +253,7 @@ class Ledger:
                 state="uploading", title=event.get("title") or "", privacy=event.get("privacy") or "",
                 by=event.get("by") or "", updated_at=at,
                 publish_at=event.get("publish_at"), notify=event.get("notify"),
+                style=event.get("style"), layout=event.get("layout"),
             )
             return
         upload = self._uploads.get(key)
@@ -283,9 +305,9 @@ class Ledger:
             return own
         if own is not None and own.session_uri and own.job_id != item.job_id                 and self._state(own) == "interrupted":
             return own
-        if item.kind == "short":
+        if item.kind in ("short", "topic"):
             for other in self._uploads.values():
-                if (other.source == item.source and other.kind == "short" and other.job_id != item.job_id
+                if (other.source == item.source and other.kind == item.kind and other.job_id != item.job_id
                         and (self._state(other) in ("published", "unsure", "interrupted")
                              or other.key in self._active)):
                     return other
@@ -318,7 +340,8 @@ class Ledger:
 
     def meeting_state(self, source: str) -> str | None:
         """"posted" once the full video is on the channel, "partly" when only
-        some shorts are, else None."""
+        some shorts (or topic cuts) are, else None. A topic cut is never the
+        full video."""
         with self._lock:
             mine = [u for u in self._uploads.values() if u.source == source and u.state == "published"]
         if any(u.kind == "full" for u in mine):
@@ -372,6 +395,8 @@ class Ledger:
             "meeting_date": item.meeting_date, "index": item.index,
             "clip": list(item.clip) if item.clip else None, "title": title, "privacy": privacy, "by": by,
             "publish_at": publish_at, "notify": notify,
+            **({"style": item.style} if item.style else {}),
+            **({"layout": item.layout} if item.layout else {}),
         })
         self._apply(record)
 
@@ -459,8 +484,9 @@ class Ledger:
 def _refusal(blocker: Upload, item: Item) -> Refused:
     if blocker.key != item.key:
         # shorts of this meeting belong to another processing run
-        message = (f"Shorts of this meeting already come from another processing run (job {blocker.job_id}); "
-                   "a meeting's shorts are only ever posted from one run.")
+        what_else = "Topic cuts" if item.kind == "topic" else "Shorts"
+        message = (f"{what_else} of this meeting already come from another processing run (job {blocker.job_id}); "
+                   f"a meeting's {what_else.lower()} are only ever posted from one run.")
         return (InFlight if blocker.state == "uploading" else AlreadyPosted)(message, replace(blocker))
     what = "This video"
     if blocker.state == "published":
@@ -491,6 +517,8 @@ def _posted_line(upload: Upload) -> dict:
         "key": upload.key,
         "publish_at": upload.publish_at,
         "notify": upload.notify,
+        **({"style": upload.style} if upload.style else {}),
+        **({"layout": upload.layout} if upload.layout else {}),
     }
 
 
@@ -504,6 +532,7 @@ def _from_posted(line: dict) -> Upload:
         video_id=line.get("video_id"), url=line.get("url"), posted_at=line.get("posted_at"),
         updated_at=line.get("posted_at") or "",
         publish_at=line.get("publish_at"), notify=line.get("notify"),
+        style=line.get("style"), layout=line.get("layout"),
     )
 
 

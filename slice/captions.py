@@ -151,3 +151,166 @@ def ass_document(cues: list[Cue], *, title: str, duration_s: float, font_family:
     for cue in cues:
         lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Caption,,0,0,0,,{_ass_escape(cue.text)}")
     return "\n".join(lines) + "\n"
+
+
+# --- new-style Shorts subtitle document (hook card, safe-band captions) -------------------------------------
+
+END_LINE_S = 2.5
+HOOK_MAX_CHARS = 42
+
+
+def _break_near_middle(words: list[str]) -> int:
+    """Index (1..len-1) at which splitting the words gives the most even two halves by characters."""
+    total = sum(len(w) for w in words) + len(words) - 1
+    best, best_gap, run = 1, float("inf"), 0
+    for i in range(1, len(words)):
+        run += len(words[i - 1]) + (1 if i > 1 else 0)
+        gap = abs(run - (total - run - 1))
+        if gap < best_gap:
+            best, best_gap = i, gap
+    return best
+
+
+def _row_len(text: str) -> float:
+    """Row width in average-character units: capitals are wider than the average glyph, so they count more."""
+    return sum(1.25 if ch.isupper() else 1.0 for ch in text)
+
+
+def wrap_two_lines(text: str, chars_per_line: int) -> str | None:
+    """`text` with one \\N at the word break nearest the middle when it is longer than one line;
+    None when it would still need three or more lines."""
+    text = " ".join(text.split())
+    if _row_len(text) <= chars_per_line:
+        return text
+    words = text.split(" ")
+    if len(words) < 2:
+        return None
+    i = _break_near_middle(words)
+    first, second = " ".join(words[:i]), " ".join(words[i:])
+    if _row_len(first) > chars_per_line or _row_len(second) > chars_per_line:
+        return None
+    return f"{first}\\N{second}"
+
+
+def _chars_per_line(width: int, size_px: float, margin_px: float, char_em: float) -> int:
+    # 0.88: libass wraps again on its own when a row is wider than the estimate, so keep a safety margin
+    return max(1, int(0.88 * (width - 2 * margin_px) / (char_em * size_px)))
+
+
+def cap_two_lines(cues: list[Cue], *, width: int, size_px: float, margin_px: float, char_em: float) -> list[Cue]:
+    """Wrap every cue to at most two rows; a cue that cannot fit is split in two at the word nearest its
+    middle, the time divided in proportion to characters (contiguous, not overlapping)."""
+    per_line = _chars_per_line(width, size_px, margin_px, char_em)
+    out: list[Cue] = []
+
+    def add(cue: Cue, depth: int = 0) -> None:
+        wrapped = wrap_two_lines(cue.text, per_line)
+        words = cue.text.split()
+        if wrapped is not None or len(words) < 2 or depth > 6:
+            # an unbreakable single long word (or the depth guard) is kept as is
+            out.append(Cue(cue.start, cue.end, wrapped if wrapped is not None else " ".join(words)))
+            return
+        i = _break_near_middle(words)
+        a, b = " ".join(words[:i]), " ".join(words[i:])
+        cut = round(cue.start + (cue.end - cue.start) * len(a) / (len(a) + len(b)), 3)
+        add(Cue(cue.start, cut, a), depth + 1)
+        add(Cue(cut, cue.end, b), depth + 1)
+
+    for cue in cues:
+        add(cue)
+    return out
+
+
+def choose_hook(screen_hook: str | None, title: str | None) -> str:
+    """The screen hook when there is one, else the title if it is short enough, else no card."""
+    hook = " ".join((screen_hook or "").split())
+    if hook:
+        return hook
+    title = " ".join((title or "").split())
+    return title if 0 < len(title) <= HOOK_MAX_CHARS else ""
+
+
+def _fit_text(text: str, *, width: int, size_px: float, margin_px: float, char_em: float,
+              min_size_px: float) -> tuple[str, int]:
+    """(escaped text wrapped to at most two rows, font size). The size shrinks (not below min_size_px) so
+    two rows hold the text; past that the text is cut with an ellipsis."""
+    text = _ass_escape(text)
+    size = round(size_px)
+    while True:
+        per_line = _chars_per_line(width, size, margin_px, char_em)
+        wrapped = wrap_two_lines(text, per_line)
+        if wrapped is not None:
+            return wrapped, size
+        if size <= min_size_px:
+            break
+        size = max(round(min_size_px), size - 2)
+    words = text.split(" ")
+    while len(words) > 1:
+        words.pop()
+        wrapped = wrap_two_lines(" ".join(words) + "…", per_line)
+        if wrapped is not None:
+            return wrapped, size
+    return text[: per_line * 2 - 1] + "…", size
+
+
+def ass_document_new(cues: list[Cue], *, hook: str, title: str, end_line: str, duration_s: float, look,
+                     font_family: str, width: int, height: int) -> str:
+    """New-style Shorts subtitles, designed at 1080x1920 and scaled: captions with their bottom edge at
+    y=1330, a large hook card from the first frame, a small title for the rest, an end line over the
+    last 2.5 s (the title stops when it starts). Nothing above y=192 or below y=1330."""
+    k = height / 1920
+    kx = width / 1080
+    char_em = 0.6 if "dejavu" in font_family.lower() else 0.56
+    margin_x = round(60 * kx)
+    caption_px = round(look.caption_px * k)
+    hook_px, title_px = round(86 * k), round(46 * k)
+    top_margin = round(250 * k)
+    box_pad = max(1, round(12 * k))
+    fields = ("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+              "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+              "Alignment, MarginL, MarginR, MarginV, Encoding")
+    yellow = "&H0000D7FF"
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        fields,
+        (f"Style: Caption,{font_family},{caption_px},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,"
+         f"100,0,0,1,{max(1, round(7 * k))},{max(1, round(3 * k))},2,{margin_x},{margin_x},"
+         f"{round((1920 - 1330) * k)},1"),
+        (f"Style: Hook,{font_family},{hook_px},&H00101010,&H000000FF,{yellow},{yellow},-1,0,0,0,100,100,0,0,3,"
+         f"{box_pad},0,8,{margin_x},{margin_x},{top_margin},1"),
+        (f"Style: Title,{font_family},{title_px},&H00FFFFFF,&H000000FF,&H66000000,&H66000000,-1,0,0,0,100,100,"
+         f"0,0,3,{box_pad},0,8,{margin_x},{margin_x},{top_margin},1"),
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+
+    def card(text: str, px: int) -> str:
+        # the box padding eats into the side margins, so the text area is a little narrower
+        wrapped, size = _fit_text(text, width=width, size_px=px, margin_px=margin_x + box_pad, char_em=char_em,
+                                  min_size_px=round(px * 0.7))
+        return f"{{\\fs{size}}}{wrapped}" if size != px else wrapped
+
+    hook_s = min(look.hook_seconds, duration_s) if hook.strip() else 0.0
+    if hook_s > 0:
+        lines.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(hook_s)},Hook,,0,0,0,,"
+                     f"{{\\fad(0,250)}}{card(hook, hook_px)}")
+    end_start = max(0.0, duration_s - END_LINE_S) if end_line.strip() else duration_s
+    if look.top_text != "none" and title.strip() and end_start > hook_s:
+        lines.append(f"Dialogue: 1,{_ass_time(hook_s)},{_ass_time(end_start)},Title,,0,0,0,,"
+                     f"{card(title, title_px)}")
+    if end_line.strip():
+        lines.append(f"Dialogue: 1,{_ass_time(end_start)},{_ass_time(duration_s)},Hook,,0,0,0,,"
+                     f"{card(end_line, hook_px)}")
+    # escape first, then wrap: the \N row break is the only backslash in the document
+    safe = [Cue(c.start, c.end, _ass_escape(c.text)) for c in cues]
+    for cue in cap_two_lines(safe, width=width, size_px=caption_px, margin_px=margin_x, char_em=char_em):
+        lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Caption,,0,0,0,,{cue.text}")
+    return "\n".join(lines) + "\n"

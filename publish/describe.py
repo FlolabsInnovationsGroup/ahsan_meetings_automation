@@ -38,6 +38,7 @@ SHORTS_HEADING = "Shorts from this meeting:"
 
 _ANGLE = re.compile(r"[<>]")
 _SHORT_FILE = re.compile(r"shorts/short_(\d+)\.mp4")
+_TOPIC_FILE = re.compile(r"topic/topic_(\d+)\.mp4")
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,39 @@ class ShortInfo:
     # what is said in the clip, when the render recorded it ("" when not): used
     # to check that a title really is about the clip
     text: str = ""
+    # how the Short was drawn ('classic' for rows from before the new look), the
+    # layout it used and whether the on-screen topic line was shown
+    style: str = "classic"
+    layout: str = ""
+    screen_hook_shown: bool = False
+
+
+@dataclass(frozen=True)
+class TopicInfo:
+    """One topic cut (topic/topic_NN.mp4) from the render manifest's "topics" rows."""
+
+    index: int
+    file: str  # its name in job.artifacts and in the zip: topic/topic_01.mp4
+    title: str
+    hook: str
+    screen_hook: str
+    source_start: float
+    source_end: float
+    cleaned_start: float | None  # seconds on the cleaned meeting's timeline
+    cleaned_end: float | None
+    duration_s: float  # the topic itself (without the cold open and the card)
+    open_s: float  # the cold open's length (0 = none)
+    card_s: float  # the title card's length
+    # the cut's own chapters: (seconds from the start of the topic itself, title)
+    chapters: tuple[tuple[float, str], ...] = ()
+    best_score: float = 0.0
+    stands_alone: bool = False
+    category: str = ""
+    thumb_src_s: float | None = None
+    # the words said in the cut (at most 2000 characters), to check that a title is about it
+    text: str = ""
+    # whole seconds into the full video where the cut's topic first plays (None = unknown)
+    at_s: int | None = None
 
 
 # ------------------------------------------------------------------ checks
@@ -133,7 +167,9 @@ def load_shorts(job: JobRecord) -> list[ShortInfo]:
             at_s = clip_position(render, start, end, job.final_offset_s) if render is not None else None
             shorts.append(ShortInfo(int(match[1]), row["file"], str(row.get("title") or ""),
                                     str(row.get("hook") or ""), start, end, at_s,
-                                    str(row.get("text") or "")))
+                                    str(row.get("text") or ""),
+                                    str(row.get("style") or "classic"), str(row.get("layout") or ""),
+                                    bool(row.get("screen_hook_shown"))))
         except (KeyError, TypeError, ValueError):
             logger.warning("job %s: skipping an unreadable shorts row in manifest.json: %r", job.job_id, row)
     return sorted(shorts, key=lambda s: s.index)
@@ -146,6 +182,81 @@ def rendered_shorts(job: JobRecord) -> set[int]:
     found = {short.index for short in load_shorts(job)}
     for name, artifact in job.artifacts.items():
         match = _SHORT_FILE.fullmatch(name)
+        if match is not None and artifact.status == "ok":
+            found.add(int(match[1]))
+    return found
+
+
+def _number(value, default: float | None = 0.0) -> float | None:
+    try:
+        found = float(value)
+    except (TypeError, ValueError):
+        return default
+    return found if math.isfinite(found) else default
+
+
+def _chapter_pairs(rows) -> tuple[tuple[float, str], ...]:
+    """The cut's chapters as (seconds, title), in time order, from rows written as
+    {"t": 12, "title": "..."}, [12, "..."] or {"start": 12, "title": "..."}."""
+    found: list[tuple[float, str]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict):
+            at = next((_number(row[k], None) for k in ("t", "time", "start", "at_s", "start_s") if k in row), None)
+            title = row.get("title")
+        elif isinstance(row, (list, tuple)) and len(row) == 2:
+            at, title = _number(row[0], None), row[1]
+        else:
+            continue
+        title = one_line(title or "") if isinstance(title, str) else ""
+        if at is not None and title:
+            found.append((max(0.0, at), title))
+    return tuple(sorted(found, key=lambda c: c[0]))
+
+
+def load_topics(job: JobRecord) -> list[TopicInfo]:
+    """The job's rendered topic cuts, from manifest.json (which stays on the
+    server when the individual files are removed), each with the time its topic
+    first plays in the full video. A row whose artifact did not come out ok is
+    skipped. Empty for a job without topic cuts."""
+    manifest = _read_json(get_settings().jobs_dir / job.job_id / "manifest.json")
+    rows = manifest.get("topics") if isinstance(manifest, dict) else None
+    if not isinstance(rows, list):
+        return []
+    render = _render_manifest(job)
+    found = []
+    for row in rows:
+        try:
+            match = _TOPIC_FILE.fullmatch(str(row["file"]))
+            if match is None:
+                continue
+            artifact = job.artifacts.get(row["file"])
+            if artifact is not None and artifact.status != "ok":
+                continue
+            start, end = float(row["source_start"]), float(row["source_end"])
+            cleaned_start = _number(row.get("cleaned_start"), None)
+            if cleaned_start is not None:
+                at_s = math.floor(job.final_offset_s + cleaned_start + 1e-6)
+            else:
+                at_s = clip_position(render, start, end, job.final_offset_s) if render is not None else None
+            thumb = _number(row.get("thumb_src_s"), None)
+            found.append(TopicInfo(
+                int(match[1]), row["file"], str(row.get("title") or ""), str(row.get("hook") or ""),
+                str(row.get("screen_hook") or ""), start, end, cleaned_start,
+                _number(row.get("cleaned_end"), None), _number(row.get("duration_s")) or 0.0,
+                _number(row.get("open_s")) or 0.0, _number(row.get("card_s")) or 0.0,
+                _chapter_pairs(row.get("chapters")), _number(row.get("best_score")) or 0.0,
+                bool(row.get("stands_alone")), str(row.get("category") or ""), thumb,
+                str(row.get("text") or "")[:2000], at_s))
+        except (KeyError, TypeError, ValueError):
+            logger.warning("job %s: skipping an unreadable topics row in manifest.json: %r", job.job_id, row)
+    return sorted(found, key=lambda t: t.index)
+
+
+def rendered_topics(job: JobRecord) -> set[int]:
+    """The number of every topic cut the job rendered (manifest rows and ok artifacts)."""
+    found = {topic.index for topic in load_topics(job)}
+    for name, artifact in job.artifacts.items():
+        match = _TOPIC_FILE.fullmatch(name)
         if match is not None and artifact.status == "ok":
             found.add(int(match[1]))
     return found
@@ -234,17 +345,55 @@ def series_of(title: str) -> str:
     return " ".join(_ANGLE.sub(" ", " ".join(words)).split())
 
 
-def series_label(job: JobRecord) -> str:
-    """"FloLabs <Series>", or just "FloLabs" when the meeting has no series."""
+def _registry_row(job: JobRecord):
+    """The team registry row of the job's meeting (its Zoom topic first, then its
+    title), or None when there is none or the registry can't be read."""
+    try:
+        from publish import series  # here: series imports this module
+
+        info = getattr(job, "zoom_meeting", None)
+        for topic in ((info.get("topic") if isinstance(info, dict) else None), job.title):
+            if topic:
+                row = series.lookup(topic)
+                if row is not None:
+                    return row
+    except Exception:  # a naming nicety must never stop a publish
+        logger.warning("could not read the team list for job %s", getattr(job, "job_id", "?"), exc_info=True)
+    return None
+
+
+def _registry_name(job: JobRecord) -> str:
+    """The team's own name from the registry (without a FloLabs prefix), or ""."""
+    row = _registry_row(job)
+    name = one_line(row.label, 60) if row is not None and row.label else ""
+    if name.lower().startswith("flolabs") and name[len("flolabs"):].strip():
+        name = name[len("flolabs"):].strip()
+    return name
+
+
+def _old_series_label(job: JobRecord) -> str:
     series = series_of(job.title or "")
     if series.lower().startswith("flolabs"):
         series = series[len("flolabs"):].strip()
     return f"FloLabs {series}" if series else "FloLabs"
 
 
+def series_label(job: JobRecord) -> str:
+    """"FloLabs <Team>": the team's name in the registry, else the meeting's
+    series; just "FloLabs" when the meeting has none."""
+    name = _registry_name(job)
+    return f"FloLabs {name}" if name and name.lower() != "flolabs" else _old_series_label(job)
+
+
 def _series_tag(job: JobRecord) -> str:
-    """"Multi-modal perception" -> "#MultiModalPerception"; "" when empty or
+    """The team's own hashtags from the registry (at most 2, space-separated),
+    else "Multi-modal perception" -> "#MultiModalPerception"; "" when empty or
     the same as the brand tag."""
+    row = _registry_row(job)
+    if row is not None and row.hashtags:
+        tags = [t for t in row.hashtags if re.fullmatch(r"#[A-Za-z0-9]+", t) and t.lower() != "#shorts"]
+        if tags:
+            return " ".join(tags[:2])
     words = re.findall(r"[^\W_]+", series_of(job.title or ""))
     tag = "".join(w[0].upper() + w[1:] for w in words)[:30]
     return f"#{tag}" if tag and f"#{tag}".lower() != _BRAND_TAG.lower() else ""
@@ -321,9 +470,21 @@ def _names_someone(title: str, names: set[str]) -> bool:
 
 
 def _best_moment(job: JobRecord) -> tuple[str, str]:
+    title, why, _ = _best_moment_full(job)
+    return title, why
+
+
+def best_moment_range(job: JobRecord) -> tuple[float, float] | None:
+    """(source_start, source_end) of the same moment the title is taken from
+    (what _best_moment picks), or None when there is none."""
+    return _best_moment_full(job)[2]
+
+
+def _best_moment_full(job: JobRecord) -> tuple[str, str, tuple[float, float] | None]:
     """(title, why) of the moment the full video is best known for: the first
     short that passes the grounding check, else the top highlight of the reel
-    (both stay in manifest.json after the files are removed). ("", "") if none."""
+    (both stay in manifest.json after the files are removed), plus its source range.
+    ("", "", None) if none."""
     # a short title that failed the check must not come back through the reel,
     # whose rows keep no clip text to check against
     # A title never names a person: one that does is passed over like one that
@@ -333,7 +494,7 @@ def _best_moment(job: JobRecord) -> tuple[str, str]:
     for short in load_shorts(job):
         title = one_line(short.title)
         if title and _grounded(title, short.text) and not _names_someone(title, names):
-            return title, one_line(_LEADING_TIME.sub("", short.hook), 200)
+            return title, one_line(_LEADING_TIME.sub("", short.hook), 200), (short.source_start, short.source_end)
         if title:
             rejected.add(title.lower())
     data = _read_json(get_settings().jobs_dir / job.job_id / "manifest.json")
@@ -342,8 +503,11 @@ def _best_moment(job: JobRecord) -> tuple[str, str]:
         for row in rows:
             title = one_line(row.get("title") or "") if isinstance(row, dict) else ""
             if title and not rejected and not _names_someone(title, names):
-                return title, ""
-    return "", ""
+                try:
+                    return title, "", (float(row["source_start"]), float(row["source_end"]))
+                except (KeyError, TypeError, ValueError):
+                    return title, "", None
+    return "", "", None
 
 
 def _posted_titles() -> set[str]:
@@ -356,10 +520,10 @@ def _posted_titles() -> set[str]:
         return set()
 
 
-def _title_candidates(job: JobRecord) -> list[str]:
+def _title_candidates(job: JobRecord, label: str | None = None) -> list[str]:
     """The topic-first titles this meeting could get, best first: the plain
     "<moment> | FloLabs <Series>", then the same with the day added."""
-    label = series_label(job)
+    label = label or series_label(job)
     room = TITLE_LIMIT - len(label) - 3
     moment, _ = _best_moment(job)
     if not moment or room < 15:
@@ -374,7 +538,10 @@ def title_variants(job: JobRecord) -> set[str]:
     the day-adding dodge in full_title cannot hide a repeat."""
     if pub_settings.current().title_style != "topic_first":
         return {_title_meeting_date(job).lower()}
-    return {t.lower() for t in _title_candidates(job)} | {_title_meeting_date(job).lower()}
+    # both the team-list name and the old name taken from the meeting's title,
+    # so renaming a team can't dodge the duplicate-title hold
+    found = {t.lower() for t in _title_candidates(job)} | {t.lower() for t in _title_candidates(job, _old_series_label(job))}
+    return found | {_title_meeting_date(job).lower()}
 
 
 def full_title(job: JobRecord) -> str:
@@ -406,7 +573,7 @@ def _chapter_entries(job: JobRecord) -> list[str]:
 
 def _hashtags(job: JobRecord, extra: str = "") -> str:
     tags: list[str] = []
-    for tag in (_BRAND_TAG, _series_tag(job), extra):
+    for tag in (_BRAND_TAG, *_series_tag(job).split(), extra):
         if tag and tag.lower() not in {t.lower() for t in tags} and tag.lower() != "#shorts":
             tags.append(tag)
     return " ".join(tags[:_HASHTAG_MAX])
@@ -428,7 +595,7 @@ def _summary_lines(job: JobRecord) -> list[str]:
     titles = [_no_times(t) for t in _chapter_entries(job)[1:] if t]
     if titles:
         lines.append(one_line("Also in this meeting: " + ", ".join(titles[:3]), 250))
-    series = series_of(job.title or "")
+    series = _registry_name(job) or series_of(job.title or "")
     try:
         d = date.fromisoformat(meeting_date(job))
         day = f"{d.day} {d:%B %Y}"
@@ -483,14 +650,111 @@ def _topic_tag(title: str) -> str:
     return ""
 
 
+def _team_name(job: JobRecord) -> str:
+    return _registry_name(job) or series_of(job.title or "")
+
+
+def topic_title(info: TopicInfo, job: JobRecord) -> str:
+    """The topic cut's title: "<the cut's best moment> | FloLabs <Team>". The
+    moment's title must be about the cut's own words (_grounded: half its main
+    words and every number it states were said), must not name a person, and
+    gets the day added when that title is already on the channel (or is the full
+    video's). A title that fails falls back to the cut's first chapter title,
+    then to the meeting's name."""
+    label = series_label(job)
+    room = TITLE_LIMIT - len(label) - 3
+    names = _speaker_names(job)
+    first_chapter = info.chapters[0][1] if info.chapters else ""
+    candidates = []
+    for text in (info.title, first_chapter):
+        title = one_line(text, room)
+        if title and room >= 15 and _grounded(title, info.text) and not _names_someone(title, names):
+            candidates.append(title)
+    if not candidates:
+        return one_line(f"{_topic(job) or 'Meeting'} — topic {info.index}")
+    moment = candidates[0]
+    posted = _posted_titles() | {full_title(job).lower()}
+    plain = f"{moment} | {label}"
+    if plain.lower() not in posted:
+        return plain
+    day = meeting_date(job)
+    return f"{one_line(moment, room - len(day) - 3)} ({day}) | {label}"
+
+
+def topic_chapters(info: TopicInfo) -> list[tuple[int, str]]:
+    """The cut's chapters as they play in the cut's file: shifted by the cold
+    open and the card, "00:00" first (the open and the card belong to the first
+    chapter), as the full video's list is. [] when they don't make a valid list
+    (at least 3, 10 s apart, the last 10 s long, no < or >)."""
+    from decide.chapters import (
+        validate_chapter_entries,  # here: keeps this module light to import
+    )
+
+    if len(info.chapters) < 3:
+        return []
+    shift = info.open_s + info.card_s
+    entries: list[tuple[int, str]] = []
+    for n, (t, title) in enumerate(info.chapters):
+        entries.append((0 if n == 0 else math.floor(t + shift + 1e-6), title))
+    total = shift + info.duration_s
+    if validate_chapter_entries(entries, total):
+        return []
+    return entries
+
+
+def topic_description(info: TopicInfo, job: JobRecord, full_url: str | None = None,
+                      full_at_s: int | None = None) -> str:
+    """What a viewer reads under a topic cut: the hook, where it comes from, the
+    link to the full meeting at the moment the topic starts (when the full video
+    is on the channel), the cut's own chapters (when they are valid), the owner's
+    links and a few hashtags (never #shorts). No line but a chapter starts with
+    a time. At most 5000 bytes: the chapters are never cut, extras give way."""
+    cfg = pub_settings.current()
+    team = _team_name(job)
+    try:
+        d = date.fromisoformat(meeting_date(job))
+        day = f"{d.day} {d:%B %Y}"
+    except ValueError:
+        day = ""
+    where = f"From the {team} team meeting" if team else "From the team meeting"
+    hook = _no_times(one_line(info.hook, 300))
+    rest = [f"{where} of {day}." if day else f"{where}.", ORG_LINE]
+    if full_url:
+        at = full_at_s if full_at_s is not None else info.at_s
+        rest.append(f"Full meeting: {full_url}?t={at}" if at else f"Full meeting: {full_url}")
+    intro = "\n\n".join(p for p in (hook, "\n".join(rest)) if p)
+    chapters = "\n".join(f"{fmt_clock(t)} {title}" for t, title in topic_chapters(info))
+    tags = _hashtags(job, _topic_tag(info.title)) if cfg.hashtags else ""
+    links = cfg.links_text.strip()
+
+    def build(links_text: str) -> str:
+        return "\n\n".join(p for p in (intro, chapters, links_text, tags) if p)
+
+    text = build(links)
+    if len(text.encode("utf-8")) > DESCRIPTION_LIMIT and links:
+        kept: list[str] = []
+        for line in links.splitlines():
+            if len(build("\n".join([*kept, line])).encode("utf-8")) > DESCRIPTION_LIMIT:
+                break
+            kept.append(line)
+        text = build("\n".join(kept))
+    return text
+
+
 def short_title(info: ShortInfo, job: JobRecord) -> str:
     return one_line(info.title) or one_line(f"{_topic(job) or 'Meeting'} — clip {info.index}")
 
 
-def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = None) -> str:
+def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = None,
+                      cut_url: str | None = None, cut_at_s: int | None = None) -> str:
     """The hook, then where the clip comes from. `full_url` (the full video's
     link, when it is already on the channel) adds a link to that moment; links
-    don't work in a Short's description, so it is a nicety."""
+    don't work in a Short's description, so it is a nicety. `cut_url` (the topic
+    cut's link, when the Short's clip lies inside the cut and the owner's
+    shorts_link_target is "topic": see short_cut_position) is linked in its
+    place, at `cut_at_s` into the cut."""
+    if cut_url:
+        return _short_description_cut(info, job, cut_url, cut_at_s)
     lines: list[str] = []
     hook = one_line(info.hook, 300)
     if hook:
@@ -509,6 +773,37 @@ def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = No
         if tags:
             lines += ["", tags]
     return "\n".join(lines)
+
+
+def _short_description_cut(info: ShortInfo, job: JobRecord, cut_url: str, cut_at_s: int | None) -> str:
+    lines: list[str] = []
+    hook = one_line(info.hook, 300)
+    if hook:
+        lines += [hook, ""]
+    topic = _topic(job)
+    day = "" if date_in_text(topic) is not None else f" ({meeting_date(job)})"
+    lines.append(f"From the full meeting: {topic}{day}" if topic else f"From the full meeting{day}")
+    lines.append("The whole topic, from the start:")
+    lines.append(f"{cut_url}?t={cut_at_s}" if cut_at_s else cut_url)
+    if pub_settings.current().hashtags:
+        tags = _hashtags(job, _topic_tag(info.title))
+        if tags:
+            lines += ["", tags]
+    return "\n".join(lines)
+
+
+def short_cut_position(short: ShortInfo, cut: TopicInfo, job: JobRecord) -> int | None:
+    """Whole seconds into the topic cut where the Short's clip first plays, or
+    None when the clip is not inside the cut (its source stretch, or where it
+    plays in the cleaned meeting, falls outside the cut's)."""
+    if short.at_s is None or cut.cleaned_start is None or cut.cleaned_end is None:
+        return None
+    if short.source_start < cut.source_start - 1.0 or short.source_end > cut.source_end + 1.0:
+        return None
+    cleaned_at = short.at_s - job.final_offset_s
+    if not (cut.cleaned_start - 1.0 <= cleaned_at < cut.cleaned_end):
+        return None
+    return max(0, math.floor(cut.open_s + cut.card_s + max(0.0, cleaned_at - cut.cleaned_start) + 1e-6))
 
 
 def shorts_block(shorts: list[tuple[int, str, str]]) -> str:

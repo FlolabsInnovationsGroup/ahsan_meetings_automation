@@ -30,6 +30,7 @@ Debian 13's 7.1 rejects the xfade chain ("current rate of 1/0 is invalid").
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from fractions import Fraction
@@ -43,7 +44,14 @@ from core.timeline import AUDIO_RATE, rate_str, ts
 
 from .fonts import filter_path
 from .plan import InputSpan, VideoPart
-from .profile import AUDIO_ARGS, BASE_ARGS, ffmpeg_timeout, video_args
+from .profile import (
+    AUDIO_ARGS,
+    BASE_ARGS,
+    HD_TIMEOUT_FACTOR,
+    ffmpeg_timeout,
+    shorts_video_args,
+    video_args,
+)
 
 logger = get_logger(__name__)
 
@@ -157,24 +165,24 @@ def build_video_part_graph(part: VideoPart, fps: Fraction, width: int, height: i
 
 def build_video_part_cmd(
     src: Path, part: VideoPart, fps: Fraction, width: int, height: int, graph_path: Path, dest: Path,
-    overlays: dict[int, str] | None = None,
+    overlays: dict[int, str] | None = None, hd: bool = False,
 ) -> list[str]:
     graph_path.write_text(build_video_part_graph(part, fps, width, height, overlays), encoding="utf-8")
     cmd = [ffmpeg_bin(), *BASE_ARGS]
     for span in part.inputs:
         cmd += video_input_args(src, span, fps)
-    cmd += [*filter_graph_args(graph_path), "-map", "[vout]", "-an", *video_args(fps),
+    cmd += [*filter_graph_args(graph_path), "-map", "[vout]", "-an", *video_args(fps, hd),
             "-frames:v", str(part.frames), str(dest)]
     return cmd
 
 
 def render_video_part(
     src: Path, part: VideoPart, fps: Fraction, width: int, height: int, graph_path: Path, dest: Path,
-    overlays: dict[int, str] | None = None,
+    overlays: dict[int, str] | None = None, hd: bool = False,
 ) -> None:
-    cmd = build_video_part_cmd(src, part, fps, width, height, graph_path, dest, overlays)
+    cmd = build_video_part_cmd(src, part, fps, width, height, graph_path, dest, overlays, hd)
     logger.debug("render %s (%d inputs, %d frames): %s", part.kind, len(part.inputs), part.frames, dest.name)
-    run_checked(cmd, timeout=ffmpeg_timeout(float(Fraction(part.frames) / fps)))
+    run_checked(cmd, timeout=ffmpeg_timeout(float(Fraction(part.frames) / fps)) * (HD_TIMEOUT_FACTOR if hd else 1.0))
 
 
 def _concat_quote(path: str) -> str:
@@ -242,7 +250,8 @@ def audio_input_args(flac: Path, piece: AudioPiece) -> tuple[list[str], int]:
 AUDIO_REFRAME = "asetnsamples=n=4096:p=0"
 
 
-def build_audio_graph(pieces: list[AudioPiece], pres: list[int]) -> str:
+def build_audio_graph(pieces: list[AudioPiece], pres: list[int], first_input: int = 0,
+                      out_label: str = "aout") -> str:
     lines = []
     n = len(pieces)
     for k, (piece, pre) in enumerate(zip(pieces, pres)):
@@ -250,7 +259,7 @@ def build_audio_graph(pieces: list[AudioPiece], pres: list[int]) -> str:
         # still yields exactly `samples` samples. Unbounded: the source audio
         # may end up to 1 s before the video (ingest allows it), and atrim
         # ends the stream at end_sample anyway.
-        chain = (f"[{k}:a]apad,"
+        chain = (f"[{first_input + k}:a]apad,"
                  f"atrim=start_sample={pre}:end_sample={pre + piece.samples},asetpts=PTS-STARTPTS")
         fade = min(MICRO_FADE_SAMPLES, piece.samples // 4)
         if piece.fade_in and fade:
@@ -258,11 +267,11 @@ def build_audio_graph(pieces: list[AudioPiece], pres: list[int]) -> str:
         if piece.fade_out and fade:
             chain += f",afade=t=out:ss={piece.samples - fade}:ns={fade}"
         if n == 1:
-            lines.append(f"{chain},{AUDIO_REFRAME}[aout]")
+            lines.append(f"{chain},{AUDIO_REFRAME}[{out_label}]")
         else:
             lines.append(f"{chain}[a{k}]")
     if n > 1:
-        lines.append("".join(f"[a{k}]" for k in range(n)) + f"concat=n={n}:v=0:a=1,{AUDIO_REFRAME}[aout]")
+        lines.append("".join(f"[a{k}]" for k in range(n)) + f"concat=n={n}:v=0:a=1,{AUDIO_REFRAME}[{out_label}]")
     return ";\n".join(lines)
 
 
@@ -284,14 +293,78 @@ def render_audio_chunk(flac: Path, pieces: list[AudioPiece], graph_path: Path, d
     run_checked(cmd, timeout=ffmpeg_timeout(total_s / 10.0))
 
 
-def encode_aac(chunks: list[Path], dest: Path, graph_path: Path, content_s: float = 0.0) -> None:
+# Peak ceiling for levelled audio: -1.5 dBFS, as the limiter's linear value.
+PEAK_LIMIT = f"{10 ** (-1.5 / 20):.4f}"
+
+
+LUFS_FLOOR = -70.0
+_LUFS_SUMMARY = re.compile(r"^\s*I:\s*(-?\d+(?:\.\d+)?|-?inf)\s*LUFS", re.MULTILINE | re.IGNORECASE)
+
+
+def measure_lufs(flac: Path, piece: AudioPiece | None = None, timeout: float | None = None) -> float | None:
+    """Integrated loudness (LUFS, EBU R128) of a piece of the FLAC, or the
+    whole file. None when it is quieter than -70 (silence) or anything fails.
+    About 5 s for a 101-minute meeting."""
+    try:
+        cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", "info"]
+        total_s = 0.0
+        if piece is not None:
+            args, pre = audio_input_args(flac, piece)
+            cmd += args
+            af = f"atrim=start_sample={pre}:end_sample={pre + piece.samples},asetpts=PTS-STARTPTS,"
+            total_s = piece.samples / AUDIO_RATE
+        else:
+            cmd += ["-i", str(flac)]
+            af = ""
+        cmd += ["-vn", "-af", f"{af}ebur128=framelog=quiet", "-f", "null", "-"]
+        if timeout is None:
+            timeout = ffmpeg_timeout(max(total_s, 60.0) / 10.0)
+        result = run_checked(cmd, timeout=timeout)
+        found = _LUFS_SUMMARY.findall(result.stderr or "")
+        if not found:
+            return None
+        value = float(found[-1])
+    except Exception:  # noqa: BLE001 - loudness is a nicety: never fail a render over it
+        return None
+    if not math.isfinite(value) or value <= LUFS_FLOOR:
+        return None
+    return value
+
+
+def gain_to_target(measured: float | None, target: float, max_boost: float = 20.0,
+                   max_cut: float = 10.0) -> float | None:
+    """The dB gain that brings `measured` loudness to `target`, limited to
+    +max_boost / -max_cut. None when nothing was measured."""
+    if measured is None:
+        return None
+    return max(-max_cut, min(max_boost, target - measured))
+
+
+def encode_aac(chunks: list[Path], dest: Path, graph_path: Path, content_s: float = 0.0,
+               gains: list[float | None] | None = None) -> None:
     """Join the exact FLAC chunks (lossless concat filter) and encode AAC once.
     ffmpeg's AAC encoder is single-threaded (~50x realtime here), so the
-    timeout scales with the audio length."""
+    timeout scales with the audio length. `gains` (dB, aligned with `chunks`,
+    None = leave alone) turns single chunks up or down before the join, then
+    one limiter catches the peaks (latency=1: without it alimiter delays the
+    audio by 239 samples). With no gain set the command is the plain one."""
     cmd = [ffmpeg_bin(), *BASE_ARGS]
     for chunk in chunks:
         cmd += ["-i", str(chunk)]
-    if len(chunks) == 1:
+    if gains and any(g is not None for g in gains):
+        lines, labels = [], ""
+        for k in range(len(chunks)):
+            g = gains[k] if k < len(gains) else None
+            if g is None:
+                labels += f"[{k}:a]"
+            else:
+                lines.append(f"[{k}:a]volume={g:.2f}dB[g{k}]")
+                labels += f"[g{k}]"
+        lines.append(f"{labels}concat=n={len(chunks)}:v=0:a=1[aj]")
+        lines.append(f"[aj]alimiter=limit={PEAK_LIMIT}:level=0:latency=1[aout]")
+        graph_path.write_text(";\n".join(lines), encoding="utf-8")
+        cmd += [*filter_graph_args(graph_path), "-map", "[aout]"]
+    elif len(chunks) == 1:
         cmd += ["-map", "0:a:0"]
     else:
         graph_path.write_text("".join(f"[{k}:a]" for k in range(len(chunks))) +
@@ -379,11 +452,12 @@ def build_card_graph(*, fps: Fraction, width: int, height: int, frames: int, fon
     return chain
 
 
-def render_card_video(dest: Path, graph: str, graph_path: Path, fps: Fraction, frames: int) -> None:
+def render_card_video(dest: Path, graph: str, graph_path: Path, fps: Fraction, frames: int,
+                      hd: bool = False) -> None:
     graph_path.write_text(graph, encoding="utf-8")
     cmd = [ffmpeg_bin(), *BASE_ARGS, *filter_graph_args(graph_path), "-map", "[vout]", "-an",
-           *video_args(fps), "-frames:v", str(frames), str(dest)]
-    run_checked(cmd, timeout=ffmpeg_timeout(float(Fraction(frames) / fps)))
+           *video_args(fps, hd), "-frames:v", str(frames), str(dest)]
+    run_checked(cmd, timeout=ffmpeg_timeout(float(Fraction(frames) / fps)) * (HD_TIMEOUT_FACTOR if hd else 1.0))
 
 
 # ------------------------------------------------------------ intro / outro
@@ -411,12 +485,13 @@ def build_clip_graph(*, fps: Fraction, width: int, height: int, frames: int, col
     return exact_frames_chain(0, frames, fps, normalise) + "[vout]"
 
 
-def render_clip_video(src: Path, dest: Path, graph: str, graph_path: Path, fps: Fraction, frames: int) -> None:
+def render_clip_video(src: Path, dest: Path, graph: str, graph_path: Path, fps: Fraction, frames: int,
+                      hd: bool = False) -> None:
     graph_path.write_text(graph, encoding="utf-8")
     cmd = [ffmpeg_bin(), *BASE_ARGS, "-i", str(src), *filter_graph_args(graph_path), "-map", "[vout]", "-an",
-           *video_args(fps), "-frames:v", str(frames), str(dest)]
+           *video_args(fps, hd), "-frames:v", str(frames), str(dest)]
     # decoding a 1080p60 clip costs more than its length suggests
-    run_checked(cmd, timeout=ffmpeg_timeout(4.0 * float(Fraction(frames) / fps)))
+    run_checked(cmd, timeout=ffmpeg_timeout(4.0 * float(Fraction(frames) / fps)) * (HD_TIMEOUT_FACTOR if hd else 1.0))
 
 
 def render_clip_audio(src: Path, dest: Path, samples: int, channels: int) -> None:
@@ -456,6 +531,163 @@ def build_short_graph(*, frames: int, fps: Fraction, width: int, height: int, pr
     return ";\n".join(lines)
 
 
+# The new Shorts look (slide/speaker crops over a dark blur, levelled sound).
+SHORT_W, SHORT_H = 1080, 1920
+SHORT_BAND_TOP, SHORT_BAND_H = 480, 650  # where a slide sits: under the hook, above the captions
+SHORT_PANEL_H = 1350  # the 4:5 speaker panel
+SHORT_PANEL_Y = 285
+SHORT_ZOOM_W = 960
+SHORT_TIMEOUT_FACTOR = 4.0
+AFFTDN_DELAY = 1200  # afftdn delays its output by 1200 samples (25 ms) and keeps the length
+SHORT_HD_TIMEOUT_FACTOR = 6.0  # HD medium costs up to 65% more on gallery content
+SHORT_BG_BLUR = ("boxblur=luma_radius=8:luma_power=2:chroma_radius=4:chroma_power=2,"
+                 "eq=brightness=-0.3:saturation=0.7")
+
+
+def _even(value: float, floor: int = 2) -> int:
+    return max(floor, int(value) // 2 * 2)
+
+
+def _even_box(box, bounds: tuple[int, int] | None = None) -> tuple[int, int, int, int]:
+    """An (x, y, w, h) crop with even numbers, inside `bounds` (w, h) if given."""
+    x, y, w, h = (int(v) for v in box)
+    w, h = _even(w), _even(h)
+    if bounds is not None:
+        bw, bh = bounds
+        w, h = min(w, _even(bw)), min(h, _even(bh))
+        x, y = max(0, min(x, bw - w)), max(0, min(y, bh - h))
+    return max(0, x) // 2 * 2, max(0, y) // 2 * 2, w, h
+
+
+def _zoom_box(panel: tuple[int, int, int, int], change_box) -> tuple[int, int, int, int]:
+    """A 960-wide crop of the slide panel centred on the part that changes,
+    kept inside the panel (the whole panel when it is not wider than 960)."""
+    px, py, pw, ph = panel
+    if change_box is None or pw <= SHORT_ZOOM_W:
+        return panel
+    w = SHORT_ZOOM_W
+    h = _even(w * ph / pw)
+    cx = change_box[0] + change_box[2] / 2
+    cy = change_box[1] + change_box[3] / 2
+    x = round(min(max(px, cx - w / 2), px + pw - w))
+    y = round(min(max(py, cy - h / 2), py + ph - h))
+    return _even_box((x, y, w, h), (px + pw, py + ph))
+
+
+def _speaker_crop(aspect: str, focus_x) -> str:
+    """crop to full height at `aspect` (w:h) around the speaker, inside the frame."""
+    fx = f"{int(focus_x)}" if focus_x is not None else "iw/2"
+    return (f"crop=w='trunc(ih*{aspect}/2)*2':h='trunc(ih/2)*2':"
+            f"x='trunc(min(max(0,{fx}-ow/2),iw-ow)/2)*2':y=0")
+
+
+def _blur_stamp(lines: list[str], head: str, stamp, shown, src_size) -> str:
+    """Blur Zoom's burned-in timestamp (a (x, y, w, h) source box found by slice.layout) so it does not
+    show in the Short. Only that small box is touched, never a face or a name label. `shown` is the
+    source box the Short displays (None: all of it); a stamp outside it needs no blur. Adds the lines
+    to `lines` and returns the new head to carry on from."""
+    if not stamp:
+        return head
+    x, y, w, h = _even_box(stamp, src_size)
+    if shown is not None:
+        sx, sy, sw, sh = shown
+        if x + w <= sx or x >= sx + sw or y + h <= sy or y >= sy + sh:
+            return head
+    luma, chroma = max(1, min(10, min(w, h) // 2 - 1)), max(1, min(5, min(w, h) // 4 - 1))
+    lines.append(f"{head},split=2[s0][s1]")
+    lines.append(f"[s1]crop={w}:{h}:{x}:{y},boxblur=luma_radius={luma}:luma_power=3:"
+                 f"chroma_radius={chroma}:chroma_power=3[sb]")
+    lines.append(f"[s0][sb]overlay={x}:{y}[hs]")
+    return "[hs]null"
+
+
+def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int, height: int, pre,
+                          samples: int, layout, look, subtitles: str = "", gain_db: float | None = None,
+                          n_audio: int = 1, audio_pieces: list[AudioPiece] | None = None,
+                          src_size: tuple[int, int] | None = None) -> str:
+    """Vertical short, new look. One video input per span (hard-cut together
+    when there are several), then by `layout.kind`: a screen share or gallery
+    is cropped to its content and shown 1080 wide over a dark blurred copy; a
+    speaker fills the frame (or sits in a 4:5 panel); anything else is today's
+    fit. Audio: the FLAC piece(s) after the video inputs, optional denoise,
+    optional gain with a peak limiter, trimmed to exactly `samples` again.
+    `pre` is the seek margin of the one audio piece (a list for several;
+    `audio_pieces` then holds the pieces). `src_size` (w, h) lets crops be
+    clamped to the source."""
+    n_spans = len(spans_frames)
+    sy = height / SHORT_H
+    kind = getattr(layout, "kind", "fit")
+    panel = getattr(layout, "panel", None)
+    if kind in ("screen", "gallery") and not panel:
+        kind = "fit"
+    speaker_full = kind == "speaker" and getattr(look, "speaker_layout", "full") == "full"
+    lines: list[str] = []
+    if n_spans == 1:
+        head = exact_frames_chain(0, spans_frames[0], fps)
+    else:
+        for k, frames in enumerate(spans_frames):
+            lines.append(exact_frames_chain(k, frames, fps) + f"[v{k}]")
+        head = "".join(f"[v{k}]" for k in range(n_spans)) + f"concat=n={n_spans}:v=1:a=0"
+    sub = f",{subtitles}" if subtitles else ""
+    stamp = getattr(layout, "stamp", None)
+    if speaker_full:
+        head = _blur_stamp(lines, head, stamp, None, src_size)
+        lines.append(f"{head},{_speaker_crop('9/16', getattr(layout, 'focus_x', None))},"
+                     f"scale={width}:{height}:flags=lanczos,setsar=1{sub},format=yuv420p[vout]")
+    else:
+        bw, bh = max(2, width // 4 // 2 * 2), max(2, height // 4 // 2 * 2)
+        shown = None
+        if kind in ("screen", "gallery"):
+            box = panel
+            if kind == "screen" and getattr(look, "screen_zoom", "whole_slide") == "zoom":
+                box = _zoom_box(tuple(int(v) for v in panel), getattr(layout, "change_box", None))
+            shown = _even_box(box, src_size)
+        head = _blur_stamp(lines, head, stamp, shown, src_size)
+        lines.append(f"{head},split=2[b0][f0]")
+        lines.append(f"[b0]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+                     f"{SHORT_BG_BLUR},scale={width}:{height},setsar=1[bg]")
+        if kind in ("screen", "gallery"):
+            x, y, w, h = shown
+            top, band = _even(SHORT_BAND_TOP * sy), _even(SHORT_BAND_H * sy)
+            lines.append(f"[f0]crop={w}:{h}:{x}:{y},scale={width}:-2:flags=lanczos,setsar=1[fg]")
+            pos = f"x='(W-w)/2':y='{top}+max(0,trunc(({band}-h)/4)*2)'"
+        elif kind == "speaker":
+            lines.append(f"[f0]{_speaker_crop('4/5', getattr(layout, 'focus_x', None))},"
+                         f"scale={width}:{_even(SHORT_PANEL_H * sy)}:flags=lanczos,setsar=1[fg]")
+            pos = f"x=0:y={round(SHORT_PANEL_Y * sy)}"
+        else:
+            lines.append(f"[f0]scale={width}:{height}:force_original_aspect_ratio=decrease:"
+                         f"force_divisible_by=2,setsar=1[fg]")
+            pos = "x=(W-w)/2:y=(H-h)/2"
+        lines.append(f"[bg][fg]overlay={pos}{sub},format=yuv420p[vout]")
+
+    # audio
+    fade = min(SHORT_FADE_SAMPLES, samples // 4)
+    denoise = "afftdn=nr=10:nf=-40," if getattr(look, "denoise", False) else ""
+    gain = (f",volume={gain_db:.2f}dB,alimiter=limit={PEAK_LIMIT}:level=0:latency=1,"
+            f"apad,atrim=end_sample={samples}") if gain_db is not None else ""
+    if n_audio > 1:
+        if not audio_pieces or len(audio_pieces) != n_audio or not isinstance(pre, (list, tuple)):
+            raise ValueError("several audio pieces need audio_pieces and a list of seek margins")
+        if denoise or gain:
+            lines.append(build_audio_graph(audio_pieces, list(pre), n_spans, "araw"))
+            if denoise:  # undo afftdn's delay, then restore the exact length
+                denoise = (f"{denoise}atrim=start_sample={AFFTDN_DELAY},asetpts=PTS-STARTPTS,"
+                           f"apad,atrim=end_sample={samples},")
+            lines.append(f"[araw]{denoise.rstrip(',')}{',' if denoise else ''}"
+                         f"{gain.lstrip(',') if gain else 'anull'}[aout]")
+        else:
+            lines.append(build_audio_graph(audio_pieces, list(pre), n_spans, "aout"))
+    else:
+        lines.append(f"[{n_spans}:a]{denoise}apad,"
+                     f"atrim=start_sample={pre + (AFFTDN_DELAY if denoise else 0)}:"
+                     f"end_sample={pre + (AFFTDN_DELAY if denoise else 0) + samples},"
+                     f"asetpts=PTS-STARTPTS"
+                     + (f",afade=t=in:ss=0:ns={fade},afade=t=out:ss={samples - fade}:ns={fade}" if fade else "")
+                     + f"{gain}[aout]")
+    return ";\n".join(lines)
+
+
 def subtitles_filter(ass_path: Path, fonts_dir: Path | None) -> str:
     opts = [f"filename={filter_path(ass_path)}"]
     if fonts_dir is not None:
@@ -463,12 +695,23 @@ def subtitles_filter(ass_path: Path, fonts_dir: Path | None) -> str:
     return "subtitles=" + ":".join(opts)
 
 
-def render_short(src: Path, flac: Path, span: InputSpan, piece: AudioPiece, graph: str, graph_path: Path,
-                 dest: Path, fps: Fraction) -> None:
+def render_short(src: Path, flac: Path, span: InputSpan | list[InputSpan], piece: AudioPiece | list[AudioPiece],
+                 graph: str, graph_path: Path, dest: Path, fps: Fraction, hd: bool = False) -> None:
+    """Encode one short. `span` and `piece` are one each (the classic graph) or
+    lists (the new graph with several cuts); video inputs come first, then the
+    audio inputs. `hd` selects the high-quality encode, which takes longer."""
+    spans = span if isinstance(span, list) else [span]
+    pieces = piece if isinstance(piece, list) else [piece]
     graph_path.write_text(graph, encoding="utf-8")
-    audio_args, _ = audio_input_args(flac, piece)
-    cmd = [ffmpeg_bin(), *BASE_ARGS, *video_input_args(src, span, fps), *audio_args,
-           *filter_graph_args(graph_path), "-map", "[vout]", "-map", "[aout]",
-           *video_args(fps), *AUDIO_ARGS, "-frames:v", str(span.frames), "-movflags", "+faststart", str(dest)]
+    cmd = [ffmpeg_bin(), *BASE_ARGS]
+    for s in spans:
+        cmd += video_input_args(src, s, fps)
+    for p in pieces:
+        cmd += audio_input_args(flac, p)[0]
+    frames = sum(s.frames for s in spans)
+    cmd += [*filter_graph_args(graph_path), "-map", "[vout]", "-map", "[aout]",
+            *(shorts_video_args(fps, True) if hd else video_args(fps)), *AUDIO_ARGS,
+            "-frames:v", str(frames), "-movflags", "+faststart", str(dest)]
     # a 1080x1920 blur+overlay encode is ~3-4x the work of a 720p piece
-    run_checked(cmd, timeout=ffmpeg_timeout(4.0 * float(Fraction(span.frames) / fps)))
+    factor = SHORT_HD_TIMEOUT_FACTOR if hd else SHORT_TIMEOUT_FACTOR
+    run_checked(cmd, timeout=ffmpeg_timeout(factor * float(Fraction(frames) / fps)))

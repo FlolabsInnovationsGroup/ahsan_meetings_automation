@@ -48,5 +48,11 @@ def _isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("INTRO_FILE", "")
     monkeypatch.setenv("OUTRO_FILE", "")
     get_settings.cache_clear()
+    # the follow-up worker an upload starts must not outlive its test (it would
+    # read whatever storage folder the next test, or the real one, points at);
+    # tests of that hook put the real starter back
+    from publish import run as publish_run
+
+    monkeypatch.setattr(publish_run, "_start_extras_worker", lambda: None)
     yield
     get_settings.cache_clear()

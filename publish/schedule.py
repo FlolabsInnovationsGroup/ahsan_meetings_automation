@@ -17,8 +17,9 @@ The rules (all from the owner's Publishing settings, publish/settings.py):
   `shorts_per_day` are Shorts;
 - no further than `max_days_ahead` days out (else no slot: None).
 
-Only the first full video booked on a day may notify subscribers; Shorts never
-do. That keeps to one notification a day.
+Only the first full video or topic cut booked on a day may notify subscribers;
+Shorts never do, and neither does a booking made `quiet` (the full video that
+follows its topic cut). That keeps to one notification a day.
 
 Bookings live in storage_dir/state/schedule.json. The app can't cancel a
 scheduled video afterwards (that would need a wider YouTube permission); the
@@ -28,7 +29,7 @@ owner can, in YouTube Studio, during the review window.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -41,7 +42,7 @@ from . import settings as pub_settings
 
 logger = get_logger(__name__)
 
-Kind = Literal["full", "short"]
+Kind = Literal["full", "short", "topic"]
 
 FILE = "schedule.json"
 # Bookings older than this are forgotten on every write.
@@ -117,7 +118,7 @@ def _load() -> list[Booking]:
     for row in rows if isinstance(rows, list) else []:
         try:
             at, booked = _parse(row["at"]), _parse(row.get("booked_at"))
-            if at is None or row["kind"] not in ("full", "short"):
+            if at is None or row["kind"] not in ("full", "short", "topic"):
                 continue
             found.append(Booking(str(row["key"]), row["kind"], str(row.get("source") or ""), at,
                                  bool(row.get("notify")), booked or at, str(row.get("meeting") or "")))
@@ -153,10 +154,13 @@ def book(
     not_before: datetime | None = None,
     now: datetime | None = None,
     meeting: str = "",
+    quiet: bool = False,
 ) -> Booking | None:
     """The slot for the video `key`, or None when there is none within
     `max_days_ahead` days. A video that already has a slot in the future keeps
-    it (a retry after a failure must not move to a later day)."""
+    it (a retry after a failure must not move to a later day). `quiet` forces
+    "no subscriber notification" (the full video that follows a topic cut
+    that took the day's notification)."""
     now = _now(now)
     cfg = pub_settings.current()
     with _lock:
@@ -169,13 +173,17 @@ def book(
         if not_before is not None:
             earliest = max(earliest, _now(not_before))
         if mine is not None and mine.at >= earliest:
+            if quiet and mine.notify:  # it was booked as the day's notification; a cut has it now
+                mine = replace(mine, notify=False)
+                _save([*[b for b in bookings if b.key != key], mine], now)
             return mine
         others = [b for b in bookings if b.key != key]  # an old slot of its own is simply replaced
         zone = team_zone()
         slot = _find(others, kind, cfg, zone, now, not_before)
         if slot is None:
             return None
-        booking = Booking(key, kind, source, slot, _notifies(others, kind, slot, zone), now, meeting)
+        notify = False if quiet else _notifies(others, kind, slot, zone)
+        booking = Booking(key, kind, source, slot, notify, now, meeting)
         _save([*others, booking], now)
         return booking
 
@@ -218,8 +226,8 @@ def _day(booking: Booking, zone: tzinfo) -> date:
 
 
 def _notifies(others, kind, slot: datetime, zone: tzinfo) -> bool:
-    """Only the first full video of a team-time day tells subscribers."""
-    if kind != "full":
+    """Only the first full video or topic cut of a team-time day tells subscribers."""
+    if kind not in ("full", "topic"):
         return False
     day = slot.astimezone(zone).date()
     return not any(b.notify and _day(b, zone) == day for b in others)

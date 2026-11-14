@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache, partial
 from pathlib import Path
@@ -140,6 +141,13 @@ class PublishShortRequest(BaseModel):
     description: str | None = None
 
 
+class PublishTopicRequest(BaseModel):
+    index: int = Field(ge=1, le=99)  # 1 = topic/topic_01.mp4
+    # left out = the suggested title / description (GET /jobs/{id}/publish)
+    title: str | None = Field(default=None, max_length=100)
+    description: str | None = None
+
+
 class PublishRequest(BaseModel):
     """What to put on the channel. Leave `title` out to post only shorts. A
     title or description left out is the suggested one. The shorts go up first,
@@ -155,6 +163,8 @@ class PublishRequest(BaseModel):
     # are on the channel (never earlier, never after a failure).
     delete_after: bool = True
     shorts: list[PublishShortRequest] = Field(default_factory=list, max_length=20)
+    # Topic cuts (topic/topic_NN.mp4): a topic of the meeting as its own video.
+    topics: list[PublishTopicRequest] = Field(default_factory=list, max_length=3)
     # A public video normally goes up private and goes public in its own slot of
     # the release plan (publish/schedule.py); true = public at once instead.
     right_away: bool = False
@@ -478,6 +488,19 @@ def list_zoom_recordings(
     return {"host_email": host_email, "from": start.isoformat(), "to": end.isoformat(), "meetings": meetings}
 
 
+def _refuse_never_team(meeting: dict) -> None:
+    """Process refuses a meeting whose team the owner set to Never in the Teams
+    list. A meeting caught by the never-post list is not refused here (it can be
+    processed; only posting refuses it)."""
+    from publish import series as team_series
+
+    topic = meeting.get("topic")
+    row = team_series.lookup(topic)
+    if row and row.tier == "never" and never_post.match(topic, meeting.get("id")) is None:
+        raise HTTPException(status_code=403, detail="This team is set to Never post, so it is not processed. "
+                                                    "Change the team in the Teams list first.")
+
+
 @app.post("/jobs/zoom")
 def create_zoom_job(body: ZoomJobRequest):
     """Process one Zoom meeting instance. 425 while Zoom is still processing
@@ -494,6 +517,7 @@ def create_zoom_job(body: ZoomJobRequest):
         meeting = zoom.get_client().get_meeting(meeting_uuid)
     except PipelineError as exc:
         return _zoom_error(exc)
+    _refuse_never_team(meeting)
     choice = zoom.choose_files(meeting)
     readiness = zoom.readiness(meeting, choice)
     # "no_transcript" is only a problem when this server can't transcribe itself
@@ -670,6 +694,7 @@ def get_autopilot() -> dict:
     open_rows = [m for m in meetings if m.state not in ("posted", "skipped")]
     done_rows = [m for m in meetings if m.state in ("posted", "skipped")][:20]
     listed = never_post.entries()
+    series_labels = _series_labels(open_rows + done_rows)
     return {
         "enabled": state.enabled,
         "paused": state.paused,
@@ -691,7 +716,10 @@ def get_autopilot() -> dict:
             {**m.model_dump(), "label": _STATE_LABELS.get(m.state, m.state),
              "job_exists": bool(m.job_id and _safe_get_job(m.job_id)),
              # the page offers no "Post it after all" for these
-             "never_post": never_post.match(m.topic, m.meeting_id, listed) is not None}
+             "never_post": never_post.match(m.topic, m.meeting_id, listed) is not None,
+             # the team it belongs to (what the Teams buttons act on)
+             "series_key": m.series_key, "series_label": series_labels.get(m.uuid, ""),
+             "series_hold": bool(m.series_hold)}
             for m in open_rows + done_rows
         ],
     }
@@ -781,6 +809,104 @@ def _daily_channel_check() -> None:
         logger.exception("daily channel check could not start")
 
 
+_views_pull_lock = threading.Lock()
+_views_pull_tried = 0.0  # when the daily views pull last started (monotonic)
+
+
+def _daily_views_pull(sync: bool = False) -> None:
+    """Called from the retention loop: pulls the views numbers in its own
+    thread at most once a day, only when the choice is on and YouTube is
+    connected. A failed pull is stored in the pulls table and waits for the
+    next day (never retried in a loop). Never raises."""
+    global _views_pull_tried
+    try:
+        from analytics import db as views_db
+        from analytics import pull as views_pull
+        from publish import settings as publishing_settings
+
+        connected = bool(youtube.youtube_status().get("connected"))
+        views_pull.purge_if_stale(connected)  # the 30-day purge runs even when the pull is off
+        if not publishing_settings.current().views_pull:
+            return
+        if not connected:
+            return
+        if _views_pull_tried and time.monotonic() - _views_pull_tried < 24 * 3600:
+            return
+        last = views_db.last_pull()
+        stamp = parse_stamp(last["at"]) if last else None
+        if stamp is not None and datetime.now(UTC) - stamp < timedelta(hours=20):
+            return
+        if not _views_pull_lock.acquire(blocking=False):
+            return
+        _views_pull_tried = time.monotonic()
+
+        def work() -> None:
+            try:
+                views_pull.pull_stats()
+            except Exception:
+                logger.exception("daily views pull failed")
+            finally:
+                _views_pull_lock.release()
+
+        if sync:
+            work()
+        else:
+            threading.Thread(target=work, name="views-pull", daemon=True).start()
+    except Exception:
+        logger.exception("daily views pull could not start")
+
+
+# --- the side panel's "Views" report (analytics/report.py) -------------------
+VIEWS_PULL_MIN_GAP = timedelta(minutes=10)
+
+
+@app.get("/views")
+def get_views(days: int = 30, by: str = "video") -> dict:
+    """Views per video, format or team over the last `days` days (raw sums)."""
+    from analytics import report as views_report
+    from analytics import yta as views_yta
+
+    try:
+        data = views_report.report(days, by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    data["watch_status"] = views_yta.last_status()
+    return data
+
+
+@app.get("/views/suggestions")
+def get_views_suggestions() -> dict:
+    """What does best (analytics/suggest.py). {} (still 200) when the
+    'Rankings and suggestions' setting is off. Read-only: changes nothing."""
+    from analytics import suggest as views_suggest
+
+    try:
+        return views_suggest.suggestions()
+    except Exception:
+        logger.exception("views suggestions failed")
+        return {}
+
+
+@app.post("/views/pull")
+def post_views_pull() -> dict:
+    """Pull the numbers now. Refused when a pull ran under 10 minutes ago."""
+    from analytics import db as views_db
+    from analytics import pull as views_pull
+
+    if not youtube.youtube_status().get("connected"):
+        raise HTTPException(status_code=400, detail="Connect YouTube first.")
+    last = views_db.last_pull()
+    stamp = parse_stamp(last["at"]) if last else None
+    if stamp is not None and datetime.now(UTC) - stamp < VIEWS_PULL_MIN_GAP:
+        raise HTTPException(status_code=429, detail="The numbers were pulled a few minutes ago. Try again later.")
+    if not _views_pull_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A pull is already running.")
+    try:
+        return views_pull.pull_stats()
+    finally:
+        _views_pull_lock.release()
+
+
 # --- the side panel's "Publishing" choices (publish/settings.py) -------------
 @app.get("/publishing/settings")
 def get_publishing_settings() -> dict:
@@ -808,6 +934,9 @@ def set_publishing_settings(changes: dict = _PUBLISHING_BODY) -> dict:
     return {"settings": publishing_settings.as_dict(), "warning": publishing_settings.capacity_warning()}
 
 
+_KIND_LABELS = {"full": "Full video", "short": "Short", "topic": "Topic cut"}
+
+
 @app.get("/publishing/schedule")
 def get_release_plan() -> dict:
     """The release plan: the videos booked to go public, soonest first, with
@@ -815,11 +944,40 @@ def get_release_plan() -> dict:
     from publish import schedule
 
     return {"upcoming": [
-        {"key": b.key, "kind": b.kind, "source": b.source, "notify": b.notify,
+        {"key": b.key, "kind": b.kind, "kind_label": _KIND_LABELS.get(b.kind, b.kind), "source": b.source,
+         "notify": b.notify,
          "at": b.at.astimezone(UTC).isoformat(timespec="seconds"), "at_team": schedule.team_time_text(b.at),
          "meeting": b.meeting or _meeting_name_for(b.source)}
         for b in schedule.upcoming()
     ]}
+
+
+@app.get("/publishing/quota")
+def get_youtube_quota() -> dict:
+    """Today's YouTube quota as the app counts it (publish/quota.py): units
+    used, what is left, the reserve kept for uploads, and when it resets."""
+    from publish import quota
+
+    return {**quota.today(), "remaining": quota.remaining()}
+
+
+@app.get("/publishing/extras")
+def get_follow_ups() -> dict:
+    """Thumbnails, caption tracks and playlist adds that run after an upload,
+    one plain line per video (publish/extras.py)."""
+    from publish import extras
+
+    return {"videos": extras.tasks_for_page()}
+
+
+@app.post("/publishing/extras/{task_id}/retry")
+def retry_follow_up(task_id: str) -> dict:
+    """Puts a skipped or given-up follow-up back in the queue, due now."""
+    from publish import extras
+
+    if not extras.retry(task_id):
+        raise HTTPException(status_code=404, detail="No such follow-up")
+    return {"ok": True}
 
 
 def _meeting_name_for(source: str) -> str:
@@ -883,6 +1041,184 @@ def skip_autopilot_meeting(body: MeetingActionRequest) -> dict:
     return get_autopilot()
 
 
+# ------------------------------------------------------------------ the teams panel
+
+
+class SeriesRowChange(BaseModel):
+    """One team the page changed. Only the fields that are sent are changed."""
+
+    key: str = Field(max_length=200)
+    label: str | None = Field(default=None, max_length=200)
+    tier: str | None = Field(default=None, max_length=20)
+    hashtags: list[str] | None = Field(default=None, max_length=10)
+    playlists: dict[str, str] | None = None
+
+
+class SeriesChanges(BaseModel):
+    rows: list[SeriesRowChange] = Field(max_length=200)
+
+
+class SeriesKeyRequest(BaseModel):
+    key: str = Field(max_length=200)
+
+
+class SeriesMergeRequest(BaseModel):
+    alias: str = Field(max_length=200)
+    into: str = Field(max_length=200)
+
+
+def _series_labels(meetings) -> dict[str, str]:
+    """meeting uuid -> the name of its team (the team's own label, else the
+    name worked out from the meeting's title)."""
+    from publish import series as team_series
+
+    try:
+        by_name = {}
+        for row in team_series.rows():
+            by_name[row.key] = row.label
+            for alias in row.aliases:
+                by_name.setdefault(alias, row.label)
+    except Exception as exc:  # noqa: BLE001 - the panel still works without labels
+        logger.warning("team labels unavailable: %s", exc)
+        by_name = {}
+    out = {}
+    for m in meetings:
+        key = m.series_key or team_series.series_key(m.topic)
+        out[m.uuid] = by_name.get(key) or (team_series._label_of(m.topic) if m.topic else "") or key or ""
+    return out
+
+
+def _series_plain(exc: ValueError) -> str:
+    text = str(exc)
+    if "never-post always wins" in text:
+        return "This team is on the never-post list, so it can't be set to post."
+    return text
+
+
+@app.get("/series")
+def get_series() -> dict:
+    """The Teams list for the side panel: every team, and the new teams whose
+    meetings wait for a person."""
+    from publish import series as team_series
+    from publish import settings as publishing
+
+    team_series.seed_once()
+    held_by_key: dict[str, list[dict]] = {}
+    held_label: dict[str, str] = {}
+    meetings = [m for m in autopilot_store.read().meetings.values() if m.series_hold]
+    meetings.sort(key=lambda m: m.start_time or "")
+    labels = _series_labels(meetings)
+    for m in meetings:
+        row = team_series.lookup(m.topic)
+        key = row.key if row else (m.series_key or team_series.series_key(m.topic))
+        held_by_key.setdefault(key, []).append({"uuid": m.uuid, "topic": m.topic, "start_time": m.start_time})
+        held_label.setdefault(key, labels.get(m.uuid) or key)
+    rows = []
+    for row in sorted(team_series.rows(), key=lambda r: r.label.lower()):
+        rows.append({**asdict(row), "never_post": team_series._never_post_hit(row) is not None,
+                     "meetings_waiting": len(held_by_key.get(row.key, []))})
+    loaded = team_series._load()
+    return {
+        "mode": publishing.current().series_mode,
+        "seeded": bool(loaded[0]) if isinstance(loaded, tuple) else False,
+        "rows": rows,
+        "held": [{"key": key, "label": held_label[key], "meetings": found}
+                 for key, found in held_by_key.items()],
+    }
+
+
+def _series_known(key: str) -> str:
+    from publish import series as team_series
+
+    row = team_series.lookup_key(key)
+    if row is None:
+        raise HTTPException(status_code=404, detail="There is no such team in the list.")
+    return row.key
+
+
+def _settle_held(key: str) -> None:
+    """A team's tier was set from its card (or two spellings merged): the
+    meetings held for it carry on or stop to match, as with the Waiting buttons.
+    Never skips them; Public or Archive releases them (and Archive stays Archive).
+    A team with no tier yet leaves them waiting."""
+    from publish import series as team_series
+
+    row = team_series.lookup_key(key)
+    if row is None or not row.tier:
+        return
+    if row.tier == "never":
+        autopilot_engine.never_series(row.key)
+    elif row.tier in ("public", "archive"):
+        autopilot_engine.allow_series(row.key)  # sets Public, so put the tier back
+        if row.tier == "archive":
+            team_series.set_row(row.key, tier="archive")
+
+
+@app.post("/series")
+def save_series(body: SeriesChanges) -> dict:
+    """Save the teams the page changed (and only those: a stale page can't
+    wipe the rest). A bad value answers 400 with a plain message; teams
+    listed before it were saved."""
+    from publish import series as team_series
+
+    for change in body.rows:
+        sent = change.model_fields_set - {"key"}
+        fields: dict = {name: getattr(change, name) for name in sent}
+        if "label" in fields and fields["label"] is None:
+            del fields["label"]
+        if "hashtags" in fields and fields["hashtags"] is None:
+            del fields["hashtags"]
+        if "playlists" in fields and fields["playlists"] is None:
+            del fields["playlists"]
+        if not fields:
+            continue
+        try:
+            team_series.set_row(change.key, **fields)
+            if fields.get("tier"):
+                _settle_held(change.key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=_series_plain(exc)) from exc
+    autopilot_loop.wake()
+    return get_series()
+
+
+@app.post("/series/allow")
+def allow_series(body: SeriesKeyRequest) -> dict:
+    """Post this team from now on: its held meetings carry on."""
+    key = _series_known(body.key)
+    try:
+        autopilot_engine.allow_series(key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_series_plain(exc)) from exc
+    autopilot_loop.wake()
+    return get_series()
+
+
+@app.post("/series/never")
+def never_series(body: SeriesKeyRequest) -> dict:
+    """Never post this team: its held meetings are skipped."""
+    key = _series_known(body.key)
+    try:
+        autopilot_engine.never_series(key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_series_plain(exc)) from exc
+    return get_series()
+
+
+@app.post("/series/merge")
+def merge_series(body: SeriesMergeRequest) -> dict:
+    """Two spellings of one team: the first becomes a name of the second."""
+    from publish import series as team_series
+
+    try:
+        into = team_series.merge(body.alias, body.into)
+        _settle_held(into.key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_series_plain(exc)) from exc
+    autopilot_loop.wake()
+    return get_series()
+
+
 # ------------------------------------------------------------------ the posted list
 
 
@@ -894,16 +1230,19 @@ def get_posted() -> dict:
     for u in get_ledger().posted():
         group = groups.setdefault(u.source, {
             "source": u.source, "meeting": u.meeting, "meeting_date": u.meeting_date,
-            "last_posted_at": u.posted_at, "full": None, "shorts": [],
+            "last_posted_at": u.posted_at, "full": None, "shorts": [], "topics": [],
         })
         entry = {"title": u.title, "url": u.url, "posted_at": u.posted_at, "privacy": u.privacy, "by": u.by,
                  "publish_at": u.publish_at}
         if u.kind == "full":
             group["full"] = entry
+        elif u.kind == "topic":
+            group["topics"].append({**entry, "topic": u.index})
         else:
             group["shorts"].append({**entry, "short": u.index})
     for group in groups.values():
         group["shorts"].sort(key=lambda s: s["short"] or 0)
+        group["topics"].sort(key=lambda t: t["topic"] or 0)
     checks = [
         {"key": u.key, "state": u.state, "meeting": u.meeting, "kind": u.kind, "short": u.index,
          "title": u.title, "job_id": u.job_id, "job_exists": _job_is_live(u.job_id),
@@ -1163,6 +1502,17 @@ def free_space_if_low(want: int | None = None) -> int:
 disk.set_cleaner(free_space_if_low)
 
 
+def _run_follow_ups() -> None:
+    """Runs the follow-up queue in its own thread (a second run while one is
+    going returns at once). Never raises and never holds the loop."""
+    try:
+        from publish import extras
+
+        threading.Thread(target=extras.run_due, name="follow-ups", daemon=True).start()
+    except Exception:
+        logger.exception("follow-up queue could not start")
+
+
 def _sweep_loop() -> None:
     """Every few minutes while the app runs (startup itself is reconcile_on_startup's)."""
     while not _sweep_stop.wait(RETENTION_SWEEP_EVERY_S):
@@ -1171,7 +1521,9 @@ def _sweep_loop() -> None:
             sweep_old_jobs()
         except Exception:  # the next round tries again
             logger.exception("retention sweep failed")
+        _run_follow_ups()  # thumbnails, caption tracks, playlist adds (publish/extras.py)
         _daily_channel_check()  # starts its own thread, at most once a day
+        _daily_views_pull()  # likewise (analytics/pull.py)
 
 
 @app.get("/jobs")
@@ -1474,9 +1826,11 @@ def get_publish_options(job_id: str) -> dict:
 
 @app.post("/jobs/{job_id}/publish", response_model=JobRecord)
 def publish_to_youtube(job_id: str, body: PublishRequest, background_tasks: BackgroundTasks) -> JobRecord:
-    """Upload shorts, the full video, or both (the shorts first, so the full
-    video's description can list them). Returns at once; each upload's state
-    is on the job (`youtube_shorts`, `youtube_status`) while it runs."""
+    """Upload shorts, topic cuts, the full video, or any of them (the shorts
+    first, so the full video's description can list them; a public upload on
+    the release plan goes the other way round, with the topic cut first). Returns
+    at once; each upload's state is on the job (`youtube_shorts`,
+    `youtube_topics`, `youtube_status`) while it runs."""
     with _publish_lock:
         job = _require_done(job_id)
         try:
@@ -1488,6 +1842,7 @@ def publish_to_youtube(job_id: str, body: PublishRequest, background_tasks: Back
                 shorts=[(s.index, s.title, s.description) for s in body.shorts],
                 delete_after=body.delete_after,
                 right_away=body.right_away,
+                topics=[(t.index, t.title, t.description) for t in body.topics],
             )
         except publish.PublishRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

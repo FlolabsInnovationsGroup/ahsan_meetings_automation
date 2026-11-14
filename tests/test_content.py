@@ -99,8 +99,10 @@ def test_the_zoom_list_gives_the_whole_reason_a_meeting_was_skipped(monkeypatch)
 
     import api.main as api_main
     from ingest import zoom
+    from publish import settings as publishing
     from tests.test_autopilot import T0, World, _meeting
 
+    publishing.save({"series_mode": "allow_all"})  # a new team would otherwise be held for a person
     world = World(monkeypatch)
     world.zoom.meetings["m1"] = _meeting("m1", T0 - timedelta(hours=2))
     world.step()
@@ -116,5 +118,6 @@ def test_the_zoom_list_gives_the_whole_reason_a_meeting_was_skipped(monkeypatch)
                     {"uuid": "m2", "topic": "Other", "status": "ready"}]
 
     monkeypatch.setattr(zoom, "get_client", lambda: Client())
+    api_main.autopilot_store._state = None  # the team check read the page's store before this meeting was saved
     rows = TestClient(api_main.app).get("/zoom/recordings?host=pm@flomad.com").json()["meetings"]
     assert [(r["autopilot"], r["autopilot_reason"]) for r in rows] == [("skipped", reason), (None, None)]

@@ -26,6 +26,7 @@ START = T0 - timedelta(hours=2)
 def world(monkeypatch):
     # these tests find a posted video by the meeting name its title starts with
     settings.save({"title_style": "meeting_date"})
+    settings.save({"series_mode": "allow_all"})  # these tests are about the never-post list, not the new-team hold
     return World(monkeypatch)
 
 

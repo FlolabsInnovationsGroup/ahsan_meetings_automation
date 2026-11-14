@@ -230,7 +230,7 @@ class ArtifactInfo(BaseModel):
     failing fails the job; optional ones fail soft (status + reason)."""
 
     path: str
-    kind: Literal["video", "text", "json", "pdf"] = "video"
+    kind: Literal["video", "text", "json", "pdf", "image"] = "video"
     mandatory: bool = False
     status: ArtifactStatus = "ok"
     reason: str = ""
@@ -305,7 +305,7 @@ YoutubePrivacy = Literal["private", "unlisted", "public"]
 
 
 class YoutubeUpload(BaseModel):
-    """One short on the channel. The full video keeps flat `youtube_*` fields
+    """One short (or topic cut) on the channel. The full video keeps flat `youtube_*` fields
     on the JobRecord (older job.json files have them)."""
 
     status: YoutubeStatus = "queued"
@@ -392,6 +392,9 @@ class JobRecord(BaseModel):
     youtube_url: str | None = None
     youtube_error: str | None = None
     youtube_shorts: dict[int, YoutubeUpload] = Field(default_factory=dict)
+    # Topic cuts (topic/topic_NN.mp4), keyed by their number; same record as a
+    # Short. Older job.json files have none.
+    youtube_topics: dict[int, YoutubeUpload] = Field(default_factory=dict)
     # The shorts whose links are in the full video's description on YouTube.
     youtube_listed_shorts: list[int] = Field(default_factory=list)
     # True once the job's videos/transcripts were removed from the server
@@ -404,4 +407,6 @@ class JobRecord(BaseModel):
         """An upload is waiting or running: the job must not be deleted, and
         the service must not restart, until it ends."""
         waiting = ("queued", "uploading")
-        return self.youtube_status in waiting or any(s.status in waiting for s in self.youtube_shorts.values())
+        return (self.youtube_status in waiting
+                or any(s.status in waiting for s in self.youtube_shorts.values())
+                or any(s.status in waiting for s in self.youtube_topics.values()))

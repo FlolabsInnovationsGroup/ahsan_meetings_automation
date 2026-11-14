@@ -32,9 +32,40 @@ AUDIO_ARGS = ["-c:a", "aac", "-b:a", "128k", "-ar", str(AUDIO_RATE), "-ac", "2"]
 BASE_ARGS = ["-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
 
 
-def video_args(fps: Fraction) -> list[str]:
-    """STANDARD video profile (pieces are rendered with -an)."""
+SHORTS_HD_CODEC_ARGS = [
+    "-c:v", "libx264",
+    "-preset", "medium",
+    "-crf", "20",
+    "-profile:v", "high",
+    "-pix_fmt", "yuv420p",
+    "-maxrate", "8M",
+    "-bufsize", "16M",
+]
+HD_VIDEO_CODEC_ARGS = [
+    "-c:v", "libx264",
+    "-preset", "medium",
+    "-crf", "20",
+    "-profile:v", "high",
+    "-pix_fmt", "yuv420p",
+]
+HD_VIDEO_RATE_CONTROL_ARGS = ["-maxrate", "6M", "-bufsize", "12M"]
+# Full-frame HD encodes take about 2.15x as long as the standard profile.
+HD_TIMEOUT_FACTOR = 2.2
+
+
+def video_args(fps: Fraction, hd: bool = False) -> list[str]:
+    """STANDARD video profile (pieces are rendered with -an); `hd` is the
+    higher-quality profile for the full video."""
+    if hd:
+        return [*HD_VIDEO_CODEC_ARGS, "-r", rate_str(fps), "-fps_mode", "cfr", *HD_VIDEO_RATE_CONTROL_ARGS]
     return [*VIDEO_CODEC_ARGS, "-r", rate_str(fps), "-fps_mode", "cfr", *VIDEO_RATE_CONTROL_ARGS]
+
+
+def shorts_video_args(fps: Fraction, hd: bool) -> list[str]:
+    """Shorts video profile: today's standard one, or HD (crf 20, 8M cap)."""
+    if hd:
+        return [*SHORTS_HD_CODEC_ARGS, "-r", rate_str(fps), "-fps_mode", "cfr"]
+    return video_args(fps)
 
 
 def ffmpeg_timeout(content_s: float) -> float:

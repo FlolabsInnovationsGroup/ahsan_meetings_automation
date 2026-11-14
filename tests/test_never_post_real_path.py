@@ -174,7 +174,8 @@ def server(monkeypatch):
         monkeypatch.setenv(name, value)
     get_settings.cache_clear()
     # titles must start with the meeting name and videos go up public at once here; pinned without touching the saved prefs
-    monkeypatch.setattr(settings, "current", lambda: dataclasses.replace(_current(), title_style="meeting_date", scheduled=False))
+    monkeypatch.setattr(settings, "current", lambda: dataclasses.replace(_current(), title_style="meeting_date", scheduled=False,
+                                                                    series_mode="allow_all"))
     zoom = ZoomServers()
     client = zoom_module.ZoomClient(transport=httpx.MockTransport(zoom), sleep=lambda seconds: None)
     monkeypatch.setattr(zoom_module, "get_client", lambda: client)
@@ -439,6 +440,7 @@ def test_no_check_due_the_last_look_still_stops_a_renamed_meeting(server, monkey
 
 @pytest.fixture
 def world(monkeypatch):
+    settings.save({"series_mode": "allow_all"})  # these tests are about the never-post list, not the new-team hold
     return World(monkeypatch)
 
 
