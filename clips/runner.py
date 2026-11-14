@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import logging
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable, Iterator
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from clips.config import ClipsSettings, ConfigError, clips_settings
+from clips.fetch import NotReady
 from clips.models import (
     Clip,
     ClipKind,
@@ -34,6 +36,7 @@ from clips.models import (
     SourceVideo,
     VideoStatus,
 )
+from clips.package import timed_credit
 
 
 def _lazy(module: str, name: str) -> Callable[..., Any]:
@@ -82,6 +85,9 @@ class Stages:
     # pull-back of already-uploaded, not-yet-public videos that the kill switch needs.
     make_llm: Callable[..., Any] = lambda: None
     pull_back: Callable[..., Any] = lambda store: {"pulled_back": [], "failed": [], "skipped": ""}
+    # Long YouTube videos are fetched as a few stretches, never whole (clips.chunks).
+    is_chunked: Callable[..., Any] = lambda video: False
+    fetch_chunks: Callable[..., Any] = lambda video, dest_dir, **kw: []
 
     @classmethod
     def default(cls) -> Stages:
@@ -113,6 +119,8 @@ class Stages:
             upload_preflight=_default_preflight,
             make_llm=_default_llm,
             pull_back=_lazy("clips.guard", "pull_back_now"),
+            is_chunked=_lazy("clips.chunks", "is_chunked"),
+            fetch_chunks=_lazy("clips.chunks", "fetch_chunks"),
         )
 
 
@@ -190,6 +198,7 @@ class Runner:
         self.settings = settings or clips_settings()
         self.stages = stages or Stages.default()
         self._auto_approved = 0  # running count for the current tick, reported by tick()
+        self._below_bar = 0  # moments the quality bar dropped from the video being processed
 
     @property
     def llm(self) -> Any:
@@ -362,10 +371,23 @@ class Runner:
                     video.status, video.error = VideoStatus.FAILED, "interrupted after some clips were made"
                 else:
                     video.status, video.error = VideoStatus.NEW, ""
+                    if self._is_chunk_file(video):
+                        video.path = ""  # an older run saved a chunk here; the video must be re-planned
                 self.store.save_video(video)
                 self.store.add_event(
                     "process", f"{video.id} was interrupted, now {video.status.value}", source_id=video.source_id
                 )
+
+    def _is_chunk_file(self, video: SourceVideo) -> bool:
+        """True when video.path is one of our downloaded stretches (<native_id>_cNN_*) in the media folder."""
+        if not video.path:
+            return False
+        path = Path(video.path)
+        try:
+            inside = path.resolve().parent == Path(self.settings.media_dir).resolve()
+        except OSError:
+            return False
+        return inside and re.fullmatch(rf"{re.escape(video.native_id)}_c\d+_.*", path.name) is not None
 
     def _low_disk(self) -> bool:
         """True (with one event an hour) when the disk is too full to fetch and render."""
@@ -413,38 +435,100 @@ class Runner:
             return self._skip(video, "; ".join(verdict.reasons) or "rights check failed")
 
         s = self.settings
-        fetched = self.stages.fetch(video, s.media_dir, max_height=s.download_max_height)
-        video.path = fetched.video_path
-        video.status = VideoStatus.FETCHED
-        self.store.save_video(video)
+        self._below_bar = 0
+        # A long YouTube video is fetched as a few stretches. Never when downloads are off: then the
+        # normal fetch runs and refuses the download itself.
+        if video.platform is Platform.YOUTUBE and s.youtube_downloads and self.stages.is_chunked(video):
+            try:
+                items = self._chunk_items(video, source)
+            except NotReady as exc:  # live or still processing: stays NEW for a later pass
+                self.store.add_event("process", f"{video.id} not ready: {exc}", source_id=source.id)
+                return 0
+        else:
+            fetched = self.stages.fetch(video, s.media_dir, max_height=s.download_max_height)
+            video.path = fetched.video_path
+            video.status = VideoStatus.FETCHED
+            self.store.save_video(video)
+            moments = self._pick(video, fetched, source)
+            video.status = VideoStatus.PICKED
+            self.store.save_video(video)
+            items = [(fetched, None, m) for m in moments if self._keep(m, source)]
+        return self._render_items(video, source, items)
 
-        moments = self._pick(video, fetched, source)
-        video.status = VideoStatus.PICKED
-        self.store.save_video(video)
-        moments = [m for m in moments if self._keep(m, source)]
-        if moments and not self.stages.ffmpeg_available():
+    def _render_items(self, video: SourceVideo, source: Source, items: list[tuple[Any, float | None, Moment]]) -> int:
+        """Render each (file, where that file starts in the original, moment). One failure keeps the rest."""
+        if items and not self.stages.ffmpeg_available():
             raise RuntimeError("ffmpeg is not installed, so nothing can be rendered")
-
         credit = self.stages.credit_line(source, video)
         made, errors = 0, []
-        for moment in moments:
+        for fetched, offset, moment in items:
             try:
-                self._make_clip(video, fetched, source, moment, credit)
+                self._make_clip(video, fetched, source, moment, credit, offset_s=offset)
                 made += 1
             except Exception as exc:  # one bad moment must not lose the others
                 errors.append(str(exc))
                 self.store.add_event(
                     "process", f"{video.id} moment failed: {exc}", source_id=source.id
                 )
-        if moments and not made:
+        if items and not made:
             raise RuntimeError(f"every moment failed: {errors[0]}")
         video.status = VideoStatus.DONE
         video.error = ""
         self.store.save_video(video)
-        self.store.add_event(
-            "process", f"{video.id}: {made} clip(s) made", source_id=source.id, data={"clips": made}
-        )
+        if not items and self._below_bar:
+            message = (
+                f"{video.id}: no moment was good enough (the bar is {self.settings.min_moment_score}); "
+                "nothing was made"
+            )
+        else:
+            message = f"{video.id}: {made} clip(s) made"
+        self.store.add_event("process", message, source_id=source.id, data={"clips": made})
         return made
+
+    def _chunk_items(self, video: SourceVideo, source: Source) -> list[tuple[Any, float | None, Moment]]:
+        """Fetch the strongest stretches of a long video and pick Shorts inside each. The best moments
+        of all stretches go on, best first, up to stream_shorts_max."""
+        s = self.settings
+        chunks = list(self.stages.fetch_chunks(video, s.media_dir, max_height=s.download_max_height) or [])
+        if not chunks:
+            raise RuntimeError("no stretch of the video could be fetched")
+        # video.path stays empty: a chunk file is not the video, and a path would make a retry
+        # treat one stretch as the whole thing.
+        video.status = VideoStatus.FETCHED
+        self.store.save_video(video)
+        found: list[tuple[Any, float, Moment, float]] = []
+        for chunk in chunks:
+            try:
+                picked = self._pick(video, chunk.fetched, source, longs=0, shorts=min(s.shorts_per_video, s.stream_shorts_max))
+            except Exception as exc:  # one failed stretch must not lose the others
+                self.store.add_event(
+                    "process", f"{video.id} stretch at {int(chunk.offset_s)} s failed: {exc}", source_id=source.id
+                )
+                continue
+            found += [
+                (chunk.fetched, float(chunk.offset_s), m, float(chunk.strength))
+                for m in picked
+                if m.kind is ClipKind.SHORT and self._keep(m, source)
+            ]
+        video.status = VideoStatus.PICKED
+        self.store.save_video(video)
+        found.sort(key=lambda x: (x[2].score, x[3]), reverse=True)
+        chosen = self._drop_duplicates(found)[: s.stream_shorts_max]
+        return [(fetched, offset, moment) for fetched, offset, moment, _ in chosen]
+
+    @staticmethod
+    def _drop_duplicates(found: list[tuple[Any, float, Moment, float]]) -> list[tuple[Any, float, Moment, float]]:
+        """Keep the best of any moments that cover mostly the same part of the original (stretches can overlap)."""
+        kept: list[tuple[Any, float, Moment, float]] = []
+        spans: list[tuple[float, float]] = []
+        for item in found:
+            start = item[1] + item[2].start_s
+            end = item[1] + item[2].end_s
+            if any(min(end, b) - max(start, a) > 0.5 * max(min(end - start, b - a), 1e-6) for a, b in spans):
+                continue
+            kept.append(item)
+            spans.append((start, end))
+        return kept
 
     def _skip(self, video: SourceVideo, reason: str) -> int:
         video.status = VideoStatus.SKIPPED
@@ -453,8 +537,20 @@ class Runner:
         self.store.add_event("process", f"{video.id} skipped: {reason}", source_id=video.source_id)
         return 0
 
-    def _pick(self, video: SourceVideo, fetched: Any, source: Source) -> list[Moment]:
+    def _llm_picked(self, moment: Moment) -> bool:
+        """True when a language model chose this moment (the signal-only fallback says so in its reason)."""
+        return self.llm is not None and not moment.reason.startswith("picked from signals")
+
+    def _clears_bar(self, moment: Moment) -> bool:
+        """The quality bar holds for model-picked moments only; signal-only scores are not comparable."""
+        return not self._llm_picked(moment) or moment.score >= self.settings.min_moment_score
+
+    def _pick(
+        self, video: SourceVideo, fetched: Any, source: Source, *, shorts: int | None = None, longs: int | None = None
+    ) -> list[Moment]:
         s = self.settings
+        n_short = s.shorts_per_video if shorts is None else shorts
+        n_long = s.long_per_video if longs is None else longs
         path = Path(fetched.video_path)
         loud = scenes = None
         try:
@@ -468,21 +564,24 @@ class Runner:
             self.store.add_event("process", f"{video.id}: no scene changes ({exc})", source_id=source.id)
         signals = {"loudness": loud, "scenes": scenes}
         windows = list(self.stages.candidate_windows(fetched, kind=ClipKind.SHORT, **signals) or [])
-        if s.long_per_video > 0:
+        if n_long > 0:
             windows += list(self.stages.candidate_windows(fetched, kind=ClipKind.LONG, **signals) or [])
         moments = self.stages.pick_moments(
             video,
             fetched,
             source,
             llm=self.llm,
-            max_shorts=s.shorts_per_video,
-            max_long=s.long_per_video,
+            max_shorts=n_short,
+            max_long=n_long,
             candidates=windows or None,
         )
-        limits = {ClipKind.SHORT: s.shorts_per_video, ClipKind.LONG: s.long_per_video}
+        limits = {ClipKind.SHORT: n_short, ClipKind.LONG: n_long}
         counts = {ClipKind.SHORT: 0, ClipKind.LONG: 0}
         kept = []
         for moment in moments:
+            if not self._clears_bar(moment):
+                self._below_bar += 1
+                continue
             if counts[moment.kind] < limits[moment.kind]:
                 counts[moment.kind] += 1
                 kept.append(moment)
@@ -496,11 +595,21 @@ class Runner:
         return not (moment.has_music and source.skip_music)
 
     def _make_clip(
-        self, video: SourceVideo, fetched: Any, source: Source, moment: Moment, credit: str
+        self,
+        video: SourceVideo,
+        fetched: Any,
+        source: Source,
+        moment: Moment,
+        credit: str,
+        *,
+        offset_s: float | None = None,
     ) -> None:
         from clips.store import new_clip_id
 
         clip_id = new_clip_id()
+        # Where the clip starts in the original video; only stretches of a long video have an offset.
+        origin_s = 0.0 if offset_s is None else offset_s + moment.start_s
+        written = timed_credit(credit, video, origin_s)  # the description's link carries the time
         src = Path(fetched.video_path)
         out_dir = self.settings.renders_dir
         if moment.kind is ClipKind.LONG:
@@ -510,8 +619,8 @@ class Runner:
             rendered = self.stages.render_short(
                 src, moment, source, out_dir, clip_id=clip_id, captions=captions, credit=credit
             )
-        copy = self.stages.write_copy(moment, source, video, kind=moment.kind, credit=credit, llm=self.llm)
-        problems = self.stages.check_copy(copy, kind=moment.kind, credit=credit)
+        copy = self.stages.write_copy(moment, source, video, kind=moment.kind, credit=written, llm=self.llm)
+        problems = self.stages.check_copy(copy, kind=moment.kind, credit=written)
         clip = Clip(
             id=clip_id,
             source_id=source.id,
@@ -522,7 +631,8 @@ class Runner:
             thumb=rendered.thumb,
             duration_s=rendered.duration_s,
             text=copy,
-            credit=credit,
+            source_offset_s=origin_s,
+            credit=written,
             rights=source.rights,
             evidence_url=source.evidence_url,
             status=ClipStatus.DRAFT,

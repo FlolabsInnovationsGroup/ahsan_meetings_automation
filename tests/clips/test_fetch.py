@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -133,3 +134,64 @@ def test_a_local_file_is_fetched_while_downloads_are_off(tmp_path, monkeypatch):
     v = SourceVideo(id="f:a", source_id="s", platform=Platform.YOUTUBE, native_id="a", path=str(path),
                     url="https://www.youtube.com/watch?v=a")
     assert fetch.fetch(v, tmp_path / "media").video_path == str(path)
+
+
+def test_a_long_youtube_video_is_never_downloaded_whole(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPS_YOUTUBE_DOWNLOADS", "true")
+    clips_settings.cache_clear()
+    called = []
+    monkeypatch.setattr(fetch, "_ytdlp_download", lambda *a, **k: called.append(1) or {})
+    v = SourceVideo(id="youtube:abc", source_id="s", platform=Platform.YOUTUBE, native_id="abc",
+                    url="https://www.youtube.com/watch?v=abc", duration_s=3 * 3600)
+    with pytest.raises(fetch.FetchError, match="fetch_chunks"):
+        fetch.fetch(v, tmp_path / "media")
+    assert called == [] and not (tmp_path / "media").exists()
+    monkeypatch.delenv("CLIPS_YOUTUBE_DOWNLOADS")
+    clips_settings.cache_clear()
+
+
+def test_a_long_video_with_a_local_file_is_probed_in_place(tmp_path, monkeypatch):
+    path = tmp_path / "a.mp4"
+    path.write_bytes(b"x")
+    monkeypatch.setattr("slice.profile.probe_media", lambda p: _info())
+    v = SourceVideo(id="f:a", source_id="s", platform=Platform.YOUTUBE, native_id="a", path=str(path),
+                    url="https://www.youtube.com/watch?v=a", duration_s=5 * 3600)
+    assert fetch.fetch(v, tmp_path / "media").video_path == str(path)
+
+
+def test_whole_download_is_limited_by_length_whatever_the_listing_said(monkeypatch):
+    import yt_dlp
+
+    monkeypatch.setenv("CLIPS_YOUTUBE_DOWNLOADS", "true")
+    clips_settings.cache_clear()
+    opts = {}
+
+    class Fake:
+        def __init__(self, o):
+            opts.update(o)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            return None  # what yt-dlp returns when the filter rejects a video
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Fake)
+    fetch._ytdlp_download("https://www.youtube.com/watch?v=abc", Path("."), "abc", "best")
+    reject = opts["match_filter"]
+    assert reject({"id": "a", "title": "t", "duration": 6 * 3600}, incomplete=False)  # a message means "skip"
+    assert reject({"id": "a", "title": "t"}, incomplete=False)  # unknown length is refused too
+    assert reject({"id": "a", "title": "t", "duration": 60}, incomplete=False) is None
+
+
+def test_a_refused_download_is_a_plain_error_not_a_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPS_YOUTUBE_DOWNLOADS", "true")
+    clips_settings.cache_clear()
+    monkeypatch.setattr(fetch, "_ytdlp_download", lambda *a, **k: {})
+    v = SourceVideo(id="youtube:abc", source_id="s", platform=Platform.YOUTUBE, native_id="abc",
+                    url="https://www.youtube.com/watch?v=abc", duration_s=0)
+    with pytest.raises(fetch.FetchError, match="not downloaded"):
+        fetch.fetch(v, tmp_path)

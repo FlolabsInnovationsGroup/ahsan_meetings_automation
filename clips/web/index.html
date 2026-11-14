@@ -269,6 +269,7 @@ function renderQueue() {
   } }, "Save changes");
   q.replaceChildren(h("div", { class: "card" }, frame, h("div", {},
     h("div", { class: "muted" }, c.kind + " - " + Math.round(c.duration_s || 0) + " s - " + (c.moment.summary || "")),
+    c.source_offset_s > 0 ? h("div", { class: "muted" }, "from " + clockTime(c.source_offset_s) + " of the stream") : null,
     h("label", { for: "e_title" }, "Title"), title,
     h("label", { for: "e_desc" }, "Description"), desc,
     h("label", { for: "e_tags" }, "Hashtags"), tags,
@@ -278,6 +279,12 @@ function renderQueue() {
     h("div", { class: "row", style: "margin-top:12px" },
       h("button", { class: "primary", onclick: () => decide("approve") }, "Approve (A)"),
       h("button", { onclick: () => decide("reject") }, "Reject (R)"), save))));
+}
+/* Seconds as 1:23:45 (or 23:45 under an hour): where in the original a clip begins. */
+function clockTime(total) {
+  const s = Math.floor(total), hrs = Math.floor(s / 3600), min = Math.floor((s % 3600) / 60), sec = s % 60;
+  const two = (n) => String(n).padStart(2, "0");
+  return hrs > 0 ? hrs + ":" + two(min) + ":" + two(sec) : min + ":" + two(sec);
 }
 /* Edits in the fields are saved before approving, so the approved clip carries what the reviewer sees. */
 function editedFields(c) {
@@ -348,7 +355,7 @@ function renderSources() {
   const head = h("tr", {}, ["Name", "Platform", "Rights", "State", ""].map((x) => h("th", {}, x)));
   const rows = state.sources.map((s) => h("tr", {},
     h("td", {}, s.name, h("div", { class: "muted" }, s.url || s.folder || "")),
-    h("td", {}, s.platform),
+    h("td", {}, s.platform, s.streams_and_videos ? h("div", { class: "muted" }, "streams and videos") : null),
     h("td", {}, (BASES[s.rights] || { label: s.rights }).label,
       s.evidence_url ? h("div", {}, h("a", { href: s.evidence_url, target: "_blank", rel: "noopener noreferrer" }, "evidence")) : null),
     h("td", {}, s.can_clip

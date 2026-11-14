@@ -149,3 +149,123 @@ def test_folder_files_are_dated_by_their_modified_time(tmp_path):
     (video,) = watch.list_new_videos(src, set())
     assert video.published_at is not None
     assert int(video.published_at.timestamp()) == stamp
+
+
+# --- streams
+
+def _stream_entries():
+    return [
+        {"id": "st1", "title": "Stream", "duration": 7200, "live_status": "was_live", "timestamp": 1760100000},
+        {"id": "now", "title": "Live now", "duration": None, "live_status": "is_live"},
+        {"id": "soon", "title": "Upcoming", "duration": None, "live_status": "is_upcoming"},
+        {"id": "proc", "title": "Processing", "duration": 5000, "live_status": "post_live"},
+        {"id": "nodur", "title": "Not processed", "duration": None},
+    ]
+
+
+def _two_tabs(monkeypatch, uploads, streams):
+    urls = []
+
+    def fake(url, limit):
+        urls.append(url)
+        data = streams if url.endswith("/streams") else uploads
+        if isinstance(data, Exception):
+            raise data
+        return [{**e, "channel_id": "UCchan"} for e in data]
+
+    monkeypatch.setattr(watch, "_ytdlp_list", fake)
+    return urls
+
+
+def test_both_tabs_are_listed_and_streams_are_marked(monkeypatch):
+    urls = _two_tabs(monkeypatch, [{"id": "up", "duration": 900, "timestamp": 1760000000}], _stream_entries())
+    out = watch.list_new_videos(_yt(), set())
+    assert urls == ["https://www.youtube.com/@chan/videos", "https://www.youtube.com/@chan/streams"]
+    assert {v.native_id: v.was_live for v in out} == {"up": False, "st1": True}
+    assert [v.native_id for v in out] == ["up", "st1"]  # tabs alternate, uploads first
+
+
+def test_live_upcoming_and_unprocessed_streams_are_skipped(monkeypatch):
+    _two_tabs(monkeypatch, [], _stream_entries())
+    assert [v.native_id for v in watch.list_new_videos(_yt(), set())] == ["st1"]
+
+
+def test_streams_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(watch, "_include_streams", lambda: False)
+    urls = _two_tabs(monkeypatch, [{"id": "up", "duration": 900}], _stream_entries())
+    out = watch.list_new_videos(_yt(), set())
+    assert urls == ["https://www.youtube.com/@chan/videos"] and [v.native_id for v in out] == ["up"]
+
+
+def test_no_id_is_returned_twice(monkeypatch):
+    same = {"id": "x", "duration": 900, "timestamp": 1760000000}
+    _two_tabs(monkeypatch, [same], [{**same, "live_status": "was_live"}])
+    out = watch.list_new_videos(_yt(), set())
+    assert [v.native_id for v in out] == ["x"]
+
+
+def test_a_failing_live_tab_keeps_the_uploads(monkeypatch):
+    _two_tabs(monkeypatch, [{"id": "up", "duration": 900}], watch.WatchError("no streams tab"))
+    assert [v.native_id for v in watch.list_new_videos(_yt(), set())] == ["up"]
+
+
+def test_a_failing_uploads_tab_keeps_the_streams(monkeypatch):
+    _two_tabs(monkeypatch, watch.WatchError("boom"), _stream_entries())
+    assert [v.native_id for v in watch.list_new_videos(_yt(), set())] == ["st1"]
+
+
+def test_both_tabs_failing_raises(monkeypatch):
+    _two_tabs(monkeypatch, watch.WatchError("first"), watch.WatchError("second"))
+    with pytest.raises(watch.WatchError, match="first"):
+        watch.list_new_videos(_yt(), set())
+
+
+def test_undated_listings_alternate_so_streams_are_not_starved(monkeypatch):
+    ups = [{"id": f"u{i}", "duration": 900} for i in range(5)]
+    sts = [{"id": f"s{i}", "duration": 3000, "live_status": "was_live"} for i in range(5)]
+    _two_tabs(monkeypatch, ups, sts)
+    out = watch.list_new_videos(_yt(), set(), limit=4)
+    assert [v.native_id for v in out] == ["u0", "s0", "u1", "s1"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/@chan",
+        "https://www.youtube.com/@chan/",
+        "https://www.youtube.com/@chan/videos",
+        "https://www.youtube.com/@chan/streams/",
+        "https://www.youtube.com/@chan/featured?si=abc",
+        "@chan",
+        "www.youtube.com/@chan",
+    ],
+)
+def test_handle_link_forms(url):
+    src = _yt()
+    src.url = url
+    assert watch._channel_videos_url(src) == "https://www.youtube.com/@chan/videos"
+    assert watch._channel_streams_url(src) == "https://www.youtube.com/@chan/streams"
+
+
+@pytest.mark.parametrize(
+    "url,root",
+    [
+        ("https://www.youtube.com/channel/UCabc", "https://www.youtube.com/channel/UCabc"),
+        ("https://www.youtube.com/channel/UCabc/streams", "https://www.youtube.com/channel/UCabc"),
+        ("https://www.youtube.com/c/name/", "https://www.youtube.com/c/name"),
+        ("https://www.youtube.com/c/name/videos", "https://www.youtube.com/c/name"),
+        ("https://www.youtube.com/user/name", "https://www.youtube.com/user/name"),
+        ("https://www.youtube.com/user/name/streams", "https://www.youtube.com/user/name"),
+    ],
+)
+def test_other_link_forms(url, root):
+    src = _yt()
+    src.url = url
+    assert watch._channel_videos_url(src) == root + "/videos"
+    assert watch._channel_streams_url(src) == root + "/streams"
+
+
+def test_own_single_video_link_has_no_streams_tab():
+    src = _yt(rights=RightsBasis.OWN)
+    src.url = "https://www.youtube.com/watch?v=abc"
+    assert watch._channel_streams_url(src) is None

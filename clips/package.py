@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 from clips.config import ClipsSettings, clips_settings
-from clips.models import LLM, ClipKind, Copy, Moment, Source, SourceVideo
+from clips.models import LLM, ClipKind, Copy, Moment, Platform, Source, SourceVideo
 
 TITLE_MAX = {ClipKind.SHORT: 60, ClipKind.LONG: 70}
 MAX_HASHTAGS = 3
@@ -85,6 +85,22 @@ def check_copy(copy: Copy, *, kind: ClipKind, credit: str) -> list[str]:
     if _OFFICIAL.search(title) or _OFFICIAL.search(body) or any(_OFFICIAL.search(t) for t in copy.tags):
         problems.append("The text claims to be official.")
     return problems
+
+
+def timed_credit(credit: str, video: SourceVideo, offset_s: float) -> str:
+    """The credit line with its link to the original video pointing at the second the clip starts.
+
+    The link is the video's own URL, which the credit line carries (rights.credit_line). Only a YouTube
+    video gets a time, and only when the clip starts after the beginning; the credit text is otherwise
+    left exactly as it was, so the credit line still appears in the description."""
+    url = video.url.strip()
+    seconds = int(offset_s)
+    if seconds <= 0 or video.platform is not Platform.YOUTUBE or not url or url not in credit:
+        return credit
+    if re.search(r"[?&]t=\d", url):
+        return credit  # already points at a time
+    timed = f"{url}{'&' if '?' in url else '?'}t={seconds}"
+    return credit.replace(url, timed, 1)
 
 
 def _shorten(text: str, limit: int) -> str:

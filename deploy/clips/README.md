@@ -77,6 +77,17 @@ Nothing dated before CLIPS_NOT_BEFORE (default 2026-11-19, the game's release da
 
 Nothing is ever public by accident: every upload is private with a publish time at least 15 minutes ahead. A clip whose slot has passed or is under 15 minutes away goes back to approved and gets a new slot.
 
+### Clipping a channel's streams
+Paste a channel link (for example https://www.youtube.com/@name) as the source. The loop then finds the channel's normal uploads and its finished live streams on its own. A stream that is live, upcoming or not yet processed by YouTube is skipped and picked up on a later pass.
+
+Two things must be true first. The channel needs its rights record (basis and evidence), like any source: no record, no clips. And YouTube downloads must be switched on by the owner (CLIPS_YOUTUBE_DOWNLOADS=true). They are off by default because YouTube's terms forbid downloading a video without YouTube's own written permission, even when the creator agrees. With the setting off, a YouTube source is neither listed nor downloaded, streams included.
+
+A long video is never downloaded whole. Videos longer than CLIPS_CHUNK_MINUTES_OVER are read without downloading (length, the "most replayed" graph, chapters). If CLIPS_SCOUT_AUDIO is on, only the smallest audio track is downloaded first, its loudness over time is measured, and the file is deleted. The strongest peaks of the graph and the loudness pick up to CLIPS_CHUNKS_PER_VIDEO stretches of CLIPS_CHUNK_SECONDS each, spread over the video and never overlapping. Only those stretches are downloaded. With no signal at all the stretches are evenly spaced. A video longer than CLIPS_MAX_STREAM_HOURS is refused.
+
+Shorts are cut inside the stretches. When a language model picks them, only moments it scores at or above CLIPS_MIN_MOMENT_SCORE are kept, best first, up to CLIPS_STREAM_SHORTS_MAX per video. If nothing clears the bar, the video is marked done with a note and nothing is made: quality matters, not the count. With no language model the top few by signal are kept. Each card on the page says where in the original the clip starts, and the description's link to the original carries that time.
+
+Settings: CLIPS_INCLUDE_STREAMS, CLIPS_CHUNK_MINUTES_OVER, CLIPS_CHUNKS_PER_VIDEO, CLIPS_CHUNK_SECONDS, CLIPS_SCOUT_AUDIO, CLIPS_MAX_STREAM_HOURS, CLIPS_STREAM_SHORTS_MAX and CLIPS_MIN_MOMENT_SCORE (see env.example).
+
 ## 11. The daily routine (about ten minutes)
 1. Open the page.
 2. Watch each new draft clip. Approve it or reject it with a reason.

@@ -23,6 +23,10 @@ class FetchError(RuntimeError):
     """Getting or reading a video failed. The message says what to do."""
 
 
+class NotReady(FetchError):
+    """The video cannot be fetched yet (live, upcoming, still processing); try again on a later pass."""
+
+
 def fetch(video: SourceVideo, dest_dir: Path, *, max_height: int = 1080) -> Fetched:
     """Make the video's file available and describe it."""
     if video.path:
@@ -40,9 +44,22 @@ def fetch(video: SourceVideo, dest_dir: Path, *, max_height: int = 1080) -> Fetc
             "(CLIPS_YOUTUBE_DOWNLOADS=false). Put the file in a watched folder instead, or switch the setting on "
             "if you have decided to allow downloads."
         )
+    from clips.chunks import is_chunked
+
+    if is_chunked(video):
+        # A long stream is never downloaded whole; only its strongest stretches are.
+        raise FetchError(
+            f"video {video.id} is {video.duration_s / 60:.0f} minutes long, too long to download whole; "
+            "use clips.chunks.fetch_chunks to download only its strongest stretches"
+        )
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     info = _ytdlp_download(video.url, dest, video.native_id, _format_for(max_height))
+    if not info:
+        raise FetchError(
+            f"video {video.id} was not downloaded: its length is unknown or over the whole-download limit "
+            f"({clips_settings().chunk_minutes_over} minutes); long videos are fetched in stretches instead"
+        )
     path = _find_file(dest, video.native_id)
     fetched = probe(path)
     fetched.heatmap = _heatmap(info)
@@ -119,12 +136,23 @@ def _ytdlp_download(url: str, dest: Path, stem: str, fmt: str) -> dict[str, Any]
         "merge_output_format": "mp4",
         "outtmpl": str(dest / f"{stem}.%(ext)s"),
         "restrictfilenames": True,
+        "match_filter": _whole_download_filter(),
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=True) or {}
     except Exception as exc:
         raise FetchError(_explain(url, exc)) from exc
+
+
+def _whole_download_filter() -> Any:
+    """Backstop: yt-dlp refuses a video over chunk_minutes_over or of unknown length, whatever the
+    stored listing said, so a wrong duration can never turn into a whole long download."""
+    from yt_dlp.utils import match_filter_func
+
+    from clips.config import clips_settings
+
+    return match_filter_func(f"duration <= {int(clips_settings().chunk_minutes_over) * 60}")
 
 
 def _explain(url: str, exc: Exception) -> str:

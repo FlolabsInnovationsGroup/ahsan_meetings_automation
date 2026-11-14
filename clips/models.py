@@ -106,6 +106,7 @@ class SourceVideo(BaseModel):
     duration_s: float = 0.0
     license: str = ""  # YouTube's value: "creativeCommon" or "youtube"; empty when unknown
     is_live: bool = False
+    was_live: bool = False  # a finished live stream (from the channel's Live tab)
     is_short: bool = False
     status: VideoStatus = VideoStatus.NEW
     skip_reason: str = ""
@@ -133,6 +134,15 @@ class Fetched(BaseModel):
     heatmap: list[tuple[float, float, float]] = Field(default_factory=list)  # start_s, end_s, value 0..1
     chapters: list[tuple[float, float, str]] = Field(default_factory=list)  # start_s, end_s, title
     captions: list[Caption] = Field(default_factory=list)
+
+
+class Chunk(BaseModel):
+    """One downloaded stretch of a long video. A long stream is never downloaded
+    whole: only its strongest stretches are, each as its own file."""
+
+    offset_s: float  # where this chunk starts in the original video
+    strength: float = 0.0  # 0..1, how promising the stretch looked before download
+    fetched: Fetched  # the chunk file; times inside it are relative to the chunk
 
 
 class Window(BaseModel):
@@ -194,6 +204,7 @@ class Clip(BaseModel):
     thumb: str = ""
     duration_s: float = 0.0
     text: Copy | None = None
+    source_offset_s: float = 0.0  # where the clip starts in the original video, in seconds
     credit: str = ""  # the credit line shown on screen and written in the description
     rights: RightsBasis = RightsBasis.NONE  # the source's basis when the clip was made
     evidence_url: str = ""

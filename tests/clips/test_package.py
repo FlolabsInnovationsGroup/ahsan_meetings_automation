@@ -123,3 +123,37 @@ def test_checks():
     # a credit that names an official source is allowed
     c = base(description=f"Hi\n\nCredit: Rockstar Official\n\n{FAN_LINE}")
     assert check_copy(c, kind=ClipKind.SHORT, credit="Credit: Rockstar Official") == []
+
+
+def _yt(url):
+    return SourceVideo(id="youtube:x", source_id="s", platform=Platform.YOUTUBE, native_id="x", url=url)
+
+
+def test_timed_credit_adds_the_second_to_the_link():
+    from clips.package import timed_credit
+
+    credit = "Clip from Some Creator - https://www.youtube.com/watch?v=x"
+    assert timed_credit(credit, _yt("https://www.youtube.com/watch?v=x"), 83.9) == credit + "&t=83"
+    assert timed_credit("Clip from S - https://youtu.be/x", _yt("https://youtu.be/x"), 90) == "Clip from S - https://youtu.be/x?t=90"
+
+
+def test_timed_credit_leaves_other_cases_alone():
+    from clips.package import timed_credit
+
+    url = "https://www.youtube.com/watch?v=x"
+    credit = f"Clip from S - {url}"
+    assert timed_credit(credit, _yt(url), 0) == credit
+    assert timed_credit("", _yt(url), 50) == ""
+    assert timed_credit("Clip from S", _yt(url), 50) == "Clip from S"
+    twitch = SourceVideo(id="t:1", source_id="s", platform=Platform.TWITCH, native_id="1", url=url)
+    assert timed_credit(credit, twitch, 50) == credit
+
+
+def test_description_keeps_the_credit_line_with_the_time():
+    from clips.package import timed_credit
+
+    url = "https://www.youtube.com/watch?v=x"
+    credit = timed_credit(f"Clip from Some Creator - {url}", _yt(url), 3725)
+    copy = run(None, credit=credit)
+    assert f"{url}&t=3725" in copy.description
+    assert check_copy(copy, kind=ClipKind.SHORT, credit=credit) == []

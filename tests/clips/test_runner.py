@@ -864,7 +864,7 @@ def test_runner_asks_the_stages_for_a_model_and_hands_it_to_pick_and_copy(store,
 
     def pick(*a, **kw):
         seen["pick"] = kw.get("llm")
-        return [Moment(start_s=1, end_s=30)]
+        return [Moment(start_s=1, end_s=30, score=0.9)]
 
     def copy(m, s, v, *, kind, credit, llm=None):
         seen["copy"] = llm

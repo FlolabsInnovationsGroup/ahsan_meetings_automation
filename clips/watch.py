@@ -19,6 +19,7 @@ VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm"}
 STABLE_SECONDS = 60.0  # a file must be untouched this long, so a half-copied file is not picked up
 SHORTS_MAX_S = 60.0
 _CC_LICENSE_MARK = "creative commons"
+_NOT_READY = ("is_live", "is_upcoming", "post_live")
 
 
 class WatchError(RuntimeError):
@@ -39,8 +40,13 @@ def list_new_videos(source: Source, known_native_ids: set[str], *, limit: int = 
 
 # --- YouTube
 
-def _channel_videos_url(source: Source) -> str:
-    """The channel's long-video tab, so Shorts and streams are mostly left out."""
+_CHANNEL_TABS = ("videos", "streams", "shorts", "featured", "live", "playlists", "community", "about", "releases")
+
+
+def _channel_root(source: Source) -> tuple[str, bool]:
+    """The channel's own address without a tab, and whether it is a real channel
+    link. A playlist or single-video link (only allowed for our own footage) is
+    returned as given, flagged False, because it has no tabs."""
     url = source.url.strip()
     own = source.rights is RightsBasis.OWN
     if not own and not source.channel_id:
@@ -55,10 +61,29 @@ def _channel_videos_url(source: Source) -> str:
         url = f"https://www.youtube.com/channel/{source.channel_id}"
     if not url:
         raise WatchError(f"source {source.id} has no channel URL or channel id; add one in its settings")
-    url = url.rstrip("/")
-    if url.endswith(("/videos", "/streams", "/shorts")) or "watch?v=" in url or "list=" in url:
-        return url
-    return url + "/videos"
+    if "watch?v=" in url or "list=" in url:
+        return url, False
+    if url.startswith("@"):
+        url = "https://www.youtube.com/" + url
+    elif "://" not in url:
+        url = "https://" + url
+    url = url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    head, _, last = url.rpartition("/")
+    if last.lower() in _CHANNEL_TABS and head.count("/") >= 3:
+        url = head  # the link named a tab; keep only the channel
+    return url, True
+
+
+def _channel_videos_url(source: Source) -> str:
+    """The channel's long-video tab, so Shorts and streams are mostly left out."""
+    root, is_channel = _channel_root(source)
+    return root + "/videos" if is_channel else root
+
+
+def _channel_streams_url(source: Source) -> str | None:
+    """The channel's Live tab (finished streams), or None for a link with no tabs."""
+    root, is_channel = _channel_root(source)
+    return root + "/streams" if is_channel else None
 
 
 def _ytdlp_list(url: str, limit: int) -> list[dict]:
@@ -147,7 +172,8 @@ def _is_unwanted(entry: dict, duration: float) -> bool:
     url = str(entry.get("url") or entry.get("webpage_url") or "")
     if "/shorts/" in url:
         return True
-    if entry.get("is_live") or entry.get("live_status") in ("is_live", "is_upcoming", "post_live"):
+    # Live now, upcoming, or ended but not processed yet: picked up on a later pass.
+    if entry.get("is_live") or entry.get("is_upcoming") or entry.get("live_status") in _NOT_READY:
         return True
     return duration <= SHORTS_MAX_S
 
@@ -160,8 +186,45 @@ def _entry_channel_ok(source: Source, entry: dict) -> bool:
     return bool(wanted) and wanted in (str(entry.get("channel_id") or ""), str(entry.get("uploader_id") or ""))
 
 
+def _include_streams() -> bool:
+    from clips.config import clips_settings
+
+    return bool(clips_settings().include_streams)
+
+
 def _youtube_videos(source: Source, known: set[str], limit: int) -> list[SourceVideo]:
-    entries = _ytdlp_list(_channel_videos_url(source), limit)
+    """Uploads plus finished streams, each tab newest first. One tab failing keeps the other."""
+    tabs = [(_channel_videos_url(source), False)]
+    streams_url = _channel_streams_url(source) if _include_streams() else None
+    if streams_url:
+        tabs.append((streams_url, True))
+    merged: dict[str, SourceVideo] = {}
+    per_tab: list[list[SourceVideo]] = []
+    errors: list[WatchError] = []
+    for url, is_streams_tab in tabs:
+        try:
+            videos = _youtube_tab(source, known, limit, url, is_streams_tab)
+        except WatchError as exc:
+            errors.append(exc)
+            logger.warning("source %s: %s", source.id, exc)
+            continue
+        fresh = [v for v in videos if v.native_id not in merged]
+        merged.update({v.native_id: v for v in fresh})
+        per_tab.append(fresh)
+    if errors and len(errors) == len(tabs):
+        raise errors[0]
+    # Each tab is already newest first and flat listings often carry no date, so
+    # alternate between tabs: streams are not starved by the limit.
+    mixed: list[SourceVideo] = []
+    for i in range(max((len(t) for t in per_tab), default=0)):
+        mixed.extend(t[i] for t in per_tab if i < len(t))
+    return mixed
+
+
+def _youtube_tab(
+    source: Source, known: set[str], limit: int, list_url: str, is_streams_tab: bool
+) -> list[SourceVideo]:
+    entries = _ytdlp_list(list_url, limit)
     found: list[SourceVideo] = []
     for entry in entries:
         native_id = str(entry.get("id") or "")
@@ -194,6 +257,7 @@ def _youtube_videos(source: Source, known: set[str], limit: int) -> list[SourceV
                 published_at=published,
                 duration_s=duration,
                 license=license_,
+                was_live=is_streams_tab or bool(entry.get("was_live")) or entry.get("live_status") == "was_live",
             )
         )
         if len(found) >= limit:

@@ -84,6 +84,16 @@ class ClipsSettings(BaseSettings):
     default_hashtags: str = "#gta6,#gtavi"
     media_retention_hours: int = Field(48, ge=1)
 
+    # --- streams and long videos (a long video is never downloaded whole)
+    include_streams: bool = True  # also list a channel's finished live streams
+    chunk_minutes_over: int = Field(20, ge=1, le=600)  # a video longer than this is fetched in stretches
+    chunks_per_video: int = Field(12, ge=1, le=60)  # at most this many stretches per video
+    chunk_seconds: int = Field(150, ge=30, le=900)  # length of each stretch
+    scout_audio: bool = True  # fetch only the audio first, to find the loud parts
+    max_stream_hours: float = Field(12.0, gt=0, le=72)  # longer videos are refused
+    stream_shorts_max: int = Field(10, ge=1, le=50)  # most Shorts made from one long video
+    min_moment_score: float = Field(0.6, ge=0.0, le=1.0)  # a model-picked moment below this is dropped
+
     # --- the loop and its brakes
     loop_minutes: int = Field(15, ge=1, le=1440)
     videos_per_tick: int = Field(1, ge=0, le=20)  # source videos processed per loop turn

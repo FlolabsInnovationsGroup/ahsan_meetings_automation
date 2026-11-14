@@ -163,6 +163,8 @@ def _source_json(source: Source) -> dict:
         data["can_clip"], data["reasons"] = False, ["the rights check is not available"]
     else:
         data["can_clip"], data["reasons"] = verdict.ok, list(verdict.reasons)
+    # A YouTube channel link is read for its streams as well as its videos when include_streams is on.
+    data["streams_and_videos"] = source.platform is Platform.YOUTUBE and bool(clips_settings().include_streams)
     data["download_note"] = ""
     if source.platform is Platform.YOUTUBE and not clips_settings().youtube_downloads:
         data["download_note"] = (
