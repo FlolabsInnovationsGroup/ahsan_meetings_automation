@@ -316,8 +316,10 @@ def test_cost_estimate_prices_cache_and_output_per_model():
 
     usage = {"calls": 18, "prompt_tokens": 1_000_000, "cache_read_tokens": 400_000, "cache_write_tokens": 100_000,
              "output_tokens": 100_000}
-    # 500k plain * $2 + 400k read * $0.20 + 100k write * $2.50 + 100k out * $10 = 1.00 + 0.08 + 0.25 + 1.00
-    assert estimate_cost_usd(usage, "claude-sonnet-5-5") == pytest.approx(2.33)
+    # 500k plain * $2 + 400k read * $0.10 + 100k write * $2.50 + 100k out * $10 = 1.00 + 0.04 + 0.25 + 1.00
+    # (the cache-read price was corrected from $0.20 to $0.10 per million on 2026-11-14,
+    # checked against Anthropic's model table)
+    assert estimate_cost_usd(usage, "claude-sonnet-5-5") == pytest.approx(2.29)
     assert estimate_cost_usd(usage, "claude-haiku-4-5") == pytest.approx(1.165)
     assert estimate_cost_usd(usage, "gemini-3.5-flash-lite") is None  # unknown price: no guess
     assert estimate_cost_usd({}, "claude-sonnet-5-5") is None

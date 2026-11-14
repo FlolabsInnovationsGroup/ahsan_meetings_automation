@@ -21,3 +21,7 @@ Dockerfile
 .dockerignore
 secrets
 *.pem
+# the /brag test run (music, fonts, renders): not needed by the app
+brag-output
+# research notes and data: not needed by the app
+research

@@ -631,7 +631,7 @@ def get_decisions(
 
 
 def _clean_title(text: str, limit: int) -> str:
-    text = re.sub(r"[<>\r\n\t\"]+", " ", str(text or "")).strip()
+    text = re.sub(r"[<>|\r\n\t\"]+", " ", str(text or "")).strip()
     text = re.sub(r"\s{2,}", " ", text)
     if len(text) > limit:
         text = text[: limit - 1].rstrip() + "…"
@@ -693,18 +693,55 @@ _RERANK_LINE = re.compile(r"^#?(\d+)\s*\|\s*(\d{1,2})\s*\|\s*(\w+)\s*\|\s*~?\[?(
                           r"\s*\|\s*([yn])\w*\s*\|([^|]*)\|?(.*)$", re.IGNORECASE)
 
 
+def _clean_screen_hook(text: str) -> str | None:
+    """The on-screen hook if it keeps the rules (at most 6 words and 40
+    characters, no "|"), else None. "-" means the model had none."""
+    text = text.strip()
+    if not text or text == "-" or "|" in text or len(text) > 40 or len(text.split()) > 6:
+        return None
+    return text
+
+
+def _split_short_fields(rest: str) -> tuple[str, str | None, float | None, int | None]:
+    """The text after the title: '<why>' (old answers) or
+    '<why>|<hook>|<stands_alone>|<short_start>'. Bad values in the three new
+    fields are dropped to None; the line itself always stays."""
+    # drop one stray closing "|" (never a leading one: it marks an empty why)
+    rest = rest.strip(" \t")
+    rest = rest.removesuffix("|")
+    parts = rest.split("|")
+    if len(parts) >= 4:
+        # the prompt forbids "|" in the why, so four or more parts is the new
+        # format; each of the three new fields is judged on its own
+        why, hook, sa, ss = "|".join(parts[:-3]), parts[-3].strip(), parts[-2].strip(), parts[-1].strip()
+        stands = None
+        if re.fullmatch(r"\d{1,2}(\.\d+)?", sa) and 0 <= float(sa) <= 10:
+            stands = float(sa)
+        start = int(ss.strip("~[]")) if re.fullmatch(r"~?\[?\d+\]?", ss) else None
+        return why.strip(" |\t"), _clean_screen_hook(hook), stands, start
+    # a short or broken answer: only the first part can be trusted as the why
+    return parts[0].strip(" |\t"), None, None, None
+
+
 def parse_rerank_lines(raw: str) -> list[dict]:
-    """'<id>|<score>|<code>|<a>|<b>|<y/n>|<title>|<why>' lines. Lines that
-    don't fit are skipped (the candidate then counts as unanswered)."""
+    """'<id>|<score>|<code>|<a>|<b>|<y/n>|<title>|<why>' lines, optionally
+    followed by '|<hook>|<stands_alone>|<short_start>'. Lines that don't fit
+    are skipped (the candidate then counts as unanswered)."""
     items = []
     for line in _answer_lines(raw):
         m = _RERANK_LINE.match(line)
         if m:
-            cid, score, code, a, b, short, title, hook = m.groups()
+            cid, score, code, a, b, short, title, rest = m.groups()
             # the model sometimes closes the line with a stray "|" ("...for sharing.|")
+            why, hook, stands, start = _split_short_fields(rest)
             items.append({"id": int(cid), "s": int(score), "h": code.lower(), "a": int(a), "b": int(b),
-                          "sh": short.lower() == "y", "t": title.strip(" |\t"), "k": hook.strip(" |\t")})
+                          "sh": short.lower() == "y", "t": title.strip(" |\t"), "k": why,
+                          "hk": hook, "sa": stands, "ss": start})
     return items
+
+
+def _hook_words(text: str) -> list[str]:
+    return re.findall(r"[\w']+", text.lower())
 
 
 def _apply_rerank(m: Moment, item: dict, judgments: list[SegmentJudgment], ctx: int) -> Moment:
@@ -718,7 +755,22 @@ def _apply_rerank(m: Moment, item: dict, judgments: list[SegmentJudgment], ctx: 
     first, last_i = complete_window(first, last_i, judgments, max(0, lo - 2), min(last, hi + 2))
     category = HIGHLIGHT_CODES.get(item.get("h", ""), m.category)
     peak = m.peak_index if m.peak_index is not None and first <= m.peak_index <= last_i else None
+    # Short fields: a short_start outside the answer's own a..b (or the final
+    # window) is ignored, and an on-screen hook with a word nobody said in the
+    # clip is dropped (it must not promise what the clip does not contain).
+    short_start = None
+    ss = item.get("ss")
+    if ss is not None and int(item["a"]) <= ss <= int(item["b"]) and first <= ss <= last_i:
+        short_start = judgments[ss].start
+    screen_hook = item.get("hk")
+    if screen_hook:
+        said = {w for j in judgments[first : last_i + 1] for w in _hook_words(j.text)}
+        if not all(w in said for w in _hook_words(screen_hook)):
+            screen_hook = None
     return m.model_copy(update={
+        "screen_hook": screen_hook or None,
+        "stands_alone": item.get("sa"),
+        "short_start": short_start,
         "first_index": first,
         "last_index": last_i,
         "start": judgments[first].start,

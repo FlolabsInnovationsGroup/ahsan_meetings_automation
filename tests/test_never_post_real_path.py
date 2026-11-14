@@ -5,6 +5,7 @@ and YouTube is tests/fake_channel.py). What happened on a real server is what
 these tests replay: a new deploy over a live state file, crashes mid-upload,
 restarts, Zoom outages, damaged files and two people saving at once."""
 
+import dataclasses
 import json
 import re
 import threading
@@ -27,9 +28,12 @@ from core.models import JobRecord, JobStatus
 from ingest import zoom as zoom_module
 from ledger import files, prefs, uploads
 from ledger.uploads import get_ledger
+from publish import settings
 from tests.fake_channel import Crash, FakeChannel
 from tests.test_autopilot import PM, T0, World, _meeting, _signed
 from tests.test_publish import _finished_job
+
+_current = settings.current  # the real one, kept before a test swaps it
 
 BUDDY = "zoom.buddy@flolabsinnovations.com"
 OPS, PROJECTS, LEGAL = 84116996599, 85138528372, 89716953476
@@ -169,6 +173,8 @@ def server(monkeypatch):
                         ("ZOOM_WEBHOOK_SECRET_TOKEN", "whsec")):
         monkeypatch.setenv(name, value)
     get_settings.cache_clear()
+    # titles must start with the meeting name and videos go up public at once here; pinned without touching the saved prefs
+    monkeypatch.setattr(settings, "current", lambda: dataclasses.replace(_current(), title_style="meeting_date", scheduled=False))
     zoom = ZoomServers()
     client = zoom_module.ZoomClient(transport=httpx.MockTransport(zoom), sleep=lambda seconds: None)
     monkeypatch.setattr(zoom_module, "get_client", lambda: client)
@@ -653,6 +659,7 @@ def test_people_saving_at_the_same_moment_lose_nothing(server):
     # a reader sees the built-in list or the new one, never an empty or half-written one
     assert set(seen) <= {tuple(never_post.DEFAULT_ENTRIES), ("board",)}
     saved = json.loads((files.state_dir() / prefs.FILE).read_text(encoding="utf-8"))
+    saved.pop(never_post.DEFAULTS_V2_FLAG, None)  # the one-time note that the 2026-11-14 words were dealt with
     assert saved == {"job_retention_hours": 12.0, "never_post": ["board"]}
 
 
@@ -680,6 +687,7 @@ def test_two_saves_at_the_very_same_moment_keep_both(server, monkeypatch):
         for worker in workers:
             worker.join()
         saved = json.loads((files.state_dir() / prefs.FILE).read_text(encoding="utf-8"))
+        saved.pop(never_post.DEFAULTS_V2_FLAG, None)  # the one-time note that the 2026-11-14 words were dealt with
         assert saved == {"never_post": [f"board{round_number}"], "job_retention_hours": 12.0}
 
 

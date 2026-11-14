@@ -86,6 +86,10 @@ class Item:
     meeting_date: str | None = None
     index: int | None = None  # the short's number in its job (shorts/short_01.mp4 = 1)
     clip: tuple[float, float] | None = None  # the short's stretch of the recording, seconds
+    # what the Zoom meeting was called and its ID, for the never-post check
+    # right before an upload (publish/once.py); `meeting` is only the job's title
+    topic: str | None = None
+    meeting_id: str | None = None
 
 
 @dataclass
@@ -108,6 +112,13 @@ class Upload:
     posted_at: str | None = None
     error: str | None = None
     updated_at: str = ""
+    # When YouTube makes the video public (ISO, UTC) and whether subscribers
+    # are told then; None when it was not scheduled (publish/schedule.py).
+    publish_at: str | None = None
+    notify: bool | None = None
+    # Not saved: set on the record upload_once returns when YouTube's answer
+    # about a new upload differs from what was asked (publish/once.py).
+    warning: str | None = None
 
     @property
     def marker(self) -> str:
@@ -128,16 +139,25 @@ def source_of(job: JobRecord) -> str:
     return f"zoom:{job.zoom_meeting_uuid}" if job.zoom_meeting_uuid else f"job:{job.job_id}"
 
 
+def _zoom_names(job: JobRecord) -> tuple[str | None, str | None]:
+    info = job.zoom_meeting if isinstance(job.zoom_meeting, dict) else {}
+    meeting_id = info.get("meeting_id") or info.get("id")
+    return info.get("topic") or None, str(meeting_id) if meeting_id else None
+
+
 def full_item(job: JobRecord) -> Item:
     source = source_of(job)
-    return Item(f"{source}|full", source, "full", job.job_id, job.title, job.meeting_date)
+    topic, meeting_id = _zoom_names(job)
+    return Item(f"{source}|full", source, "full", job.job_id, job.title, job.meeting_date,
+                topic=topic, meeting_id=meeting_id)
 
 
 def short_item(job: JobRecord, index: int, start: float | None = None, end: float | None = None) -> Item:
     source = source_of(job)
     clip = (float(start), float(end)) if start is not None and end is not None else None
+    topic, meeting_id = _zoom_names(job)
     return Item(f"{source}|short|{job.job_id}|{index}", source, "short", job.job_id, job.title, job.meeting_date,
-                index, clip)
+                index, clip, topic, meeting_id)
 
 
 def marker_for(key: str) -> str:
@@ -211,6 +231,7 @@ class Ledger:
                 index=event.get("index"), clip=tuple(event["clip"]) if event.get("clip") else None,
                 state="uploading", title=event.get("title") or "", privacy=event.get("privacy") or "",
                 by=event.get("by") or "", updated_at=at,
+                publish_at=event.get("publish_at"), notify=event.get("notify"),
             )
             return
         upload = self._uploads.get(key)
@@ -309,11 +330,13 @@ class Ledger:
             return bool(self._active)
 
     # ------------------------------------------------------------- writing
-    def begin(self, item: Item, *, title: str, privacy: str, by: str) -> Attempt:
+    def begin(self, item: Item, *, title: str, privacy: str, by: str,
+              publish_at: str | None = None, notify: bool | None = None) -> Attempt:
         """Claim `item` for this thread before anything is sent. Raises
         AlreadyPosted, NeedsCheck or InFlight when it must not be sent. A
         cut-off upload of the same item is resumed through its upload link
-        (the title it started with stays: YouTube fixed it then)."""
+        (the title it started with stays: YouTube fixed it then, and so did
+        the time it goes public, `publish_at`)."""
         with self._lock:
             own = self._uploads.get(item.key)
             if item.key in self._active:
@@ -325,15 +348,32 @@ class Ledger:
                     and own.job_id == item.job_id):
                 self._active.add(item.key)
                 return Attempt(replace(own), own.session_uri)
-            record = files.append_jsonl(self.journal_path, {
-                "at": files.now_iso(), "event": "claim", "key": item.key, "source": item.source,
-                "kind": item.kind, "job_id": item.job_id, "meeting": item.meeting,
-                "meeting_date": item.meeting_date, "index": item.index,
-                "clip": list(item.clip) if item.clip else None, "title": title, "privacy": privacy, "by": by,
-            })
-            self._apply(record)
+            self._claim(item, title, privacy, by, publish_at, notify)
             self._active.add(item.key)
             return Attempt(replace(self._uploads[item.key]), None)
+
+    def restart(self, item: Item, *, title: str, privacy: str, by: str,
+                publish_at: str | None = None, notify: bool | None = None) -> Attempt:
+        """Drop the upload link of an upload this thread holds and claim the
+        item afresh. Only for a link YouTube says has no video behind it (it
+        has part of the bytes), whose time to go public or privacy no longer
+        suits the request: its video was never made, so a new link is safe."""
+        with self._lock:
+            if item.key not in self._active:
+                raise InFlight("This video is not claimed by this upload.", replace(self._uploads[item.key]))
+            self._claim(item, title, privacy, by, publish_at, notify)
+            return Attempt(replace(self._uploads[item.key]), None)
+
+    def _claim(self, item: Item, title: str, privacy: str, by: str, publish_at: str | None,
+               notify: bool | None) -> None:
+        record = files.append_jsonl(self.journal_path, {
+            "at": files.now_iso(), "event": "claim", "key": item.key, "source": item.source,
+            "kind": item.kind, "job_id": item.job_id, "meeting": item.meeting,
+            "meeting_date": item.meeting_date, "index": item.index,
+            "clip": list(item.clip) if item.clip else None, "title": title, "privacy": privacy, "by": by,
+            "publish_at": publish_at, "notify": notify,
+        })
+        self._apply(record)
 
     def session_started(self, key: str, uri: str) -> None:
         """Record YouTube's upload link. Must succeed before the first byte is
@@ -449,6 +489,8 @@ def _posted_line(upload: Upload) -> dict:
         "job_id": upload.job_id,
         "clip": list(upload.clip) if upload.clip else None,
         "key": upload.key,
+        "publish_at": upload.publish_at,
+        "notify": upload.notify,
     }
 
 
@@ -461,6 +503,7 @@ def _from_posted(line: dict) -> Upload:
         title=line.get("title") or "", privacy=line.get("privacy") or "", by=line.get("by") or "",
         video_id=line.get("video_id"), url=line.get("url"), posted_at=line.get("posted_at"),
         updated_at=line.get("posted_at") or "",
+        publish_at=line.get("publish_at"), notify=line.get("notify"),
     )
 
 

@@ -1,4 +1,5 @@
-"""A publishing run: the shorts first, then the full video.
+"""A publishing run: the shorts first, then the full video (or, for public
+videos on the release plan, the full video first: see the end of this note).
 
 Why this order. The full video's description lists its shorts with links, and
 a short's link exists only once the short is uploaded. Editing the full video
@@ -13,21 +14,37 @@ job, so one failing never loses the others. Whether something may go up at
 all is the ledger's call (ledger/uploads.py), not the job's: it remembers
 every video on the channel across jobs and restarts, and a cut-off upload is
 finished through its own upload link instead of being sent again.
+
+The release plan (publish/schedule.py). A video that would go up public is,
+when the owner's "scheduled" setting is on, uploaded private with a time
+YouTube makes it public, so a meeting's full video and its Shorts don't all
+appear at once and each can be reviewed first. Then the order is the other
+way round: the full video first (it gets the earliest slot), then the Shorts
+(each at least `shorts_after_full_hours` after it), because a Short's
+description links to the full video. The full video's description leaves the
+Shorts list out, since the Shorts aren't public yet. A Short with no free
+slot is "skipped": the autopilot doesn't retry it, and its files are kept so a
+person can still publish it by hand. Private and unlisted uploads, and
+"public right away", work as described above.
 """
 
 from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
+from autopilot import never_post
+from core import naming
 from core.logging import get_logger
 from core.models import JobRecord, YoutubePrivacy, YoutubeUpload
 from core.timeline import fmt_clock
 from ledger import uploads
 from ledger.uploads import get_ledger
 
-from . import describe, media, once, youtube
+from . import describe, media, once, schedule, youtube
+from . import settings as pub_settings
 from .cleanup import delete_job_files
 
 logger = get_logger(__name__)
@@ -57,6 +74,8 @@ class ShortPlan:
     description: str
     # the stretch of the recording it shows (seconds), kept in the posted list
     clip: tuple[float, float] | None = None
+    # False when a person typed the description: it is never rewritten
+    suggested: bool = True
 
 
 @dataclass(frozen=True)
@@ -76,6 +95,8 @@ class PublishPlan:
     delete_after: bool = True
     # who posted it, for the posted list: "person" or "autopilot"
     by: str = "person"
+    # Public at once instead of on the release plan (only matters for public).
+    right_away: bool = False
 
 
 # ---------------------------------------------------------------- the plan
@@ -90,6 +111,7 @@ def build_plan(
     shorts: Sequence[tuple[int, str | None, str | None]] = (),
     delete_after: bool = True,
     by: str = "person",
+    right_away: bool = False,
 ) -> PublishPlan:
     """Check a request against the job and the ledger, and fill in what it
     left out.
@@ -97,6 +119,9 @@ def build_plan(
     `title` None = no full video. `shorts` are (number, title, description);
     a title or description left None is the suggested one (publish_options).
     Raises PublishRefused, whose status code is the HTTP answer."""
+    why = never_post.match_job(job)
+    if why is not None:
+        raise PublishRefused(403, f"This meeting can't be posted: {why}. Take it off the never-post list first.")
     if job.files_deleted:
         raise PublishRefused(409, "The files were already removed from the server.")
     if job.youtube_busy:
@@ -119,6 +144,7 @@ def build_plan(
         _valid(describe.title_problem(full_title), "title")
         full_text = describe.full_description(job) if description is None else description
         _valid(describe.description_problem(full_text), "description")
+        _not_listed(full_title, full_text, "the full video")
         _not_blocked(uploads.full_item(job))
         if final is None or final not in on_hand:
             raise PublishRefused(410, "The final video is no longer on the server.")
@@ -136,13 +162,50 @@ def build_plan(
         _not_blocked(_short_item(job, info), f"Short {index}")
         if info.file not in on_hand:
             raise PublishRefused(410, f"Short {index} is no longer on the server.")
+        suggested = short_text is None
         short_title = describe.short_title(info, job) if short_title is None else short_title.strip()
         short_text = describe.short_description(info, job, full_url) if short_text is None else short_text
         _valid(describe.title_problem(short_title), f"title of short {index}")
         _valid(describe.description_problem(short_text), f"description of short {index}")
-        plans[index] = ShortPlan(index, short_title, short_text, (info.source_start, info.source_end))
+        _not_listed(short_title, short_text, f"short {index}")
+        plans[index] = ShortPlan(index, short_title, short_text, (info.source_start, info.source_end), suggested)
 
-    return PublishPlan(privacy, tuple(plans[i] for i in sorted(plans)), full, delete_after, by)
+    return PublishPlan(privacy, tuple(plans[i] for i in sorted(plans)), full, delete_after, by, right_away)
+
+
+def listed_words(title: str, description: str) -> str | None:
+    """A never-post word in the words that would go up, or None. What the app
+    puts in every description (the team line, the owner's links) is left out."""
+    text = description.replace(describe.ORG_LINE, " ")
+    for line in pub_settings.current().links_text.splitlines():
+        if line.strip():
+            text = text.replace(line.strip(), " ")
+    return never_post.match_words(f"{title} . {text}")
+
+
+def suggested_words_listed(job: JobRecord) -> str | None:
+    """Why the words the autopilot would post for this job (the full video's and
+    every Short's suggested title and description) hold a never-post word, or
+    None. The meeting passed the list, but a title the AI wrote can still say
+    "investor" or "private"; the channel check would then report the app's
+    own upload as a leak."""
+    texts = [("full video", describe.full_title(job), describe.full_description(job))]
+    for info in describe.load_shorts(job):
+        texts.append((f"short {info.index}", describe.short_title(info, job),
+                      describe.short_description(info, job, None)))
+    for what, title, text in texts:
+        word = listed_words(title, text)
+        if word is not None:
+            return f'the {what} would say "{word}", which is on the never-post list'
+    return None
+
+
+def _not_listed(title: str, description: str, what: str) -> None:
+    word = listed_words(title, description)
+    if word is not None:
+        raise PublishRefused(
+            400, f'The title or description of {what} has "{word}", which is on the never-post list. '
+                 "Reword it, or take the word off the list first.")
 
 
 def _valid(problem: str | None, what: str) -> None:
@@ -215,7 +278,10 @@ def publish_job(job: JobRecord, update: Update, plan: PublishPlan) -> str | None
 def plan_everything(job: JobRecord, privacy: YoutubePrivacy, by: str) -> PublishPlan | None:
     """Every video of the job that may still go up, with the suggested words
     (what the autopilot posts), or None when nothing is left. Leaves out what
-    is posted, waits for a check, belongs to another run, or has no file."""
+    is posted, waits for a check, belongs to another run, or has no file.
+    A meeting on the never-post list gets no plan at all."""
+    if never_post.match_job(job) is not None:
+        return None
     ledger = get_ledger()
     infos = describe.load_shorts(job)
     final = media.final_member(job)
@@ -224,7 +290,8 @@ def plan_everything(job: JobRecord, privacy: YoutubePrivacy, by: str) -> Publish
     shorts = []
     for info in infos:
         state = job.youtube_shorts.get(info.index)
-        if (state is not None and state.status == "published") or info.file not in on_hand:
+        # a "skipped" short (no release slot) is left for a person: not retried
+        if (state is not None and state.status in ("published", "skipped")) or info.file not in on_hand:
             continue
         if ledger.blocker(_short_item(job, info)) is not None:
             continue
@@ -253,6 +320,10 @@ def posting_verdict(job: JobRecord) -> str:
     on_hand = media.available(job, ([final] if final else []) + [s.file for s in infos.values()])
     verdicts = [_item_verdict(ledger, uploads.full_item(job), final is not None and final in on_hand)]
     for index in sorted(describe.rendered_shorts(job)):
+        state = job.youtube_shorts.get(index)
+        if state is not None and state.status == "skipped":
+            verdicts.append("done")  # no release slot: left for a person, never retried
+            continue
         info = infos.get(index)
         item = _short_item(job, info) if info is not None else uploads.short_item(job, index)
         verdicts.append(_item_verdict(ledger, item, info is not None and info.file in on_hand))
@@ -276,56 +347,229 @@ def _item_verdict(ledger, item: uploads.Item, file_on_hand: bool) -> str:
 def _upload_all(job: JobRecord, update: Update, plan: PublishPlan) -> str | None:
     """Uploads everything in the plan. Returns why it stopped early (an error
     every further upload would hit too: quota, a revoked connection), or None."""
+    cfg = pub_settings.current()
+    if plan.privacy == "public" and cfg.scheduled and not plan.right_away:
+        return _upload_scheduled(job, update, plan, cfg)
     stop: str | None = None
     for short in plan.shorts:
+        # the list can change while uploads run, so look again before each one
+        stop = stop or _listed_now(job)
         if stop is not None:
             _not_uploaded(job.youtube_shorts[short.index], stop)
             continue
-        stop = _upload_short(job, update, short, plan)
+        stop = _upload_short(job, update, short, plan, cfg)
     if plan.full is not None:
+        stop = stop or _listed_now(job)
         if stop is not None:
             job.youtube_status, job.youtube_error = "failed", f"Not uploaded: {stop}"
         else:
-            stop = _upload_full(job, update, plan.full, plan)
+            stop = _upload_full(job, update, plan.full, plan, cfg)
     return stop
 
 
-def _upload_short(job: JobRecord, update: Update, short: ShortPlan, plan: PublishPlan) -> str | None:
+def _upload_scheduled(job: JobRecord, update: Update, plan: PublishPlan, cfg) -> str | None:
+    """The release plan's order: the full video, then the Shorts, each in its
+    own slot (publish/schedule.py). Every item is booked right before its own
+    upload, and the never-post list is looked at again before each one."""
+    stop: str | None = None
+    full_item = uploads.full_item(job)
+    if plan.full is not None:
+        stop = _listed_now(job)
+        if stop is not None:
+            job.youtube_status, job.youtube_error = "failed", f"Not uploaded: {stop}"
+        else:
+            slot = _slot_for(full_item, None, cfg)
+            if slot is None:
+                job.youtube_status, job.youtube_error = "failed", _no_slot_text(cfg, full=True)
+                logger.warning("job %s: no release slot for the full video", job.job_id)
+                update(job)
+            else:
+                stop = _upload_full(job, update, plan.full, plan, cfg, slot)
+    # The Shorts wait until the full video is public (or at least booked)
+    full_waiting = plan.full is not None and job.youtube_status != "published"
+    not_before = _after_full(full_item, cfg)
+    shorts = _link_to_full(job, plan, full_waiting)
+    for short in shorts:
+        state = job.youtube_shorts[short.index]
+        stop = stop or _listed_now(job)
+        if stop is not None:
+            _not_uploaded(state, stop)
+            continue
+        if full_waiting:
+            state.status = "failed"
+            state.error = "Not uploaded: the full video isn't posted yet, and its Shorts wait for it. Publish again."
+            update(job)
+            continue
+        item = _short_item_of(job, short)
+        slot = _slot_for(item, not_before, cfg)
+        if slot is None:
+            state.status, state.progress = "skipped", 0
+            state.error = _no_slot_text(cfg, full=False)
+            logger.warning("job %s: no release slot for short %d; skipped", job.job_id, short.index)
+            update(job)
+            continue
+        stop = _upload_short(job, update, short, plan, cfg, slot)
+    return stop
+
+
+def _slot_for(item: uploads.Item, not_before: datetime | None, cfg) -> schedule.Booking | None:
+    """The slot an item goes public in. A cut-off upload carries on through
+    the link it started with, so it keeps the time that was fixed then and
+    books nothing new, but only while that time still leaves the full review
+    time (a video must never go public without review). When it doesn't, a
+    new slot is booked here and the upload (publish/once.py) drops the old link
+    for a new one, unless YouTube turns out to hold the video already. None
+    when there is no free slot."""
+    ledger = get_ledger()
+    now = datetime.now(UTC)
+    if ledger.blocker(item) is not None:
+        # upload_once will refuse it: book nothing, and move no one else's slot
+        return schedule.get(item.key) or schedule.Booking(item.key, item.kind, item.source, now, False, now, item.meeting)
+    held = ledger.get(item.key)
+    if (held is not None and held.state in ("interrupted", "uploading") and held.session_uri
+            and held.job_id == item.job_id and held.publish_at):
+        at = datetime.fromisoformat(held.publish_at)
+        earliest = now + timedelta(hours=cfg.review_hours)
+        if not_before is not None:
+            earliest = max(earliest, not_before)
+        if at >= earliest:
+            return schedule.Booking(item.key, item.kind, item.source, at, bool(held.notify), now, item.meeting)
+    return schedule.book(item.key, item.kind, item.source, not_before=not_before, meeting=item.meeting)
+
+
+def _settle_slot(item: uploads.Item, slot: schedule.Booking | None, posted: uploads.Upload) -> None:
+    """After an upload that is on the channel: the schedule must say what
+    YouTube holds. A video found already there (a cut-off upload that had
+    finished, or one another run posted) keeps the time it has, not the slot
+    just booked for this attempt, which is given back. A video with no time to
+    go public holds no slot (one left from a cut-off scheduled upload is freed)."""
+    if not posted.publish_at:  # public at once or private: no time to go public, so no slot is held
+        schedule.release(item.key)
+        return
+    if slot is None:
+        return
+    if posted.publish_at != schedule.rfc3339(slot.at):
+        at = datetime.fromisoformat(posted.publish_at)
+        schedule.keep(schedule.Booking(item.key, item.kind, item.source, at, bool(posted.notify), datetime.now(UTC), item.meeting))
+
+
+def _after_full(full_item: uploads.Item, cfg) -> datetime | None:
+    """The earliest a Short may go public: `shorts_after_full_hours` after the
+    meeting's full video, when that one is on the channel with a release time.
+    None = no such wait (it went up right away, or isn't posted from here)."""
+    held = get_ledger().get(full_item.key)
+    if held is None or held.state != "published" or not held.publish_at:
+        return None
+    # Also after the full video went public: schedule.book takes the later of
+    # this and now + review_hours, so a long-past full video adds no wait.
+    return datetime.fromisoformat(held.publish_at) + timedelta(hours=cfg.shorts_after_full_hours)
+
+
+def _link_to_full(job: JobRecord, plan: PublishPlan, full_waiting: bool) -> tuple[ShortPlan, ...]:
+    """The plan's Shorts, those with a suggested description rewritten to link
+    to the full video now that it is on the channel (the plan was made before
+    it had a link)."""
+    full_url = job.youtube_url if job.youtube_status == "published" else None
+    if plan.full is None or full_waiting or not full_url:
+        return plan.shorts
+    infos = {info.index: info for info in describe.load_shorts(job)}
+    rewritten = []
+    for short in plan.shorts:
+        info = infos.get(short.index)
+        if short.suggested and info is not None:
+            text = describe.short_description(info, job, full_url)
+            if not describe.description_problem(text):
+                short = replace(short, description=text)
+        rewritten.append(short)
+    return tuple(rewritten)
+
+
+def _no_slot_text(cfg, *, full: bool) -> str:
+    days = f"{cfg.max_days_ahead} day" + ("" if cfg.max_days_ahead == 1 else "s")
+    if full:
+        return (f"Not uploaded: no free release slot in the next {days}. "
+                "Try again later or publish it right away.")
+    return f"Not posted: no free release slot in the next {days}. Publish it by hand if you want it."
+
+
+def _release_slot(item: uploads.Item) -> None:
+    """An upload failed: give its slot back, unless YouTube already holds a
+    video (or a cut-off upload) for it. Those keep the slot for the retry."""
+    held = get_ledger().get(item.key)
+    if held is None or held.state == "failed":
+        schedule.release(item.key)
+
+
+def _upload_fields(job: JobRecord, cfg, slot: schedule.Booking | None) -> dict:
+    """What every upload carries besides its words: the owner's category and
+    language, the meeting's day, and (release plan) when it goes public."""
+    fields = {"category_id": cfg.category_id, "language": cfg.language,
+              "recording_date": naming.meeting_date(job)}
+    if slot is not None:
+        fields.update(publish_at=slot.at, notify=slot.notify)
+    return fields
+
+
+def _listed_now(job: JobRecord) -> str | None:
+    """Why the job's meeting is on the never-post list right now, or None."""
+    why = never_post.match_job(job)
+    return f"{why}." if why else None
+
+
+def _short_item_of(job: JobRecord, short: ShortPlan) -> uploads.Item:
+    return uploads.short_item(job, short.index, *(short.clip or (None, None)))
+
+
+def _upload_short(job: JobRecord, update: Update, short: ShortPlan, plan: PublishPlan, cfg,
+                  slot: schedule.Booking | None = None) -> str | None:
     state = job.youtube_shorts[short.index]
     state.status, state.progress, state.error = "uploading", 0, None
+    state.publish_at = schedule.rfc3339(slot.at) if slot is not None else None
     update(job)
 
     def progress(pct: int) -> None:
         state.progress = max(0, min(99, pct))
         update(job)
 
-    item = uploads.short_item(job, short.index, *(short.clip or (None, None)))
+    item = _short_item_of(job, short)
     try:
         posted = once.upload_once(
             item, lambda: media.open_media(job, media.short_member(short.index)),
             title=short.title, description=short.description, privacy=plan.privacy, by=plan.by,
-            on_progress=progress,
+            on_progress=progress, **_upload_fields(job, cfg, slot),
         )
     except uploads.Refused as exc:
         if exc.upload.key == item.key and exc.upload.state == "published":
             posted = exc.upload  # it is on the channel already (e.g. a click and the autopilot raced)
         else:
-            state.status, state.error = "failed", blocked_text(exc.upload, item, f"Short {short.index}")
+            if slot is not None:
+                _release_slot(item)
+            state.status, state.error, state.publish_at = "failed", blocked_text(exc.upload, item, f"Short {short.index}"), None
             update(job)
             return None
     except Exception as exc:
         logger.exception("job %s: YouTube upload of short %d failed", job.job_id, short.index)
+        if slot is not None:
+            _release_slot(item)
         state.status, state.error = "failed", _error_text(exc)
+        state.publish_at = None
         update(job)
         return state.error if youtube.is_account_wide_error(exc) else None
-    state.status, state.progress, state.error = "published", 100, None
+    _settle_slot(item, slot, posted)
+    state.status, state.progress, state.error = "published", 100, posted.warning
     state.video_id, state.url = posted.video_id, posted.url
+    state.publish_at = posted.publish_at
     update(job)
     return None
 
 
-def _upload_full(job: JobRecord, update: Update, full: FullPlan, plan: PublishPlan) -> str | None:
-    description, listed = describe.with_shorts_block(full.description, published_shorts(job))
+def _upload_full(job: JobRecord, update: Update, full: FullPlan, plan: PublishPlan, cfg,
+                 slot: schedule.Booking | None = None) -> str | None:
+    if slot is not None:
+        # the release plan's Shorts come after it and aren't public yet: no list
+        description, listed = full.description, []
+    else:
+        description, listed = describe.with_shorts_block(full.description, published_shorts(job))
     job.youtube_status, job.youtube_progress, job.youtube_error = "uploading", 0, None
     update(job)
 
@@ -341,31 +585,37 @@ def _upload_full(job: JobRecord, update: Update, full: FullPlan, plan: PublishPl
         posted = once.upload_once(
             item, lambda: media.open_media(job, member),
             title=full.title, description=description, privacy=plan.privacy, by=plan.by, on_progress=progress,
+            **_upload_fields(job, cfg, slot),
         )
     except uploads.Refused as exc:
         if exc.upload.key == item.key and exc.upload.state == "published":
             posted = exc.upload
         else:
+            if slot is not None:
+                _release_slot(item)
             job.youtube_status, job.youtube_error = "failed", blocked_text(exc.upload, item, "The full video")
             update(job)
             return None
     except Exception as exc:
         logger.exception("job %s: YouTube upload of the full video failed", job.job_id)
+        if slot is not None:
+            _release_slot(item)
         job.youtube_status, job.youtube_error = "failed", _error_text(exc)
         update(job)
         return job.youtube_error if youtube.is_account_wide_error(exc) else None
+    _settle_slot(item, slot, posted)
     job.youtube_video_id = posted.video_id
     job.youtube_url = posted.url
     job.youtube_status = "published"
     job.youtube_progress = 100
-    job.youtube_error = None
+    job.youtube_error = posted.warning
     job.youtube_listed_shorts = listed
     update(job)
     return None
 
 
 def _error_text(exc: Exception) -> str:
-    return str(exc) if isinstance(exc, media.MediaMissing) else youtube.friendly_error(exc)
+    return str(exc) if isinstance(exc, (media.MediaMissing, once.NeverPost)) else youtube.friendly_error(exc)
 
 
 def _not_uploaded(state: YoutubeUpload, reason: str) -> None:
@@ -378,7 +628,10 @@ def published_shorts(job: JobRecord) -> list[tuple[int, str, str]]:
 
 
 def everything_published(job: JobRecord) -> bool:
-    """The full video and every short the job rendered are on the channel."""
+    """The full video and every short the job rendered are on the channel. A
+    short the release plan skipped is not: its files stay so a person can still
+    publish it by hand (the autopilot is finished with it all the same, see
+    posting_verdict)."""
     if job.youtube_status != "published":
         return False
     for index in describe.rendered_shorts(job):
@@ -455,16 +708,21 @@ def publish_options(job: JobRecord) -> dict:
         "url": job.youtube_url,
         "error": job.youtube_error,
         "blocked": None,
+        "publish_at": _ledger_publish_at(uploads.full_item(job)) if job.youtube_status == "published" else None,
     }
     if job.youtube_status != "published":
         _apply_ledger(full, uploads.full_item(job), "The full video")
+    cfg = pub_settings.current()
     return {
+        "release": {"scheduled": cfg.scheduled, "review_hours": cfg.review_hours,
+                    "timezone": schedule.team_zone_name()},
         "youtube": youtube.youtube_status(),
         "files_deleted": job.files_deleted,
         "busy": job.youtube_busy,
         "full": full,
         "shorts": rows,
         "shorts_block": _unlisted_block(job),
+        "never_post": never_post.match_job(job),
     }
 
 
@@ -477,7 +735,9 @@ def _apply_ledger(row: dict, item: uploads.Item, what: str) -> None:
     if blocker is None:
         return
     if blocker.key == item.key and blocker.state == "published":
-        row["status"], row["url"] = "published", blocker.url
+        # the job's own failure text is stale: the video is on the channel
+        row["status"], row["url"], row["error"] = "published", blocker.url, None
+        row["publish_at"] = blocker.publish_at
     row["blocked"] = blocked_text(blocker, item, what)
 
 
@@ -501,10 +761,17 @@ def _short_row(
         "url": state.url if state else None,
         "error": state.error if state else None,
         "blocked": None,
+        "publish_at": state.publish_at if state else None,
     }
     if info is not None and (state is None or state.status != "published"):
         _apply_ledger(row, _short_item(job, info), f"Short {index}")
     return row
+
+
+def _ledger_publish_at(item: uploads.Item) -> str | None:
+    """When the posted video goes public (ISO, UTC), if it was scheduled."""
+    held = get_ledger().get(item.key)
+    return held.publish_at if held is not None and held.state == "published" else None
 
 
 def _unlisted_block(job: JobRecord) -> str:

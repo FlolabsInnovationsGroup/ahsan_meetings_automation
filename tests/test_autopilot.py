@@ -368,14 +368,18 @@ def _process(world, uuid="m1"):
     return job_id
 
 
-def test_a_finished_job_is_posted_shorts_first_then_the_full_video(world):
+def test_a_finished_job_is_posted_on_the_release_plan_full_video_first(world):
     job_id = _process(world)
     world.step(minutes=1)
     assert world.meeting("m1").state == "posted"
     titles = [v["title"] for v in world.channel.videos.values()]
-    assert len(titles) == 4  # the three shorts, then the full video
-    assert titles[-1].startswith("Weekly Sync")  # the full video last
-    assert all(v["privacy"] == "public" for v in world.channel.videos.values())
+    assert len(titles) == 4  # the full video, then the three shorts
+    job = api_main.job_store.get(job_id)
+    assert job.youtube_video_id == next(iter(world.channel.videos))  # the full video first
+    # public videos go up private, each with its own time to go public
+    assert all(v["privacy"] == "private" and v["publish_at"] for v in world.channel.videos.values())
+    times = [v["publish_at"] for v in world.channel.videos.values()]
+    assert len(set(times)) == 4 and times[0] == min(times)
     job = api_main.job_store.get(job_id)
     assert job.files_deleted  # everything is up, so the files went
     assert get_ledger().meeting_state("zoom:m1") == "posted"

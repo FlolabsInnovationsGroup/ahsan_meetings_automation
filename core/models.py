@@ -82,6 +82,12 @@ class Moment(BaseModel):
     hook: str = ""
     short_worthy: bool = False
     reranked: bool = False
+    # From the re-rank, for Shorts (None = the answer had none; old saved data):
+    # the words shown on screen at the start, 0-10 "makes sense without the
+    # meeting", and the source time a Short of this moment should start at.
+    screen_hook: str | None = None
+    stands_alone: float | None = None
+    short_start: float | None = None
 
     @property
     def duration(self) -> float:
@@ -99,6 +105,8 @@ class ShortClip(BaseModel):
     category: HighlightCategory = "none"
     title: str = ""
     hook: str = ""
+    screen_hook: str | None = None
+    stands_alone: float | None = None
 
 
 class Chapter(BaseModel):
@@ -289,7 +297,9 @@ ErrorCode = Literal[
 ]
 
 
-YoutubeStatus = Literal["queued", "uploading", "published", "failed"]
+# "skipped": a Short the release plan had no slot for (publish/schedule.py). It
+# counts as done, so nothing retries it; a person can still publish it by hand.
+YoutubeStatus = Literal["queued", "uploading", "published", "failed", "skipped"]
 
 YoutubePrivacy = Literal["private", "unlisted", "public"]
 
@@ -305,6 +315,9 @@ class YoutubeUpload(BaseModel):
     video_id: str | None = None
     url: str | None = None
     error: str | None = None
+    # When YouTube makes it public (ISO, UTC), for a video uploaded on the
+    # release plan; None when it went up public at once.
+    publish_at: str | None = None
 
 
 class JobRecord(BaseModel):

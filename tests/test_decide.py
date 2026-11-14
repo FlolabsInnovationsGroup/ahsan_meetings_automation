@@ -466,7 +466,9 @@ def test_rate_limiter_spaces_requests(monkeypatch, _fake_api_key):
     assert limiter.acquire() == 0.0
     assert limiter.acquire() == 0.0
     waited = limiter.acquire()
-    assert 59.0 < waited <= 60.0 and sleeps == [waited]
+    # a hair over 60 s can come from the real clock moving between calls
+    # (60.00000000000364 seen on 2026-11-14), so allow float noise
+    assert 59.0 < waited <= 60.0 + 1e-6 and sleeps == [waited]
 
 
 def test_stage_deadlines(monkeypatch):

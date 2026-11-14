@@ -455,6 +455,11 @@ def _select(job, job_dir, judgments, moments, words, media, fade, duration, opts
         job.warnings.append("not enough highlight-worthy material for a highlights reel")
 
     count = settings.shorts_count if opts.shorts_count is None else opts.shorts_count
+    # the owner's "Shorts per meeting" cap applies here too, so the shortage
+    # warning below compares with the number that was really asked for
+    from publish.settings import current as publishing
+
+    count = min(count, publishing().shorts_per_meeting)
     shorts = select_shorts(
         moments,
         judgments,

@@ -69,6 +69,9 @@ class Meeting(BaseModel):
     first_seen_at: str = ""
     updated_at: str = ""
     posted_at: str | None = None
+    # a person pressed "Post it after all": the next posting round skips the
+    # hold rules (length, already on the channel) once; never the never-post list
+    hold_cleared: bool = False
 
 
 class ScheduledMeeting(BaseModel):

@@ -7,9 +7,14 @@ is an estimate, not a bill. A model not listed gets no estimate.
 from __future__ import annotations
 
 # model id prefix: (input, output, cache read, cache write)
+# Checked 2026-11-14 (cache write = the 5-minute rate). Gemini has no checked
+# price, so it is left out: the cost meter's price table lets the owner add it.
 PRICES: dict[str, tuple[float, float, float, float]] = {
-    "claude-sonnet-5-5": (2.00, 10.00, 0.20, 2.50),
+    "claude-sonnet-5-5": (2.00, 10.00, 0.10, 2.50),
+    "claude-opus-5-5": (4.00, 20.00, 0.20, 5.00),
+    "claude-haiku-5-5": (0.10, 0.50, 0.01, 0.125),  # prompts up to 100K tokens
     "claude-haiku-4-5": (1.00, 5.00, 0.10, 1.25),
+    "claude-fable-5-2": (8.00, 40.00, 0.20, 10.00),
     "gpt-6-luna": (0.10, 0.50, 0.01, 0.10),
 }
 

@@ -16,6 +16,7 @@ from core.models import JobStatus
 from ingest import zoom
 from ledger import files, prefs
 from ledger.uploads import get_ledger
+from publish import settings
 from tests.test_autopilot import PM, T0, World, _meeting
 
 START = T0 - timedelta(hours=2)
@@ -23,6 +24,8 @@ START = T0 - timedelta(hours=2)
 
 @pytest.fixture
 def world(monkeypatch):
+    # these tests find a posted video by the meeting name its title starts with
+    settings.save({"title_style": "meeting_date"})
     return World(monkeypatch)
 
 

@@ -60,3 +60,17 @@ def set_never_post(entries: list[str]) -> None:
         data = _read()
         data["never_post"] = entries
         files.write_json(_path(), data)
+
+
+def publishing() -> dict:
+    """The side panel's publishing choices as saved (publish/settings.py checks
+    each value and fills in the defaults); {} when nobody changed any."""
+    value = _read().get("publishing")
+    return value if isinstance(value, dict) else {}
+
+
+def set_publishing(values: dict) -> None:
+    with _write_lock:
+        data = _read()
+        data["publishing"] = values
+        files.write_json(_path(), data)

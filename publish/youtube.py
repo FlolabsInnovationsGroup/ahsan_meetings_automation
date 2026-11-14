@@ -17,6 +17,7 @@ import os
 import secrets
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from core.config import get_settings
@@ -200,6 +201,11 @@ def upload_video(
     session_uri: str | None = None,
     start_byte: int = 0,
     on_session: "callable[[str], None] | None" = None,
+    publish_at: datetime | None = None,
+    notify: bool = True,
+    category_id: str | None = None,
+    language: str | None = None,
+    recording_date: str | None = None,
 ) -> str:
     """Resumable upload to the connected channel. Returns the YouTube video id.
 
@@ -207,22 +213,24 @@ def upload_video(
     `on_session` before any byte is sent; the caller records it, because one
     link can create at most one video (ledger/uploads.py). With `session_uri`
     the upload carries on through that link from `start_byte` instead (the
-    title and description were fixed when the link was made)."""
+    title and description were fixed when the link was made).
+
+    With `publish_at` the video is uploaded private and YouTube makes it
+    public at that time (see publish/schedule.py). `notify` says whether
+    subscribers are told when it goes public."""
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
     creds = _load_credentials()
     service = build("youtube", "v3", credentials=creds, cache_discovery=False)
-    snippet = {"title": title, "description": description}
-    if tags:
-        snippet["tags"] = list(tags)
-    body = {
-        "snippet": snippet,
-        "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
-    }
+    body = insert_body(
+        title, description, privacy, tags=tags, publish_at=publish_at, category_id=category_id,
+        language=language, recording_date=recording_date,
+    )
+    parts = "snippet,status,recordingDetails" if "recordingDetails" in body else "snippet,status"
     media = MediaFileUpload(str(path), mimetype="video/*", chunksize=CHUNK_SIZE, resumable=True)
-    request = service.videos().insert(part="snippet,status", body=body, media_body=media)
+    request = service.videos().insert(part=parts, body=body, media_body=media, notifySubscribers=notify)
     if session_uri:
         request.resumable_uri = session_uri
         request.resumable_progress = start_byte
@@ -250,6 +258,53 @@ def upload_video(
             retries += 1
             time.sleep(min(2**retries, 60))
     return response["id"]
+
+
+def insert_body(
+    title: str,
+    description: str,
+    privacy: YoutubePrivacy,
+    *,
+    tags: "list[str] | tuple[str, ...]" = (),
+    publish_at: datetime | None = None,
+    category_id: str | None = None,
+    language: str | None = None,
+    recording_date: str | None = None,
+) -> dict:
+    """The videos.insert request body. A scheduled video (`publish_at`) is
+    always private: YouTube only schedules a private video that was never
+    public, and flips it to public itself at that time."""
+    snippet: dict = {"title": title, "description": description}
+    if tags:
+        snippet["tags"] = list(tags)
+    if category_id:
+        snippet["categoryId"] = str(category_id)
+    if language:
+        snippet["defaultLanguage"] = language
+        snippet["defaultAudioLanguage"] = language
+    status: dict = {
+        "privacyStatus": "private" if publish_at is not None else privacy,
+        "selfDeclaredMadeForKids": False,
+        "containsSyntheticMedia": False,
+    }
+    if publish_at is not None:
+        status["publishAt"] = publish_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body: dict = {"snippet": snippet, "status": status}
+    if recording_date:
+        body["recordingDetails"] = {"recordingDate": f"{recording_date}T00:00:00Z"}
+    return body
+
+
+def read_status(video_id: str) -> dict:
+    """What YouTube says about a video's visibility: {"privacyStatus": ...,
+    "publishAt": ... or None}. One quota unit. Used to check a new upload
+    came out as asked."""
+    from googleapiclient.discovery import build
+
+    service = build("youtube", "v3", credentials=_load_credentials(), cache_discovery=False)
+    items = service.videos().list(part="status", id=video_id).execute().get("items", [])
+    status = (items[0].get("status") if items else None) or {}
+    return {"privacyStatus": status.get("privacyStatus"), "publishAt": status.get("publishAt")}
 
 
 def _start_session(request) -> str:
@@ -324,7 +379,7 @@ def find_by_marker(marker: str, max_pages: int = 4) -> str | None:
         page = service.playlistItems().list(**params).execute()
         ids = [item["contentDetails"]["videoId"] for item in page.get("items", [])]
         if ids:
-            videos = service.videos().list(part="snippet", id=",".join(ids), maxResults=50).execute()
+            videos = service.videos().list(part="snippet", id=",".join(ids)).execute()
             for video in videos.get("items", []):
                 if marker in (video.get("snippet", {}).get("tags") or []):
                     return video["id"]

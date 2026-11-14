@@ -505,6 +505,47 @@
   }
   .never-post textarea:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
   .never-post .small-btn { padding: 4px 10px; font-size: 11.5px; }
+  /* Publishing */
+  .pub-set h4 { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; }
+  .pub-field { margin-bottom: 10px; }
+  .pub-field label { display: block; margin-bottom: 3px; }
+  .pub-field .pub-help { margin: 3px 0 0; color: var(--ink-muted); font-size: 11.5px; line-height: 1.4; }
+  .pub-set input[type="number"], .pub-set input[type="text"], .pub-set select, .pub-set textarea {
+    background: var(--bond-dim); border: 1.5px dashed var(--ink-muted); padding: 4px 6px; color: var(--ink);
+    font-family: 'IBM Plex Sans'; font-size: 12.5px; box-sizing: border-box; max-width: 100%;
+  }
+  .pub-set input[type="number"] { width: 84px; }
+  .pub-set textarea { display: block; width: 100%; resize: vertical; }
+  .pub-set input:focus, .pub-set select:focus, .pub-set textarea:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .pub-check label { display: flex; align-items: center; gap: 6px; }
+  .pub-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .pub-actions .small-btn { padding: 4px 10px; font-size: 11.5px; }
+  /* Costs */
+  .costs select, .costs input[type="text"], .cost-table input[type="number"] {
+    background: var(--bond-dim); border: 1.5px dashed var(--ink-muted); padding: 4px 6px; color: var(--ink);
+    font-family: 'IBM Plex Sans'; font-size: 12.5px; box-sizing: border-box;
+  }
+  .costs select:focus, .costs input:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .costs #costsCustom { width: 64px; }
+  .costs .small-btn { padding: 4px 10px; font-size: 11.5px; }
+  .cost-total { font-size: 30px; font-weight: 600; color: var(--ink); margin-top: 12px; line-height: 1.1; }
+  .cost-line { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 12.5px; }
+  .cost-line strong { font-weight: 600; text-align: right; }
+  .cost-warn { color: var(--red); font-size: 12px; line-height: 1.45; margin: 8px 0 0; }
+  .cost-bars { font-size: 11.5px; }
+  .cost-bar-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  .cost-day { font-family: 'Courier Prime', monospace; color: var(--ink-muted); width: 38px; flex: none; }
+  .cost-track { flex: 1; height: 8px; background: var(--bond-dim); min-width: 30px; }
+  .cost-fill { display: block; height: 100%; background: var(--blue); }
+  .cost-val { width: 96px; flex: none; text-align: right; color: var(--ink); }
+  .cost-editor { margin-top: 14px; }
+  .cost-editor > summary { cursor: pointer; }
+  .cost-table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 11.5px; }
+  .cost-table th { text-align: left; font-weight: 600; color: var(--ink-muted); padding: 2px 3px; }
+  .cost-table td { padding: 2px 3px; }
+  .cost-table input[type="number"] { width: 58px; }
+  .cost-table input.cost-model { width: 100%; min-width: 90px; }
+  .cost-gap { margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -634,6 +675,7 @@
           <div class="publish-wrap" id="publishWrap">
             <p class="marked-transcript-label">Publish to YouTube</p>
             <p class="marked-transcript-legend" id="publishLegend"></p>
+            <p class="error-note" id="ytNever" role="alert" style="display:none"></p>
             <div class="yt-connect" id="ytConnect"></div>
             <div class="yt-form" id="ytForm">
               <label class="yt-field" for="ytPrivacy">Visibility
@@ -642,6 +684,11 @@
                   <option value="unlisted">Unlisted (anyone with the link)</option>
                   <option value="public">Public</option>
                 </select>
+              </label>
+              <p class="yt-note" id="ytSpread" style="display:none;margin:8px 0 0;font-size:11.5px;color:var(--ink-muted);line-height:1.5"></p>
+              <label class="opt" for="ytRightAway" id="ytRightAwayLabel" style="display:none">
+                <input type="checkbox" id="ytRightAway" />
+                <span>Make it public right away instead</span>
               </label>
               <div class="yt-list" id="ytList"></div>
               <label class="opt" for="ytDelete">
@@ -700,6 +747,59 @@
           <textarea id="neverPostInput" rows="9" spellcheck="false" aria-describedby="neverPostNote"></textarea>
           <button type="button" class="small-btn" id="neverPostSave">Save</button>
           <p class="side-empty" id="neverPostNote">One per line: a word or phrase from the meeting's title, or a Zoom meeting ID. Whole words only, so "hr" doesn't match "three". Capitals and punctuation don't matter.</p>
+        </div>
+      </details>
+      <details class="side-section" id="channelCheckSection">
+        <summary class="side-sub">Channel check <span class="side-count" id="channelCheckCount"></span></summary>
+        <div class="retention channel-check">
+          <button type="button" class="small-btn" id="channelCheckBtn">Check the channel now</button>
+          <p class="side-empty" id="channelCheckNote">Open to load the last check.</p>
+          <div id="channelCheckBody"></div>
+        </div>
+      </details>
+      <details class="side-section" id="pubSection">
+        <summary class="side-sub">Publishing</summary>
+        <div class="retention pub-set" id="pubForm"></div>
+      </details>
+      <details class="side-section" id="releaseSection">
+        <summary class="side-sub">Release plan <span class="side-count" id="releaseCount"></span></summary>
+        <div id="releaseList"><p class="side-empty">Open to load.</p></div>
+      </details>
+      <details class="side-section" id="costsSection">
+        <summary class="side-sub">Costs <span class="side-count" id="costsCount"></span></summary>
+        <div class="retention costs">
+          <div class="retention-row">
+            <select id="costsRange" aria-label="Period">
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="custom">Custom</option>
+            </select>
+            <span id="costsCustomRow" hidden>
+              <input type="number" id="costsCustom" min="1" max="3650" step="1" value="30" inputmode="numeric" aria-label="Number of days" />
+              <span>days</span>
+              <button type="button" class="small-btn" id="costsApply">Apply</button>
+            </span>
+          </div>
+          <p class="side-empty" id="costsNote"></p>
+          <div id="costsBody"><p class="side-empty">Open to load.</p></div>
+          <details class="cost-editor" id="costsEditor">
+            <summary class="side-sub">Prices and fixed costs</summary>
+            <p class="side-empty">US dollars per 1M tokens. A model id matches every model that starts with it.</p>
+            <table class="cost-table">
+              <thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cache read</th><th>Cache write</th><th></th></tr></thead>
+              <tbody id="costsPriceRows"></tbody>
+            </table>
+            <button type="button" class="small-btn" id="costsAddPrice">Add model</button>
+            <p class="side-empty cost-gap">Fixed costs, US dollars a month (shared out by the day):</p>
+            <table class="cost-table">
+              <thead><tr><th>Name</th><th>$ / month</th><th>Count</th><th></th></tr></thead>
+              <tbody id="costsFixedRows"></tbody>
+            </table>
+            <button type="button" class="small-btn" id="costsAddFixed">Add cost</button>
+            <button type="button" class="small-btn" id="costsSave">Save</button>
+            <p class="side-empty" id="costsSaveNote"></p>
+          </details>
         </div>
       </details>
       <details class="side-section" id="postedSection">
@@ -1774,6 +1874,21 @@ const publishLegend = document.getElementById("publishLegend");
 const ytConnect = document.getElementById("ytConnect");
 const ytForm = document.getElementById("ytForm");
 const ytPrivacy = document.getElementById("ytPrivacy");
+let teamZone = ""; // the team's time zone name, from the server, for "goes public Nov 15, 2:30 PM"
+// "Nov 15, 2:30 PM" for an ISO time, in the team's time zone (this browser's if unknown)
+function teamTime(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  const opts = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  try {
+    return d.toLocaleString("en-US", teamZone ? { ...opts, timeZone: teamZone } : opts);
+  } catch (e) {
+    return d.toLocaleString("en-US", opts);
+  }
+}
+const ytSpread = document.getElementById("ytSpread");
+const ytRightAway = document.getElementById("ytRightAway");
+const ytRightAwayLabel = document.getElementById("ytRightAwayLabel");
 const ytList = document.getElementById("ytList");
 const ytDelete = document.getElementById("ytDelete");
 const ytPublishBtn = document.getElementById("ytPublishBtn");
@@ -1798,6 +1913,7 @@ function resetPublish() {
   publishTimer = null;
   publishOptions = null;
   publishRows = [];
+  ytRightAway.checked = false; // a choice made for one urgent video must not carry over to the next
   publishWrap.classList.remove("visible");
   clearYtError();
 }
@@ -1844,8 +1960,13 @@ function buildPublish(jobId) {
   publishWrap.classList.add("visible");
   publishLegend.textContent = o.files_deleted
     ? "The files were removed from the server. The YouTube links stay here."
-    : "Shorts go up first, then the full video, whose description lists the shorts.";
+    : "Shorts go up first, then the full video, whose description lists the shorts. Public videos on the release plan go up the other way round: the full video first.";
+  if (o.release && o.release.timezone) teamZone = o.release.timezone;
   renderConnect(jobId);
+  // a meeting on the never-post list can't be posted: say so in red (the server refuses it too)
+  const ytNever = document.getElementById("ytNever");
+  ytNever.textContent = o.never_post ? `On the never-post list: ${o.never_post}. It can't be posted.` : "";
+  ytNever.style.display = o.never_post ? "block" : "none";
 
   ytList.textContent = "";
   publishRows = [];
@@ -1875,7 +1996,9 @@ function buildPublish(jobId) {
       }
     } else {
       // everything left is ticked; never what the posted list blocks
-      r.check.checked = !!r.item.available && r.item.status !== "published" && !r.item.blocked;
+      // (a Short the release plan skipped stays unticked: a person chooses it)
+      r.check.checked = !!r.item.available && r.item.status !== "published" && r.item.status !== "skipped"
+        && !r.item.blocked;
     }
   });
 
@@ -2012,19 +2135,26 @@ function refreshPublishRows() {
 function setChip(r, item) {
   r.chip.className = "yt-chip";
   r.chip.textContent = "";
+  // only a time still to come: once it has passed the video is simply public
+  const goesPublic = item.publish_at ? new Date(item.publish_at).getTime() : NaN;
+  const when = goesPublic > Date.now() && item.status !== "failed" && item.status !== "skipped" ? teamTime(item.publish_at) : "";
   if (item.status === "published") {
     r.chip.classList.add("done");
     r.chip.append("posted");
+    if (when) r.chip.append(` · Scheduled: goes public ${when}`);
     if (typeof item.url === "string" && /^https:\/\//.test(item.url)) {
       r.chip.append(" · ");
       addLink(r.chip, item.url, "view on YouTube", { newTab: true });
     }
   } else if (item.status === "uploading") {
     r.chip.classList.add("live");
-    r.chip.textContent = `uploading ${item.progress || 0}%`;
+    r.chip.textContent = `uploading ${item.progress || 0}%` + (when ? ` · Scheduled: goes public ${when}` : "");
   } else if (item.status === "queued") {
     r.chip.classList.add("live");
     r.chip.textContent = "waiting";
+  } else if (item.status === "skipped") {
+    r.chip.classList.add("bad");
+    r.chip.textContent = "skipped";
   } else if (item.blocked) {
     r.chip.classList.add("bad");
     r.chip.textContent = "can't post";
@@ -2034,8 +2164,11 @@ function setChip(r, item) {
   } else if (!item.available) {
     r.chip.textContent = "file no longer on the server";
   }
+  // a published row can carry a note when YouTube's answer differed from what was asked
   r.err.textContent = item.status !== "published" && item.blocked ? item.blocked
-    : item.status === "failed" && item.error ? item.error : "";
+    : item.status === "failed" && item.error ? item.error
+    : item.status === "skipped" ? `Skipped: ${(item.error || "no free release slot.").replace(/^Not posted:\s*/, "")} You can still publish it.`
+    : item.status === "published" && item.error ? item.error : "";
   r.err.hidden = !r.err.textContent;
 }
 
@@ -2051,18 +2184,27 @@ function updatePublishButton() {
   ytPublishBtn.style.display = canPublish && anyLeft ? "block" : "none";
   ytDelete.closest("label").style.display = canPublish && anyLeft ? "" : "none";
   const n = pickedRows().length;
-  ytPublishBtn.disabled = !!o.busy || n === 0;
+  ytPublishBtn.disabled = !!o.busy || n === 0 || !!o.never_post;
   ytPublishBtn.textContent = o.busy ? "Publishing…" : n === 0 ? "Choose what to publish"
     : `Publish ${n} video${n === 1 ? "" : "s"}`;
   ytPrivacy.disabled = !!o.busy;
   ytDelete.disabled = !!o.busy;
+  // public videos are spread out (release plan): say so, and offer the way around it
+  const spread = ytPrivacy.value === "public" && !!(o.release && o.release.scheduled);
+  const hours = o.release ? Number(o.release.review_hours) : 0;
+  ytSpread.textContent = `Public videos are spread out: each goes public at its own time, at least ${hours} hour${hours === 1 ? "" : "s"} from now (Publishing settings).`;
+  ytSpread.style.display = spread ? "block" : "none";
+  ytRightAwayLabel.style.display = spread ? "" : "none";
+  ytRightAway.disabled = !!o.busy;
 }
+ytPrivacy.addEventListener("change", () => { if (publishOptions) updatePublishButton(); });
 
 async function publishNow() {
   const picked = pickedRows();
   if (!currentJobId || !picked.length) return;
   clearYtError();
   const body = { privacy: ytPrivacy.value, delete_after: ytDelete.checked, shorts: [] };
+  if (ytPrivacy.value === "public" && ytRightAway.checked) body.right_away = true;
   picked.forEach((r) => {
     if (r.kind === "full") {
       body.title = r.title.value;
@@ -2094,6 +2236,7 @@ async function publishNow() {
     updatePublishButton();
     return;
   }
+  ytRightAway.checked = false; // "right away" is for this publish only
   applyJobToPublish(data);
   watchPublish(jobId);
 }
@@ -2150,7 +2293,8 @@ function applyJobToPublish(job) {
   });
   o.shorts.forEach((s) => {
     const st = states[String(s.index)] || {};
-    Object.assign(s, { status: st.status || null, progress: st.progress || 0, url: st.url || null, error: st.error || null });
+    Object.assign(s, { status: st.status || null, progress: st.progress || 0, url: st.url || null, error: st.error || null,
+      publish_at: st.publish_at || null });
   });
   o.files_deleted = !!job.files_deleted;
   o.busy = UPLOAD_WAITING.includes(job.youtube_status) || Object.values(states).some((st) => UPLOAD_WAITING.includes(st.status));
@@ -2323,6 +2467,275 @@ async function saveNeverPost() {
 }
 document.getElementById("neverPostSave").addEventListener("click", saveNeverPost);
 
+// --- Channel check: public videos that shouldn't be there (publish/channel_check.py) ---
+const channelCheckSection = document.getElementById("channelCheckSection");
+const channelCheckNote = document.getElementById("channelCheckNote");
+const channelCheckBody = document.getElementById("channelCheckBody");
+const channelCheckBtn = document.getElementById("channelCheckBtn");
+let channelCheckLoaded = false;
+
+function channelCheckList(title, items, red, withReason) {
+  const box = document.createElement("div");
+  const head = document.createElement("p");
+  head.className = "side-empty";
+  head.style.cssText = "margin-top:10px;font-weight:600;" + (red && items.length ? "color:var(--red);" : "");
+  head.textContent = `${title} (${items.length})`;
+  box.appendChild(head);
+  if (!items.length) {
+    const none = document.createElement("p");
+    none.className = "side-empty";
+    none.textContent = "None.";
+    box.appendChild(none);
+  }
+  items.forEach((v) => {
+    const row = document.createElement("p");
+    row.className = "side-empty";
+    if (red) row.style.color = "var(--red)";
+    const link = document.createElement("a");
+    link.href = v.studio_url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = v.title || v.id;
+    row.appendChild(link);
+    const state = v.scheduled ? "scheduled to go public" : v.privacy;
+    row.appendChild(document.createTextNode(` · ${state}` + (withReason && v.reason ? ` · ${v.reason}` : "")));
+    box.appendChild(row);
+  });
+  return box;
+}
+
+function renderChannelCheck(r) {
+  channelCheckBody.replaceChildren();
+  if (!r || !r.checked_at) {
+    channelCheckNote.textContent = "The channel hasn't been checked yet.";
+    document.getElementById("channelCheckCount").textContent = "";
+    return;
+  }
+  const c = r.counts || {};
+  channelCheckNote.textContent = `Last checked ${sideTime(r.checked_at)}: ${c.total} videos `
+    + `(${c.public} public, ${c.unlisted} unlisted, ${c.private} private, ${c.scheduled} scheduled).`
+    + (r.truncated ? " Only the newest 2000 uploads were checked." : "");
+  const leaks = (r.listed || []).length;
+  document.getElementById("channelCheckCount").textContent = leaks ? `· ${leaks} to fix` : "";
+  channelCheckBody.appendChild(channelCheckList("Public, unlisted or scheduled videos from never-post meetings", r.listed || [], true, true));
+  channelCheckBody.appendChild(channelCheckList("Videos the app didn't upload", r.unknown || [], false, false));
+}
+
+async function loadChannelCheck() {
+  try {
+    const res = await fetch("/channel/check");
+    if (res.ok) renderChannelCheck(await res.json());
+  } catch (e) { channelCheckNote.textContent = "Can't reach the server."; }
+}
+
+async function runChannelCheck() {
+  channelCheckBtn.disabled = true;
+  channelCheckNote.textContent = "Checking the channel; this can take a minute...";
+  try {
+    const res = await fetch("/channel/check", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) channelCheckNote.textContent = detailText(body) || "The check failed.";
+    else renderChannelCheck(body);
+  } catch (e) {
+    channelCheckNote.textContent = "Can't reach the server: " + e.message;
+  } finally {
+    channelCheckBtn.disabled = false;
+  }
+}
+channelCheckBtn.addEventListener("click", runChannelCheck);
+channelCheckSection.addEventListener("toggle", () => {
+  if (channelCheckSection.open && !channelCheckLoaded) { channelCheckLoaded = true; loadChannelCheck(); }
+});
+if (channelCheckSection.open) { channelCheckLoaded = true; loadChannelCheck(); }
+
+// --- Publishing: every publishing choice (publish/settings.py) --------------
+const PUB_CATEGORIES = [["28", "Science & Technology"], ["27", "Education"], ["22", "People & Blogs"],
+  ["24", "Entertainment"], ["25", "News & Politics"], ["26", "Howto & Style"], ["20", "Gaming"], ["10", "Music"],
+  ["1", "Film & Animation"], ["2", "Autos & Vehicles"], ["15", "Pets & Animals"], ["17", "Sports"],
+  ["19", "Travel & Events"], ["23", "Comedy"]];
+// [heading, [[name, kind, label, help, options]]]; kind: check | number | text | area | select
+const PUB_GROUPS = [
+  ["When videos go public", [
+    ["scheduled", "check", "Spread videos out (schedule them)", "Off: every video goes public as soon as it is uploaded."],
+    ["review_hours", "number", "Hours to check before going public", "Time to catch a mistake before anyone sees the video."],
+    ["min_gap_hours", "number", "Hours between two videos", "The least time between two videos going public."],
+    ["max_per_day", "number", "Videos per day", "The most videos that go public on one day (team time)."],
+    ["shorts_per_day", "number", "Shorts per day", "Of those, the most that are Shorts on one day (team time)."],
+    ["window_start_hour", "number", "Release hours from", "Earliest hour (0-23) a video goes public, in the team's time zone."],
+    ["window_end_hour", "number", "Release hours to", "Latest hour (1-24), in the team's time zone."],
+    ["shorts_after_full_hours", "number", "Hours between a full video and its Shorts", "So the link in each Short points at a video that is already public."],
+    ["max_days_ahead", "number", "Days ahead before a video waits for a person", "With no free time that soon, it is not uploaded; you press Publish."],
+  ]],
+  ["What is posted", [
+    ["shorts_per_meeting", "number", "Shorts per meeting", "0 posts no Shorts."],
+    ["hold_over_minutes", "number", "Hold for a person when the video is longer than (minutes)", "0 = never hold."],
+    ["hold_under_minutes", "number", "Hold for a person when the video is shorter than (minutes)", "0 = never hold."],
+  ]],
+  ["Words", [
+    ["title_style", "select", "Title style", "How each video is named.",
+      [["topic_first", "Topic first, then the team (recommended)"], ["meeting_date", "Meeting name and date"]]],
+    ["hashtags", "check", "Add hashtags", "A few at the end of each description."],
+    ["links_text", "area", "Links added to every full video's description", "Your website or socials. No < or > signs."],
+  ]],
+  ["Upload fields", [
+    ["category_id", "select", "YouTube category", "Where YouTube files the videos.", PUB_CATEGORIES],
+    ["language", "text", "Language code", "For example en or en-GB."],
+  ]],
+];
+const pubSection = document.getElementById("pubSection");
+const pubForm = document.getElementById("pubForm");
+let pubDefaults = null;
+let pubStatus = null;
+
+function pubInput(name) { return document.getElementById("pub_" + name); }
+
+function pubFill(values) {
+  PUB_GROUPS.forEach(([, fields]) => fields.forEach(([name, kind]) => {
+    const el = pubInput(name);
+    if (el && name in values) { if (kind === "check") el.checked = !!values[name]; else el.value = values[name]; }
+  }));
+}
+
+function pubBuild() {
+  pubForm.textContent = "";
+  PUB_GROUPS.forEach(([heading, fields]) => {
+    pubForm.appendChild(sideEl("h4", "", heading));
+    fields.forEach(([name, kind, label, help, options]) => {
+      const box = sideEl("div", "pub-field" + (kind === "check" ? " pub-check" : ""));
+      const id = "pub_" + name;
+      let el;
+      if (kind === "select") {
+        el = sideEl("select");
+        options.forEach(([v, t]) => { const o = sideEl("option", "", t); o.value = v; el.appendChild(o); });
+      } else if (kind === "area") {
+        el = sideEl("textarea"); el.rows = 3; el.maxLength = 1000; el.spellcheck = false;
+      } else {
+        el = sideEl("input"); el.type = kind === "check" ? "checkbox" : kind;
+        if (kind === "number") { el.step = "any"; el.inputMode = "decimal"; }
+      }
+      el.id = id;
+      const lab = sideEl("label");
+      lab.htmlFor = id;
+      if (kind === "check") { lab.appendChild(el); lab.append(label); box.appendChild(lab); }
+      else { lab.textContent = label; box.append(lab, el); }
+      const note = sideEl("p", "pub-help", help);
+      el.setAttribute("aria-describedby", id + "_help"); note.id = id + "_help";
+      box.appendChild(note);
+      pubForm.appendChild(box);
+    });
+  });
+  const actions = sideEl("div", "pub-actions");
+  const save = sideEl("button", "small-btn", "Save"); save.type = "button"; save.id = "pubSave";
+  const reset = sideEl("button", "small-btn", "Use the recommended settings"); reset.type = "button"; reset.id = "pubReset";
+  pubStatus = sideEl("span", "side-empty"); pubStatus.setAttribute("role", "status");
+  actions.append(save, reset, pubStatus);
+  pubForm.appendChild(actions);
+  save.addEventListener("click", savePublishing);
+  reset.addEventListener("click", () => {
+    if (!pubDefaults) return;
+    // The links, language and category are the owner's own content, not a
+    // recommendation, so resetting the schedule must not wipe them.
+    const keep = ["links_text", "language", "category_id"];
+    pubFill(Object.fromEntries(Object.entries(pubDefaults).filter(([k]) => !keep.includes(k))));
+    pubStatus.textContent = "Recommended settings filled in (your links, language and category are kept). Press Save to keep them.";
+  });
+}
+
+async function loadPublishing() {
+  if (!pubStatus) pubBuild();
+  let res, body;
+  try {
+    res = await fetch("/publishing/settings");
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    pubStatus.textContent = "Can't reach the server: " + e.message;
+    return;
+  }
+  if (!res.ok) { pubStatus.textContent = detailText(body) || "Couldn't load the settings."; return; }
+  pubDefaults = body.defaults;
+  pubFill(body.settings);
+  pubStatus.textContent = body.warning || "";
+}
+
+async function savePublishing() {
+  const changes = {};
+  PUB_GROUPS.forEach(([, fields]) => fields.forEach(([name, kind]) => {
+    const el = pubInput(name);
+    if (kind === "check") changes[name] = el.checked;
+    else if (kind === "number") changes[name] = el.value.trim() === "" ? null : Number(el.value);
+    else changes[name] = el.value;
+  }));
+  let res, body;
+  try {
+    res = await fetch("/publishing/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    pubStatus.textContent = "Can't reach the server: " + e.message;
+    return;
+  }
+  if (!res.ok) { pubStatus.textContent = detailText(body) || "Couldn't save."; return; }
+  pubFill(body.settings);
+  pubStatus.textContent = "Saved" + (body.warning ? ". " + body.warning : "");
+  // the open publish panel describes the plan as it is now
+  if (publishOptions && publishOptions.release) {
+    publishOptions.release.scheduled = !!body.settings.scheduled;
+    publishOptions.release.review_hours = body.settings.review_hours;
+    updatePublishButton();
+  }
+}
+
+try { pubSection.open = localStorage.getItem("hc_side_pubSection") === "open"; } catch (e) { /* closed */ }
+pubSection.addEventListener("toggle", () => {
+  try { localStorage.setItem("hc_side_pubSection", pubSection.open ? "open" : "closed"); } catch (e) { /* not important */ }
+  if (pubSection.open) loadPublishing();
+});
+if (pubSection.open) loadPublishing();
+
+// --- Release plan: the videos booked to go public (publish/schedule.py) ------
+const releaseSection = document.getElementById("releaseSection");
+const releaseList = document.getElementById("releaseList");
+const releaseCount = document.getElementById("releaseCount");
+
+async function loadRelease() {
+  let body = null;
+  try {
+    const res = await fetch("/publishing/schedule");
+    body = res.ok ? await res.json() : null;
+  } catch (e) { /* shown below */ }
+  releaseList.textContent = "";
+  if (!body) {
+    releaseList.appendChild(sideEl("p", "side-empty", "Couldn't load the release plan."));
+    return;
+  }
+  const rows = body.upcoming || [];
+  releaseCount.textContent = rows.length ? `· ${rows.length} coming` : "";
+  if (!rows.length) {
+    releaseList.appendChild(sideEl("p", "side-empty", "Nothing is waiting to go public."));
+    return;
+  }
+  rows.forEach((b) => {
+    const row = sideEl("div", "side-row");
+    row.appendChild(sideEl("div", "what", `${b.at_team} · ${b.kind === "full" ? "Full video" : "Short"}`));
+    row.appendChild(sideEl("div", "when",
+      [b.meeting || "a meeting", b.notify ? "tells subscribers" : "no notification"].join(" · ")));
+    releaseList.appendChild(row);
+  });
+  releaseList.appendChild(sideEl("p", "side-empty",
+    "To stop one, open it in YouTube Studio before its time: the app can't cancel a scheduled video."));
+}
+
+try { releaseSection.open = localStorage.getItem("hc_side_releaseSection") === "open"; } catch (e) { /* closed */ }
+releaseSection.addEventListener("toggle", () => {
+  try { localStorage.setItem("hc_side_releaseSection", releaseSection.open ? "open" : "closed"); } catch (e) { /* not important */ }
+  if (releaseSection.open) loadRelease();
+});
+if (releaseSection.open) loadRelease();
+setInterval(() => { if (releaseSection.open) loadRelease(); }, 60000);
+
 function renderAutopilot(ap) {
   renderNeverPost(ap.never_post);
   apStatus.textContent = "";
@@ -2393,7 +2806,9 @@ function renderAutopilot(ap) {
     const acts = sideEl("div", "acts");
     // nothing on the never-post list can go up with one click: take it off the list first
     if ((m.state === "needs_attention" || m.state === "skipped") && !m.never_post) {
-      sideButton(acts, m.state === "skipped" ? "Post it after all" : "Retry", () =>
+      // a held meeting's message says "Post it after all", so its button says the same
+      const held = m.state === "needs_attention" && (m.error || "").startsWith("Held for a person");
+      sideButton(acts, m.state === "skipped" || held ? "Post it after all" : "Retry", () =>
         sideAction("/autopilot/meetings/retry", { uuid: m.uuid }));
     }
     if (["needs_attention", "waiting_recording", "waiting_transcript", "ready"].includes(m.state)) {
@@ -2420,7 +2835,16 @@ function renderApCount(rows) {
   if (attention) apCount.append(" · ", sideEl("span", "bad", `${attention} need${attention === 1 ? "s" : ""} attention`));
 }
 
+// "Scheduled for Nov 15, 2:30 PM" after a posted video that is not public yet
+function addScheduledNote(li, entry) {
+  const at = entry && entry.publish_at ? new Date(entry.publish_at) : null;
+  if (at && !Number.isNaN(at.getTime()) && at.getTime() > Date.now()) {
+    li.appendChild(sideEl("div", "when", `Scheduled for ${teamTime(entry.publish_at)}`));
+  }
+}
+
 function renderPosted(data) {
+  if (data.timezone) teamZone = data.timezone;
   sideChecks.textContent = "";
   (data.needs_check || []).forEach((c) => {
     const row = sideEl("div", "side-row");
@@ -2475,7 +2899,7 @@ function renderPosted(data) {
     });
     const summary = sideEl("summary");
     summary.appendChild(sideEl("div", "what", g.meeting || "(no title)"));
-    const count = [g.full ? "full video" : "", g.shorts.length ? `${g.shorts.length} short${g.shorts.length === 1 ? "" : "s"}` : ""]
+    const count = [g.full ? "full video" : "", g.shorts.length ? `${g.shorts.length} Short${g.shorts.length === 1 ? "" : "s"}` : ""]
       .filter(Boolean).join(" + ");
     summary.appendChild(sideEl("div", "when", [g.meeting_date || sideTime(g.last_posted_at), count].filter(Boolean).join(" · ")));
     row.appendChild(summary);
@@ -2484,12 +2908,14 @@ function renderPosted(data) {
       const li = sideEl("li");
       li.appendChild(sideEl("span", "tag-full", "FULL"));
       sideLink(li, g.full.url, g.full.title || "Full video");
+      addScheduledNote(li, g.full);
       list.appendChild(li);
     }
     g.shorts.forEach((s) => {
       const li = sideEl("li");
       li.append(`Short ${s.short}: `);
       sideLink(li, s.url, s.title || "short");
+      addScheduledNote(li, s);
       list.appendChild(li);
     });
     row.appendChild(list);
@@ -2675,6 +3101,198 @@ urlInput.addEventListener("keydown", (e) => {
   params.delete("youtube_error");
   const rest = params.toString();
   try { history.replaceState(null, "", rest ? `?${rest}` : window.location.pathname); } catch (e) { /* not important */ }
+})();
+// ---- Costs: what the app costs over the last N days (GET /costs, /costs/settings)
+(function costsSection() {
+  const section = document.getElementById("costsSection");
+  const select = document.getElementById("costsRange");
+  const custom = document.getElementById("costsCustom");
+  const body = document.getElementById("costsBody");
+  const editor = document.getElementById("costsEditor");
+  const priceRows = document.getElementById("costsPriceRows");
+  const fixedRows = document.getElementById("costsFixedRows");
+  const note = document.getElementById("costsNote");
+  const DAYS_KEY = "hc_costs_days";
+  const BAR_DAYS = 31; // the bar list shows the latest month; the numbers cover the whole range
+
+  function usd(n) {
+    if (n === null || n === undefined) return "price unknown";
+    return "$" + (Math.abs(n) >= 1 ? n.toFixed(2) : n.toFixed(3));
+  }
+  function num(n) { return Number(n || 0).toLocaleString(); }
+
+  try { section.open = localStorage.getItem("hc_side_costsSection") === "open"; } catch (e) { /* closed */ }
+  let saved = "30";
+  try { saved = localStorage.getItem(DAYS_KEY) || "30"; } catch (e) { /* default */ }
+  if (["7", "30", "90"].includes(saved)) select.value = saved;
+  else { select.value = "custom"; custom.value = /^\d+$/.test(saved) ? saved : "30"; }
+  syncCustom();
+
+  function syncCustom() { document.getElementById("costsCustomRow").hidden = select.value !== "custom"; }
+  function chosenDays() {
+    if (select.value !== "custom") return Number(select.value);
+    const n = Number(custom.value);
+    return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : null;
+  }
+  function remember() {
+    const days = chosenDays();
+    try { if (days) localStorage.setItem(DAYS_KEY, String(days)); } catch (e) { /* not important */ }
+  }
+
+  function line(label, value, bad) {
+    const row = sideEl("div", "cost-line");
+    row.appendChild(sideEl("span", "", label));
+    row.appendChild(sideEl("strong", bad ? "bad" : "", value));
+    return row;
+  }
+
+  function render(r) {
+    body.textContent = "";
+    const t = r.totals;
+    document.getElementById("costsCount").textContent = `· ${usd(t.total_usd)} in ${r.days} day${r.days === 1 ? "" : "s"}`;
+    const big = sideEl("div", "cost-total", usd(t.total_usd));
+    body.appendChild(big);
+    body.appendChild(sideEl("p", "side-empty", `${r.start} to ${r.end}, today included`));
+    body.appendChild(line("AI", usd(t.ai_usd)));
+    if (t.tools_usd) body.appendChild(line("Other tools", usd(t.tools_usd)));
+    body.appendChild(line("Fixed costs (share)", usd(t.fixed_usd)));
+    const u = r.uploads;
+    body.appendChild(line("Uploads", `${u.count} (${u.full} full video${u.full === 1 ? "" : "s"}, ${u.shorts} Short${u.shorts === 1 ? "" : "s"})`));
+    body.appendChild(line("Busiest day", u.busiest_day_uploads ? `${u.busiest_day_uploads} of ${u.limit_per_day} a day` : "none"));
+    body.appendChild(line("Compute time", `${r.compute_hours} h`));
+    body.appendChild(line("Meetings", String(r.meetings.count)));
+    if (r.meetings.count) {
+      body.appendChild(line("Per meeting", `${usd(r.meetings.avg_usd)} (${usd(r.meetings.avg_usd_with_fixed)} with fixed)`));
+    }
+    body.appendChild(line(r.projection.based_on_days < r.days ? `A 30-day month at this pace (based on ${r.projection.based_on_days} day${r.projection.based_on_days === 1 ? "" : "s"} of data)` : "A 30-day month at this pace", usd(r.projection.month_usd)));
+    if (r.unpriced_models.length) {
+      body.appendChild(sideEl("p", "cost-warn",
+        `Price unknown for ${r.unpriced_models.join(", ")}. Its AI cost is not counted: add its price below.`));
+    }
+
+    const shown = r.per_day.slice(-BAR_DAYS);
+    const max = Math.max(0.000001, ...shown.map((d) => d.usd));
+    body.appendChild(sideEl("p", "side-sub", r.per_day.length > shown.length ? `Per day (latest ${shown.length})` : "Per day"));
+    const bars = sideEl("div", "cost-bars");
+    shown.forEach((d) => {
+      const row = sideEl("div", "cost-bar-row");
+      row.appendChild(sideEl("span", "cost-day", d.day.slice(5)));
+      const track = sideEl("span", "cost-track");
+      const fill = sideEl("span", "cost-fill");
+      fill.style.width = `${Math.round((d.usd / max) * 100)}%`;
+      track.appendChild(fill);
+      row.appendChild(track);
+      row.appendChild(sideEl("span", "cost-val", `${usd(d.usd)}${d.uploads ? ` · ${d.uploads} up` : ""}`));
+      bars.appendChild(row);
+    });
+    body.appendChild(bars);
+
+    if (r.by_model.length) {
+      body.appendChild(sideEl("p", "side-sub", "By model"));
+      r.by_model.forEach((m) => {
+        const row = sideEl("div", "side-row");
+        row.appendChild(sideEl("div", "what", m.model || "(unknown model)"));
+        row.appendChild(sideEl("div", "when",
+          `${m.price_known ? usd(m.usd) : "price unknown"} · ${num(m.calls)} calls · ${num(m.input_tokens)} in / ${num(m.output_tokens)} out`));
+        body.appendChild(row);
+      });
+    }
+  }
+
+  async function load() {
+    const days = chosenDays();
+    if (!days) { note.textContent = "Days: a whole number from 1 to 3650."; return; }
+    note.textContent = "";
+    remember();
+    let res, data;
+    try {
+      res = await fetch(`/costs?days=${days}`);
+      data = await res.json().catch(() => ({}));
+    } catch (e) { body.textContent = "Can't reach the server."; return; }
+    if (!res.ok) { body.textContent = detailText(data) || "Couldn't load the costs."; return; }
+    render(data);
+  }
+
+  // ---- the prices and fixed costs editor
+  function cell(input) { const td = document.createElement("td"); td.appendChild(input); return td; }
+  function field(value, type, label, cls) {
+    const el = document.createElement("input");
+    el.type = type;
+    if (type === "number") { el.min = "0"; el.step = "any"; el.inputMode = "decimal"; }
+    el.value = value;
+    el.setAttribute("aria-label", label);
+    if (cls) el.className = cls;
+    return el;
+  }
+  function removeButton(row) {
+    const b = sideEl("button", "small-btn", "Remove");
+    b.type = "button";
+    b.addEventListener("click", () => row.remove());
+    return cell(b);
+  }
+  function addPriceRow(p) {
+    const tr = document.createElement("tr");
+    tr.appendChild(cell(field(p.model, "text", "Model id", "cost-model")));
+    ["input", "output", "cache_read", "cache_write"].forEach((f) => tr.appendChild(cell(field(p[f], "number", `${f.replace("_", " ")} price`))));
+    tr.appendChild(removeButton(tr));
+    priceRows.appendChild(tr);
+  }
+  function addFixedRow(f) {
+    const tr = document.createElement("tr");
+    tr.appendChild(cell(field(f.name, "text", "Name", "cost-model")));
+    tr.appendChild(cell(field(f.usd_per_month, "number", "Dollars a month")));
+    const on = document.createElement("input");
+    on.type = "checkbox";
+    on.checked = f.active !== false;
+    on.setAttribute("aria-label", "Counted");
+    tr.appendChild(cell(on));
+    tr.appendChild(removeButton(tr));
+    fixedRows.appendChild(tr);
+  }
+  async function loadEditor() {
+    let res, data;
+    try { res = await fetch("/costs/settings"); data = await res.json(); } catch (e) { return; }
+    if (!res.ok) return;
+    priceRows.textContent = "";
+    fixedRows.textContent = "";
+    data.prices.forEach(addPriceRow);
+    data.fixed_costs.forEach(addFixedRow);
+  }
+  function tableRows(tbody) { return Array.from(tbody.querySelectorAll("tr")).map((tr) => Array.from(tr.querySelectorAll("input"))); }
+  async function save() {
+    const prices = tableRows(priceRows).map((c) => ({
+      model: c[0].value.trim(), input: parseFloat(c[1].value), output: parseFloat(c[2].value),
+      cache_read: parseFloat(c[3].value), cache_write: parseFloat(c[4].value),
+    }));
+    const fixed = tableRows(fixedRows).map((c) => ({ name: c[0].value.trim(), usd_per_month: parseFloat(c[1].value), active: c[2].checked }));
+    const blank = prices.some((p) => Number.isNaN(p.input) || Number.isNaN(p.output) || Number.isNaN(p.cache_read) || Number.isNaN(p.cache_write))
+      || fixed.some((f) => Number.isNaN(f.usd_per_month));
+    if (blank) { document.getElementById("costsSaveNote").textContent = "Fill in every number (0 is fine)."; return; }
+    let res, data;
+    try {
+      res = await fetch("/costs/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prices, fixed_costs: fixed }),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (e) { document.getElementById("costsSaveNote").textContent = "Can't reach the server."; return; }
+    if (!res.ok) { document.getElementById("costsSaveNote").textContent = detailText(data) || "Couldn't save."; return; }
+    document.getElementById("costsSaveNote").textContent = "Saved. The numbers above use it now.";
+    await loadEditor();
+    await load();
+  }
+
+  section.addEventListener("toggle", () => {
+    try { localStorage.setItem("hc_side_costsSection", section.open ? "open" : "closed"); } catch (e) { /* not important */ }
+    if (section.open) { load(); loadEditor(); }
+  });
+  select.addEventListener("change", () => { syncCustom(); if (select.value !== "custom") load(); });
+  document.getElementById("costsApply").addEventListener("click", load);
+  custom.addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+  document.getElementById("costsAddPrice").addEventListener("click", () => addPriceRow({ model: "", input: 0, output: 0, cache_read: 0, cache_write: 0 }));
+  document.getElementById("costsAddFixed").addEventListener("click", () => addFixedRow({ name: "", usd_per_month: 0, active: true }));
+  document.getElementById("costsSave").addEventListener("click", save);
+  if (section.open) { load(); loadEditor(); }
 })();
 resumeFromUrl();
 loadEmails();

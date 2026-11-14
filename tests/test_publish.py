@@ -23,6 +23,7 @@ from core.models import (
 from ledger import uploads
 from publish import delete_job_files, describe, media
 from publish import run as publish_run
+from publish import settings as pub_settings
 from publish import youtube as yt
 
 FINAL = "Final_WeeklySync_2026-10-05_Youtube.mp4"
@@ -107,13 +108,25 @@ class FakeYoutube:
 
     def __init__(self, monkeypatch, fail=None):
         self.uploads = []
+        # what each upload asked for besides its words (the release plan's fields)
+        self.extras = []
         self.fail = fail or {}
         monkeypatch.setattr(yt, "upload_video", self)
+        monkeypatch.setattr(yt, "read_status", self.read_status)
+
+    def read_status(self, video_id):
+        asked = self.extras[int(video_id.removeprefix("id")) - 1]
+        at = asked["publish_at"]
+        return {"privacyStatus": "private" if at else self.uploads[int(video_id.removeprefix("id")) - 1]["privacy"],
+                "publishAt": at.strftime("%Y-%m-%dT%H:%M:%SZ") if at else None}
 
     def __call__(self, path, title, description, privacy, on_progress=None, *, tags=(), session_uri=None,
-                 start_byte=0, on_session=None):
+                 start_byte=0, on_session=None, publish_at=None, notify=True, category_id=None, language=None,
+                 recording_date=None):
         self.uploads.append({"bytes": Path(path).read_bytes(), "title": title, "description": description,
                              "privacy": privacy, "tags": list(tags)})
+        self.extras.append({"publish_at": publish_at, "notify": notify, "category_id": category_id,
+                            "language": language, "recording_date": recording_date})
         if title in self.fail:
             raise self.fail[title]
         if on_session is not None:
@@ -124,6 +137,13 @@ class FakeYoutube:
     @property
     def order(self):
         return [u["bytes"] for u in self.uploads]
+
+
+@pytest.fixture(autouse=True)
+def _old_wording():
+    """These tests were written for the meeting-name title and the plain chapter
+    description; the topic-first wording has its own tests (test_describe_packaging.py)."""
+    pub_settings.save({"title_style": "meeting_date", "hashtags": False})
 
 
 @pytest.fixture
@@ -349,7 +369,8 @@ def test_publish_options_suggests_the_words_and_says_what_can_be_uploaded(config
     assert body["youtube"]["connected"] and not body["busy"] and not body["files_deleted"]
     assert body["full"] == {"available": True, "title": "Weekly Sync — 2026-10-05",
                             "description": "00:00 Highlights\n02:00 The plan\n05:00 Questions",
-                            "status": None, "progress": 0, "url": None, "error": None, "blocked": None}
+                            "status": None, "progress": 0, "url": None, "error": None, "blocked": None,
+                            "publish_at": None}
     first = body["shorts"][0]
     assert (first["index"], first["available"], first["title"], first["at"], first["at_s"]) == (
         1, True, "Why we moved to Postgres", "01:50", 110)

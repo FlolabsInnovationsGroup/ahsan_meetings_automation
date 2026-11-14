@@ -250,6 +250,10 @@ def _overlaps(a, b) -> bool:
 _JUNK = {"filler", "greeting_small_talk", "housekeeping", "crosstalk", "dead_air"}
 # what shorts are mainly for (owner, 2026-09-25): moments people learn from
 LEARNING_CATEGORIES = ("concept", "new_architecture", "new_feature", "insight")
+# the re-rank's stands_alone (0-10): from this a Short comes first; another
+# category (e.g. funny) needs the higher bar
+_STANDS_ALONE = 7.0
+_OTHER_STANDS_ALONE = 8.0
 
 
 def select_shorts(
@@ -272,31 +276,60 @@ def select_shorts(
     stripped of filler at either end. Shorts never overlap. A short may
     include material the cleanup removed — by design — but never starts or
     ends on removed filler/small talk/housekeeping."""
+    # fewer, better Shorts: the owner's "Shorts per meeting" choice caps the
+    # count (imported late: the publish package pulls in the whole app)
+    from publish.settings import current as publishing
+
+    count = min(count, publishing().shorts_per_meeting)
     if count <= 0 or not judgments:
         return []
     if any(m.reranked for m in moments):
         pool = [m for m in moments if m.short_worthy and m.score >= min_score]
     else:
         pool = [m for m in moments if m.category in preferred_categories and m.score >= min_score]
-    preferred = sorted((m for m in pool if m.category in preferred_categories), key=lambda m: (-m.score, m.start))
-    others = sorted((m for m in pool if m.category not in preferred_categories), key=lambda m: (-m.score, m.start))
+    # A moment that only works with the rest of the meeting is not a Short:
+    # one of another category (e.g. funny) must stand on its own (>= 8). Without
+    # the re-rank's stands_alone nothing changes.
+    pool = [m for m in pool if m.stands_alone is None or m.category in preferred_categories
+            or m.stands_alone >= _OTHER_STANDS_ALONE]
+
+    def rank(m: Moment):
+        # stands-alone moments first, then learning categories, then the score
+        tier = 0 if m.stands_alone is not None and m.stands_alone >= _STANDS_ALONE else 1
+        return (tier, m.category not in preferred_categories, -m.score, m.start)
+
     shorts: list[ShortClip] = []
-    for m in preferred + others:
+    for m in sorted(pool, key=rank):
         if len(shorts) >= count:
             break
         window = _fit_window(m.first_index, m.last_index, judgments, min_s, max_s, m.peak_index)
         if window is None:
             continue
         first, last = _strip_junk(*window, judgments, min_s, keep=m.peak_index)
+        first = _short_start_index(m, first, last, judgments, min_s)
         start, end = judgments[first].start, judgments[last].end
         if end - start < min_s or end - start > max_s:
             continue
         if any(start < s.end and s.start < end for s in shorts):
             continue
         shorts.append(ShortClip(index=0, moment_id=m.id, start=start, end=end, score=m.score,
-                                category=m.category, title=m.title, hook=m.hook))
+                                category=m.category, title=m.title, hook=m.hook,
+                                screen_hook=m.screen_hook, stands_alone=m.stands_alone))
     # numbered in pick order: preferred (learning) shorts first, best first
     return [s.model_copy(update={"index": k + 1}) for k, s in enumerate(shorts)]
+
+
+def _short_start_index(m: Moment, first: int, last: int, judgments: list[SegmentJudgment], min_s: float) -> int:
+    """The line a Short starts on: the re-rank's short_start (the claim or the
+    question itself) when it lies inside the clip and the Short still lasts
+    `min_s`; otherwise `first`. Only ever moves the start later, so the end and
+    the max length are untouched."""
+    if m.short_start is None:
+        return first
+    for k in range(first + 1, last + 1):
+        if abs(judgments[k].start - m.short_start) < 0.01:
+            return k if judgments[last].end - judgments[k].start >= min_s else first
+    return first
 
 
 def _strip_junk(first: int, last: int, judgments: list[SegmentJudgment], min_s: float, keep: int | None = None):

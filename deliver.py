@@ -305,6 +305,25 @@ def _ordered(artifacts: dict[str, ArtifactInfo]) -> dict[str, ArtifactInfo]:
     return {k: artifacts[k] for k in sorted(artifacts, key=key)}
 
 
+CLIP_TEXT_LIMIT = 2000  # characters
+
+
+def clip_text(words: list[Word], start: float, end: float) -> str:
+    """What is said in [start, end] of the source, plain, at most CLIP_TEXT_LIMIT
+    characters. Another part of the app checks a Short's title against it."""
+    said = " ".join(w.word.strip() for w in words if start - 0.05 <= (w.start + w.end) / 2 <= end + 0.05)
+    return " ".join(said.split())[:CLIP_TEXT_LIMIT]
+
+
+def shorts_manifest_rows(shorts_rows, clips, words: list[Word]) -> list[dict]:
+    """The "shorts" rows of manifest.json: the file and times, the title and
+    hook, the on-screen hook and stands-alone score (null when the re-rank gave
+    none) and the clip's own words ("text")."""
+    return [{"file": f, "source_start": round(s, 3), "source_end": round(e, 3), "title": t, "hook": h,
+             "screen_hook": c.screen_hook, "stands_alone": c.stands_alone, "text": clip_text(words, s, e)}
+            for (f, s, e, t, h), c in zip(shorts_rows, clips, strict=True)]
+
+
 def _manifest(job: JobRecord, inp: DeliverInputs, out: RenderOutputs, highlights, shorts_rows, entries) -> dict:
     media = inp.render.media
     removed = inp.render.removed
@@ -328,8 +347,7 @@ def _manifest(job: JobRecord, inp: DeliverInputs, out: RenderOutputs, highlights
         "artifacts": {name: a.model_dump(exclude={"on_disk"}) for name, a in job.artifacts.items()},
         "highlights": [{"final_at_s": round(a, 3), "source_start": round(s, 3), "source_end": round(e, 3),
                         "title": t} for a, s, e, t in highlights],
-        "shorts": [{"file": f, "source_start": round(s, 3), "source_end": round(e, 3), "title": t, "hook": h}
-                   for f, s, e, t, h in shorts_rows],
+        "shorts": shorts_manifest_rows(shorts_rows, [r.clip for r in out.shorts], inp.render.words),
         "removed": {
             "cuts": len(removed),
             "seconds": round(sum(r.end - r.start for r in removed), 3),

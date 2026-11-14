@@ -153,6 +153,7 @@ class JobQueue:
             finally:
                 set_poll_hook(None)
                 _detach_job_log(handler)  # close job.log first: Windows can't delete open files
+                self._record_cost(job_id)  # the cost meter keeps the job's usage after the job is deleted
                 with self._cv:
                     delete = job_id in self._delete_after
                     self._delete_after.discard(job_id)
@@ -163,6 +164,16 @@ class JobQueue:
                     self._cancel.pop(job_id, None)
                     self._idle_since = time.monotonic()
                     self._cv.notify_all()
+
+    def _record_cost(self, job_id: str) -> None:
+        """Hand a finished job to the cost meter (it never raises)."""
+        try:
+            job = self._store.get(job_id)
+            if job is not None and job.status in TERMINAL_STATUSES:
+                from costs import record_job
+                record_job(job)
+        except Exception:
+            logger.exception("cost meter: could not record job %s", job_id)
 
     def _heartbeat(self, job_id: str) -> None:
         job = self._store.get(job_id)

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import (
     BackgroundTasks,
+    Body,
     FastAPI,
     Form,
     HTTPException,
@@ -28,6 +29,7 @@ from fastapi.responses import (
 )
 from pydantic import BaseModel, Field
 
+import costs
 import publish
 from autopilot import emails as zoom_emails
 from autopilot import loop as autopilot_loop
@@ -86,6 +88,7 @@ async def lifespan(_app: FastAPI):
     imported = publish_run.import_published_jobs(_safe_get_job(job_id) for job_id in job_store.list_ids())
     if imported:
         logger.info("posted list: added %d video(s) published before it existed", imported)
+    threading.Thread(target=_backfill_costs, name="cost-backfill", daemon=True).start()
     autopilot_loop.start(autopilot_engine)  # it does nothing until switched on in the side panel
     _sweep_stop.clear()
     threading.Thread(target=_sweep_loop, name="retention", daemon=True).start()
@@ -140,7 +143,8 @@ class PublishShortRequest(BaseModel):
 class PublishRequest(BaseModel):
     """What to put on the channel. Leave `title` out to post only shorts. A
     title or description left out is the suggested one. The shorts go up first,
-    then the full video, whose description then lists the shorts."""
+    then the full video, whose description then lists the shorts (a public
+    upload on the release plan goes the other way round: full video first)."""
 
     # YouTube's own limits: 100 characters for titles, 5000 bytes for descriptions
     # (checked in publish/describe.py).
@@ -151,6 +155,9 @@ class PublishRequest(BaseModel):
     # are on the channel (never earlier, never after a failure).
     delete_after: bool = True
     shorts: list[PublishShortRequest] = Field(default_factory=list, max_length=20)
+    # A public video normally goes up private and goes public in its own slot of
+    # the release plan (publish/schedule.py); true = public at once instead.
+    right_away: bool = False
 
 
 # Serialises "is anything uploading?" with starting an upload, and deleting a
@@ -702,6 +709,127 @@ def set_never_post(body: NeverPostRequest) -> dict:
     return get_autopilot()
 
 
+# --- the side panel's "Channel check" (publish/channel_check.py) -------------
+_channel_check_lock = threading.Lock()  # one scan at a time, by hand or daily
+_channel_check_tried = 0.0  # when the daily run last tried (monotonic), so a failure waits a day too
+
+
+def _run_channel_check() -> dict:
+    from publish import channel_check
+
+    with _channel_check_lock:
+        return channel_check.check_channel()
+
+
+def _channel_check_error(exc: Exception) -> str:
+    """The scan only reads the channel, so its errors are not worded as upload
+    errors (youtube.friendly_error says "Upload failed")."""
+    text = str(exc)
+    if "quotaExceeded" in text or "uploadLimitExceeded" in text:
+        return "Couldn't read the channel: YouTube's daily limit is reached. Try again tomorrow."
+    if "invalid_grant" in text:
+        return "The YouTube connection expired or was revoked. Reconnect the channel and check again."
+    reason = " ".join(text.split())[:200] or type(exc).__name__
+    return f"Couldn't read the channel: {reason}. Try again later."
+
+
+@app.post("/channel/check")
+def run_channel_check() -> dict:
+    """Scan the channel now: never-post meetings that are public or scheduled,
+    and videos the app didn't upload."""
+    try:
+        return _run_channel_check()
+    except publish.YoutubeNotConnectedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("channel check failed")
+        raise HTTPException(status_code=502, detail=_channel_check_error(exc)) from exc
+
+
+@app.get("/channel/check")
+def get_channel_check() -> dict:
+    """The last saved scan, or {"checked_at": null}."""
+    from publish import channel_check
+
+    return channel_check.last_result()
+
+
+def _daily_channel_check() -> None:
+    """Called from the retention loop: scans in its own thread at most once a
+    day while YouTube is connected. Never raises and never holds the loop."""
+    global _channel_check_tried
+    try:
+        from publish import channel_check
+
+        if time.monotonic() - _channel_check_tried < 24 * 3600 and _channel_check_tried:
+            return
+        if not youtube.youtube_status().get("connected"):
+            return
+        last = parse_stamp(channel_check.last_result().get("checked_at"))
+        if last is not None and datetime.now(UTC) - last < timedelta(hours=24):
+            return
+        _channel_check_tried = time.monotonic()
+
+        def work() -> None:
+            try:
+                _run_channel_check()
+            except Exception:
+                logger.exception("daily channel check failed")
+
+        threading.Thread(target=work, name="channel-check", daemon=True).start()
+    except Exception:
+        logger.exception("daily channel check could not start")
+
+
+# --- the side panel's "Publishing" choices (publish/settings.py) -------------
+@app.get("/publishing/settings")
+def get_publishing_settings() -> dict:
+    """Every publishing choice as it is now, and the recommended values."""
+    from publish import settings as publishing_settings
+
+    return {"settings": publishing_settings.as_dict(),
+            "defaults": publishing_settings.as_dict(publishing_settings.DEFAULTS),
+            "warning": publishing_settings.capacity_warning()}
+
+
+_PUBLISHING_BODY = Body(...)
+
+
+@app.post("/publishing/settings")
+def set_publishing_settings(changes: dict = _PUBLISHING_BODY) -> dict:
+    """Saves the changed choices; a refused value answers 400 in plain words
+    and nothing is saved."""
+    from publish import settings as publishing_settings
+
+    try:
+        publishing_settings.save(changes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"settings": publishing_settings.as_dict(), "warning": publishing_settings.capacity_warning()}
+
+
+@app.get("/publishing/schedule")
+def get_release_plan() -> dict:
+    """The release plan: the videos booked to go public, soonest first, with
+    the time in UTC and in the team's time zone (publish/schedule.py)."""
+    from publish import schedule
+
+    return {"upcoming": [
+        {"key": b.key, "kind": b.kind, "source": b.source, "notify": b.notify,
+         "at": b.at.astimezone(UTC).isoformat(timespec="seconds"), "at_team": schedule.team_time_text(b.at),
+         "meeting": b.meeting or _meeting_name_for(b.source)}
+        for b in schedule.upcoming()
+    ]}
+
+
+def _meeting_name_for(source: str) -> str:
+    """The meeting's name for a booking, from the posted list or the ledger."""
+    for upload in get_ledger().for_source(source):
+        if upload.meeting:
+            return upload.meeting
+    return ""
+
+
 @app.post("/autopilot/on")
 def turn_autopilot_on() -> dict:
     """The side panel's switch: from now on new meetings of the ticked
@@ -768,7 +896,8 @@ def get_posted() -> dict:
             "source": u.source, "meeting": u.meeting, "meeting_date": u.meeting_date,
             "last_posted_at": u.posted_at, "full": None, "shorts": [],
         })
-        entry = {"title": u.title, "url": u.url, "posted_at": u.posted_at, "privacy": u.privacy, "by": u.by}
+        entry = {"title": u.title, "url": u.url, "posted_at": u.posted_at, "privacy": u.privacy, "by": u.by,
+                 "publish_at": u.publish_at}
         if u.kind == "full":
             group["full"] = entry
         else:
@@ -781,7 +910,9 @@ def get_posted() -> dict:
          "error": u.error}
         for u in get_ledger().needing_check()
     ]
-    return {"meetings": list(groups.values()), "needs_check": checks}
+    from publish import schedule
+
+    return {"meetings": list(groups.values()), "needs_check": checks, "timezone": schedule.team_zone_name()}
 
 
 @app.post("/posted/resolve")
@@ -879,6 +1010,49 @@ def _folder_bytes(folder: Path) -> int:
     return total
 
 
+# ------------------------------------------------------------------ the cost meter
+
+
+class CostSettingsRequest(BaseModel):
+    """Any of the three parts; the ones sent replace what is stored."""
+
+    prices: list[dict] | None = None
+    fixed_costs: list[dict] | None = None
+    settings: dict | None = None
+
+
+@app.get("/costs")
+def get_costs(days: int = 30) -> dict:
+    """What the app cost over the last `days` days (today is day 1)."""
+    try:
+        return costs.report(days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/costs/settings")
+def get_cost_settings() -> dict:
+    """The model prices, the fixed monthly costs and the YouTube limits."""
+    return costs.read_config()
+
+
+@app.post("/costs/settings")
+def set_cost_settings(body: CostSettingsRequest) -> dict:
+    try:
+        costs.write_config(prices=body.prices, fixed_costs=body.fixed_costs, settings=body.settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return costs.read_config()
+
+
+def _backfill_costs() -> None:
+    """At startup, in the background: every job still on disk and every upload so far."""
+    try:
+        costs.backfill(_safe_get_job(job_id) for job_id in job_store.list_ids())
+    except Exception:
+        logger.exception("cost meter: backfill failed")
+
+
 @app.get("/storage")
 def get_storage() -> dict:
     """Free disk space on the server, and what "Clear old jobs" would delete."""
@@ -929,6 +1103,7 @@ def _delete_jobs(jobs: list[JobRecord]) -> tuple[int, int]:
         for job in jobs:
             folder = settings.jobs_dir / job.job_id
             size = _folder_bytes(folder)
+            costs.record_job(job)  # the cost meter keeps the usage after the job is gone (never raises)
             delete_job_files(job_store, job.job_id)
             if not folder.exists():
                 deleted += 1
@@ -998,6 +1173,7 @@ def _sweep_loop() -> None:
             sweep_old_jobs()
         except Exception:  # the next round tries again
             logger.exception("retention sweep failed")
+        _daily_channel_check()  # starts its own thread, at most once a day
 
 
 @app.get("/jobs")
@@ -1313,6 +1489,7 @@ def publish_to_youtube(job_id: str, body: PublishRequest, background_tasks: Back
                 privacy=body.privacy,
                 shorts=[(s.index, s.title, s.description) for s in body.shorts],
                 delete_after=body.delete_after,
+                right_away=body.right_away,
             )
         except publish.PublishRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

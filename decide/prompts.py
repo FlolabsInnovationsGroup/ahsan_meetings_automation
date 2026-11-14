@@ -149,7 +149,7 @@ the core. Highlight-worthy means: {highlights_criteria}.
 
 Compare the candidates WITH EACH OTHER. Answer in plain text with exactly one line for EVERY \
 candidate id (even weak ones), nothing else:
-<id>|<score>|<code>|<a>|<b>|<y or n>|<title>|<why>
+<id>|<score>|<code>|<a>|<b>|<y or n>|<title>|<why>|<hook>|<stands_alone>|<short_start>
 - score 0-10, spread across the candidates: the best ~15% get 8-10, the weakest 1-3. Rank \
 highest what a viewer can learn from or would find new: clear explanations, new \
 architectures or features, insights, decisions with their reasons. A decision, opinion or \
@@ -166,9 +166,18 @@ explains or shows something — what a concept is, how something works, what a n
 design does and why, a lesson learned — so a viewer comes away knowing something new; a line \
 of setup inside the clip is fine. n for plain status ("I finished X, next I will do Y"), lists \
 of tasks, logistics, or a moment that only makes sense with the rest of the meeting
-- title: at most 60 characters, specific ("Moving the session store to Redis"), no "|"
+- title: at most 60 characters, specific ("Moving the session store to Redis"), no "|", \
+and no people's names (say what is explained, not who said it)
 - why: one sentence (at most 140 characters) on why it is worth watching, no "|"
-Example: 12|8|arch|402|409|n|Moving the session store to Redis|Cuts API latency from 800 to 120 ms."""
+- hook: the words a Short of this moment shows on screen in its first seconds: at most 6 words \
+and 40 characters, made only of words and numbers actually said in the clip, no clickbait, \
+no people's names, no "|"; "-" when the moment is not short-worthy
+- stands_alone: 0-10, how well the clip makes sense to someone who never saw the meeting \
+(10 = names what it is about and explains it fully; 0 = only makes sense with the rest)
+- short_start: the line number where a Short of this moment should start: on the claim or \
+the question itself, with at most one sentence of setup before it (the reel clip a-b keeps its \
+full setup; a Short is tighter); it must be between a and b; "-" when not short-worthy
+Example: 12|8|arch|402|409|y|Moving the session store to Redis|Cuts API latency from 800 to 120 ms.|Redis cut our latency|8|404"""
 
 CHAPTERS_TEMPLATE = """You are writing YouTube chapters for an edited meeting recording. You \
 get the kept transcript as lines "[n mm:ss] text" in order.

@@ -31,6 +31,7 @@ from core.logging import get_logger
 from core.models import JobRecord, JobStatus
 from ingest import zoom
 from ledger import files
+from ledger import uploads as ledger_uploads
 from ledger.uploads import get_ledger
 from publish import run as publish_run
 
@@ -88,6 +89,12 @@ class Hooks:
 
 def iso(stamp: datetime) -> str:
     return stamp.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def _long(minutes: float) -> str:
+    """92.4 -> '1 h 32 min', 45 -> '45 min'."""
+    whole = round(minutes)
+    return f"{whole // 60} h {whole % 60} min" if whole >= 60 else f"{whole} min"
 
 
 def parse(raw: str | None) -> datetime | None:
@@ -154,6 +161,11 @@ class Engine:
         self._background = run_in_background or _thread
         self._posting: set[str] = set()
         self._posting_lock = threading.Lock()
+        # meetings handed over to post and not finished: uuid -> (name, day). Another copy of
+        # the same meeting must see these before its own upload shows up in the ledger.
+        self._claims: dict[str, tuple[str, str | None]] = {}
+        # the hold check and the claim on a meeting name happen together
+        self._hold_lock = threading.Lock()
         # one step at a time (the loop's minute and a webhook wake-up can meet)
         self._step_lock = threading.Lock()
 
@@ -284,6 +296,11 @@ class Engine:
             if job is None:
                 self._finish(uuid, None, None)
                 return
+            with self._hold_lock:
+                if self._hold_for_person(uuid, job):
+                    return
+                with self._posting_lock:
+                    self._claims[uuid] = ((job.title or "").strip().casefold(), job.meeting_date)
             with publish_run.PUBLISH_LOCK:
                 if job.youtube_busy:
                     return  # a person is publishing it right now; look again next step
@@ -301,6 +318,7 @@ class Engine:
             if not handed_over:
                 with self._posting_lock:
                     self._posting.discard(uuid)
+                    self._claims.pop(uuid, None)
 
     def _never_post_this(self, uuid: str, job: JobRecord | None) -> bool:
         """The last look before anything goes up, also at what the job knows
@@ -319,6 +337,60 @@ class Engine:
             m.updated_at = iso(self.clock())
             return True
 
+    def _hold_for_person(self, uuid: str, job: JobRecord) -> bool:
+        """Odd meetings wait for a person instead of going up: a final video
+        far longer or shorter than usual, or one whose title is already on the
+        channel. A person's "Post it after all" skips this once. Only the
+        autopilot calls it, so publishing by hand is never held."""
+        from publish import describe
+        from publish import settings as publishing
+
+        with self.store.editing() as state:
+            m = state.meetings.get(uuid)
+            if m is None:
+                return False
+            if m.hold_cleared:
+                # stays set until _finish: a round that goes only partly (quota, one failed
+                # upload) comes back here and must not hold what a person already let through
+                return False
+            why = self._hold_reason(uuid, job, publishing.current(), describe)
+            if why is None:
+                return False
+            logger.warning("autopilot: holding %r (%s): %s", m.topic, uuid, why)
+            m.state, m.next_try_at = "needs_attention", None
+            m.error = f'Held for a person: {why}. Use "Post it after all" if it should go up.'
+            m.updated_at = iso(self.clock())
+            return True
+
+    def _hold_reason(self, uuid: str, job: JobRecord, cfg, describe) -> str | None:
+        info = job.artifacts.get("final.mp4")
+        seconds = info.duration_s if info is not None else None
+        if seconds:  # unknown length: this rule is skipped, never guessed
+            minutes = seconds / 60
+            if cfg.hold_over_minutes and minutes > cfg.hold_over_minutes:
+                return f"the final video is {_long(minutes)} long (over {cfg.hold_over_minutes:g} min)"
+            if cfg.hold_under_minutes and minutes < cfg.hold_under_minutes:
+                return f"the final video is {_long(minutes)} long (under {cfg.hold_under_minutes:g} min)"
+        # every title this meeting's full video could get, so the day-adding dodge in
+        # full_title can't hide a repeat
+        titles = describe.title_variants(job) | {describe.full_title(job).lower()}
+        name = (job.title or "").strip().casefold()
+        mine = ledger_uploads.source_of(job)  # this meeting's own earlier uploads are not duplicates
+        with self._posting_lock:  # another copy of this meeting already handed over to post
+            if name and any(other != uuid and claim == (name, job.meeting_date)
+                            for other, claim in self._claims.items()):
+                return "a full video with the same title is already on the channel"
+        ledger = get_ledger()  # on the channel, or cut off / unsure and possibly there
+        for up in ledger.posted() + ledger.needing_check():
+            if up.kind != "full" or up.source == mine:
+                continue
+            # the same meeting name and day also counts: the topic-first title never repeats
+            # itself, so a title match alone would miss a meeting recorded twice
+            same_meeting = bool(name) and up.meeting.strip().casefold() == name and up.meeting_date == job.meeting_date
+            if up.title.lower() in titles or same_meeting:
+                return "a full video with the same title is already on the channel"
+        return publish_run.suggested_words_listed(job)
+
     def _post_and_finish(self, uuid: str, job: JobRecord, plan) -> None:
         try:
             stopped = publish_run.publish_job(job, self.hooks.update_job, plan)
@@ -328,6 +400,7 @@ class Engine:
         finally:
             with self._posting_lock:
                 self._posting.discard(uuid)
+                self._claims.pop(uuid, None)
 
     def _finish(self, uuid: str, job: JobRecord | None, stopped: str | None) -> None:
         """After a posting round: posted, waiting for a person, or try again."""
@@ -344,18 +417,19 @@ class Engine:
             m.updated_at = iso(now)
             if verdict == "done":
                 m.state, m.error, m.posted_at, m.next_try_at = "posted", None, iso(now), None
+                m.hold_cleared = False
             elif verdict == "check":
-                m.state = "needs_attention"
+                m.state, m.hold_cleared = "needs_attention", False
                 m.error = "A video's upload was cut off and needs a check on YouTube (see the posted list)."
             elif verdict == "missing":
-                m.state = "needs_attention"
+                m.state, m.hold_cleared = "needs_attention", False
                 m.error = "Some videos can't be posted: their files are no longer on the server."
             else:
                 m.post_attempts += 1
                 rounds, wait = (ACCOUNT_ROUNDS, ACCOUNT_RETRY) if stopped else (POST_ROUNDS, POST_RETRY)
                 m.error = stopped or (_job_upload_error(job) if job else None) or "Some videos did not go up."
                 if m.post_attempts >= rounds:
-                    m.state = "needs_attention"
+                    m.state, m.hold_cleared = "needs_attention", False
                 else:
                     m.next_try_at = iso(now + wait)
 
@@ -626,8 +700,12 @@ class Engine:
             if m.state in ("processing", "posted") or uuid in self._posting:
                 raise ValueError(f"This meeting is {m.state.replace('_', ' ')}; there is nothing to retry.")
             job = self.hooks.get_job(m.job_id) if m.job_id else None
+            was_held = (m.error or "").startswith("Held for a person")
+            m.hold_cleared = False  # a fresh render has not been seen by a person yet
             if job is not None and job.status == JobStatus.DONE and not job.files_deleted:
                 m.state, m.post_attempts = "posting", 0
+                # a person said go on a held video: its hold rules are skipped until it is posted
+                m.hold_cleared = was_held
             elif m.recording_end is None or m.state == "skipped" or m.transcript is None:
                 m.state = "waiting_recording"  # looked at again in the next check, which is due now
                 if uuid not in state.nudges:

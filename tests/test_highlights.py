@@ -1,3 +1,5 @@
+import pytest
+
 from core.models import Moment, SegmentJudgment
 from edl.highlights import (
     calibrate_by_rank,
@@ -6,6 +8,15 @@ from edl.highlights import (
     select_highlights,
     select_shorts,
 )
+
+
+@pytest.fixture(autouse=True)
+def _many_shorts_per_meeting():
+    """These tests are about picking and cutting Shorts, not the per-meeting
+    cap (tests/test_shorts_selection.py), so the cap is out of the way."""
+    from publish import settings as publish_settings
+
+    publish_settings.save({"shorts_per_meeting": 10})
 
 
 def _j(i, score=0, cat="none", start=None, length=4.0, gap=1.0, decision="keep", removal="none", text=None):
