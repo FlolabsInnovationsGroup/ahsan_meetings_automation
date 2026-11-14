@@ -25,3 +25,7 @@ secrets
 brag-output
 # research notes and data: not needed by the app
 research
+# clips subsystem data and recordings: never part of the production image
+storage-clips
+data-clips
+clips-inbox

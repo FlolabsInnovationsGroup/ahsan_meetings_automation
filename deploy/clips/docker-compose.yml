@@ -1,0 +1,59 @@
+# Clips stack. Its own project, image, volume, network and port.
+# Run on the clips server, from the repo root:
+#   docker compose -f deploy/clips/docker-compose.yml up -d --build
+name: clips
+
+x-clips: &clips
+  build:
+    context: ../..
+    dockerfile: deploy/clips/Dockerfile
+  image: clips-app:latest
+  restart: unless-stopped
+  env_file: ../../.env.clips
+  environment:
+    STORAGE_DIR: /data-clips
+    CLIPS_STORAGE_DIR: /data-clips
+  volumes:
+    - clips-data:/data-clips
+    # The watched folder: recordings and files we may use are copied into ./clips-inbox on the server
+    # (repo root), and the folder source is added as /clips-inbox. Read only.
+    - ../../clips-inbox:/clips-inbox:ro
+  networks:
+    - clips-net
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  web:
+    <<: *clips
+    command: ["uvicorn", "clips.api:app", "--host", "0.0.0.0", "--port", "8091", "--workers", "1"]
+    ports:
+      # Local only. Put a reverse proxy or an SSH tunnel in front.
+      - "127.0.0.1:8091:8091"
+    mem_limit: 512m
+
+  loop:
+    <<: *clips
+    command: ["python", "-m", "clips", "loop"]
+    mem_limit: 1536m
+    # The loop serves no HTTP. It is healthy while it has ticked within three loop turns (plus a
+    # margin), so a stuck yt-dlp or ffmpeg shows as unhealthy. tick writes /data-clips/last_tick.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,sys,time; sys.exit(0 if time.time()-os.path.getmtime('/data-clips/last_tick') < 3*60*int(os.environ.get('CLIPS_LOOP_MINUTES','15'))+300 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10m
+
+volumes:
+  clips-data:
+
+networks:
+  clips-net:

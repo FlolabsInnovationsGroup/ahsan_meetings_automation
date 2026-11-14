@@ -42,3 +42,10 @@ auto-update.log
 # Local-only credentials (SSH key, full .env copy). Never commit.
 secrets/
 *.pem
+
+# Clips subsystem data (its own process, own folder). Never commit.
+storage-clips/
+data-clips/
+
+# Recordings dropped in for the clips subsystem. Never commit.
+clips-inbox/

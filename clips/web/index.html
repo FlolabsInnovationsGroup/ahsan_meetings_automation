@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clips</title>
+<style>
+:root {
+  --bg: #f6f6f3; --panel: #ffffff; --ink: #1d1f1c; --muted: #636860; --line: #dcdcd4;
+  --accent: #1f6f5c; --accent-ink: #ffffff; --bad: #b3261e; --warn: #8a5a00; --ok: #1f6f5c;
+  --stop: #b3261e; --frame: #101210;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131512; --panel: #1c1f1b; --ink: #e8eae4; --muted: #9aa094; --line: #30342d;
+    --accent: #4fb89d; --accent-ink: #0c1411; --bad: #ff8a80; --warn: #e0b45a; --ok: #4fb89d;
+    --stop: #d9534a; --frame: #000;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, main { max-width: 1000px; margin: 0 auto; padding: 0 16px; }
+h1 { font-size: 1.25rem; margin: 16px 0 8px; }
+h2 { font-size: 1.05rem; margin: 28px 0 10px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 14px; cursor: pointer; min-height: 40px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button.danger { background: var(--stop); color: #fff; border-color: var(--stop); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 3px; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.tile .k { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.tile .v { font-weight: 600; word-break: break-word; }
+.tile.bad { border-color: var(--bad); }
+.tile.bad .v { color: var(--bad); }
+.big { width: 100%; min-height: 56px; font-size: 1.05rem; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; grid-template-columns: 250px 1fr; gap: 16px; }
+@media (max-width: 680px) { .card { grid-template-columns: 1fr; } }
+.phone { width: 250px; max-width: 100%; aspect-ratio: 9/16; background: var(--frame); border-radius: 22px; padding: 8px; margin: 0 auto; }
+.phone.wide { aspect-ratio: 16/9; width: 100%; border-radius: 12px; }
+.phone video { width: 100%; height: 100%; border-radius: 16px; background: #000; object-fit: contain; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row > * { flex: 0 0 auto; }
+.muted { color: var(--muted); font-size: .9rem; }
+.problem { color: var(--bad); font-size: .9rem; margin: 4px 0; }
+.pill { display: inline-block; font-size: .78rem; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; margin-right: 4px; }
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.scroll { overflow-x: auto; }
+.nav { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
+.msg { margin: 10px 0; padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+.msg.err { border-color: var(--bad); color: var(--bad); }
+.hint { background: var(--bg); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; font-size: .88rem; color: var(--muted); margin-top: 8px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+@media (max-width: 680px) { .grid2 { grid-template-columns: 1fr; } }
+#login { max-width: 360px; margin: 20vh auto; padding: 0 16px; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Clips</h1>
+  <label for="tok">Access key</label>
+  <input id="tok" type="password" autocomplete="current-password">
+  <p><button class="primary" id="tokgo">Sign in</button></p>
+  <div id="tokmsg" class="problem"></div>
+</div>
+
+<header id="top" hidden><h1>Clips</h1></header>
+<main id="app" hidden>
+  <div id="msg"></div>
+
+  <section aria-label="Status">
+    <div class="strip" id="strip"></div>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1 1 220px"><button class="big" id="killbtn"></button></div>
+      <button id="breakbtn" hidden>Reset breaker</button>
+      <button id="tickbtn">Run a pass now</button>
+      <a id="connect" href="/youtube/connect">Connect the clips channel</a>
+    </div>
+  </section>
+
+  <h2>Review queue</h2>
+  <div class="nav">
+    <button id="prev" aria-label="Previous clip">Previous</button>
+    <span id="pos" class="muted"></span>
+    <button id="next" aria-label="Next clip">Next</button>
+  </div>
+  <div id="queue"></div>
+  <p class="muted">Keys: A approve, R reject, left and right arrows to move.</p>
+
+  <h2>Schedule</h2>
+  <div class="scroll"><table id="sched"></table></div>
+
+  <h2>Sources</h2>
+  <div class="scroll"><table id="sources"></table></div>
+
+  <h2>Add a source</h2>
+  <form id="addform" class="card" style="grid-template-columns:1fr">
+    <div class="grid2">
+      <div><label for="f_name">Name</label><input id="f_name" required></div>
+      <div><label for="f_platform">Platform</label>
+        <select id="f_platform"><option value="youtube">YouTube</option><option value="twitch">Twitch</option><option value="folder">Folder</option></select></div>
+      <div><label for="f_url">Channel URL</label><input id="f_url" placeholder="https://..."></div>
+      <div><label for="f_folder">Folder (folder sources)</label><input id="f_folder"></div>
+      <div><label for="f_credit">Credit text (empty uses the name)</label><input id="f_credit"></div>
+      <div><label for="f_rights">Why we may clip it (required)</label>
+        <select id="f_rights" required></select></div>
+    </div>
+    <div class="hint" id="f_hint"></div>
+    <div class="grid2" id="f_evidence"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" type="submit">Add source</button>
+      <label style="margin:0"><input type="checkbox" id="f_enable" style="width:auto"> Enable it now</label>
+    </div>
+  </form>
+
+  <h2>Recent events</h2>
+  <div class="scroll"><table id="events"></table></div>
+</main>
+
+<script>
+"use strict";
+const BASES = {
+  none: { label: "No basis (listed only, cannot be clipped)", need: [], text: "Nothing on file. The source can be listed but never clipped or posted." },
+  own: { label: "Our own footage", need: ["evidence_note"], text: "Footage we recorded. Say where the files are kept." },
+  written_permission: { label: "Written permission", need: ["evidence_note", "evidence_date"], text: "The creator said yes in writing. Say where the email or message is kept and when it was received." },
+  public_permission: { label: "Public permission", need: ["evidence_url", "evidence_note", "evidence_date"], text: "The creator publicly lets anyone clip. Link the page and quote the sentence that grants it." },
+  campaign: { label: "Clipping campaign", need: ["evidence_url", "evidence_note", "evidence_date"], text: "A campaign supplies or licenses the footage. Link its terms." },
+  creative_commons: { label: "Creative Commons", need: ["evidence_url", "evidence_date"], text: "CC BY, checked on every single video. Link the license evidence." },
+  official: { label: "Official material", need: ["evidence_url", "evidence_note", "evidence_date"], text: "Publisher material, used inside the publisher's own policy. Link the policy." }
+};
+const FIELDS = {
+  evidence_url: ["Evidence link", "text", "https://..."],
+  evidence_note: ["Evidence note (the sentence, or where it is kept)", "text", ""],
+  evidence_date: ["Date the evidence was read or received", "date", ""]
+};
+const $ = (id) => document.getElementById(id);
+const state = { clips: [], i: 0, status: null, sources: [] };
+
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, "");
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return e;
+}
+function note(text, bad) {
+  const m = $("msg"); m.replaceChildren(h("div", { class: "msg" + (bad ? " err" : "") }, text));
+  if (!bad) setTimeout(() => { if (m.textContent === text) m.replaceChildren(); }, 6000);
+}
+function when(iso) { return iso ? new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-"; }
+function problemText(d) {
+  if (!d) return "Something went wrong.";
+  if (typeof d === "string") return d;
+  if (d.detail) return problemText(d.detail);
+  const parts = [d.error || ""].concat(d.reasons || [], d.problems || []).filter(Boolean);
+  return parts.join(" ") || JSON.stringify(d);
+}
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+  if (r.status === 401) { showLogin(); throw new Error("sign in needed"); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(problemText(data)), { data });
+  return data;
+}
+const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body || {}) });
+
+function showLogin() { $("login").hidden = false; $("app").hidden = true; $("top").hidden = true; }
+$("tokgo").onclick = async () => {
+  try { await post("/api/login", { token: $("tok").value }); $("login").hidden = true; start(); }
+  catch (e) { $("tokmsg").textContent = "That key was not accepted."; }
+};
+$("tok").addEventListener("keydown", (e) => { if (e.key === "Enter") $("tokgo").click(); });
+
+/* ---------- status strip ---------- */
+function tile(k, v, bad) { return h("div", { class: "tile" + (bad ? " bad" : "") }, h("div", { class: "k" }, k), h("div", { class: "v" }, v)); }
+function renderStatus() {
+  const s = state.status || {};
+  const kill = !!s.kill_switch;
+  $("strip").replaceChildren(
+    ...(s.isolated === false ? [tile("Data folder", "Not the clips folder: sign-in and posting are off", true)] : []),
+    tile("Channel", s.channel ? s.channel.title || s.channel.id : "Not connected", !s.channel),
+    tile("Posting", kill ? "Stopped" : "Running", kill),
+    tile("Breaker", s.breaker_open ? "Open (uploads paused)" : "Closed", s.breaker_open),
+    tile("Posts allowed today", s.allowed_today ?? "-"),
+    tile("Next slots", (s.next_slots || []).map(when).join(", ") || "-"),
+    tile("Waiting for review", state.clips.length)
+  );
+  const kb = $("killbtn");
+  kb.textContent = kill ? "Resume posting" : "Stop all posting";
+  kb.className = "big " + (kill ? "primary" : "danger");
+  $("breakbtn").hidden = !s.breaker_open;
+  $("tickbtn").disabled = !!s.tick_running;
+  $("connect").textContent = s.channel ? "Reconnect the clips channel" : "Connect the clips channel";
+}
+$("killbtn").onclick = async () => {
+  try {
+    if (state.status && state.status.kill_switch) await post("/api/resume");
+    else {
+      const r = await post("/api/kill", { reason: "stopped from the page" });
+      const pb = r && r.pull_back;
+      if (pb && (pb.failed.length || pb.skipped)) {
+        note("Stopped, but " + (pb.failed.length ? pb.failed.length + " uploaded video(s) could not be set back to private" : "uploaded videos could not be checked")
+          + ". Set them to private in YouTube Studio now. " + (pb.skipped || ""), true);
+      } else if (pb && pb.pulled_back.length) note(pb.pulled_back.length + " uploaded video(s) set back to private.");
+    }
+    await refresh();
+  } catch (e) { note(e.message, true); }
+};
+$("breakbtn").onclick = async () => { try { await post("/api/breaker/reset"); await refresh(); } catch (e) { note(e.message, true); } };
+$("tickbtn").onclick = async () => { try { await post("/api/tick"); note("Started a pass."); setTimeout(refresh, 1500); } catch (e) { note(e.message, true); } };
+
+/* ---------- review queue ---------- */
+function renderQueue() {
+  const q = $("queue");
+  const n = state.clips.length;
+  if (!n) { q.replaceChildren(h("div", { class: "msg" }, "Nothing to review right now.")); $("pos").textContent = ""; return; }
+  state.i = Math.max(0, Math.min(state.i, n - 1));
+  $("pos").textContent = (state.i + 1) + " of " + n;
+  const c = state.clips[state.i];
+  const t = c.text || { title: "", description: "", hashtags: [] };
+  const title = h("input", { id: "e_title", value: t.title, maxlength: "100" });
+  const desc = h("textarea", { id: "e_desc", rows: "6" }, t.description);
+  const tags = h("input", { id: "e_tags", value: (t.hashtags || []).join(" ") });
+  const bad = h("div", { id: "e_bad" }, (c.problems || []).map((p) => h("div", { class: "problem" }, p)));
+  const frame = h("div", { class: "phone" + (c.kind === "long" ? " wide" : "") },
+    c.media_url ? h("video", { src: c.media_url, poster: c.thumb_url || null, controls: true, playsinline: true, preload: "metadata" }) : null);
+  const src = state.sources.find((s) => s.id === c.source_id);
+  const rights = h("div", {},
+    h("span", { class: "pill " + (src && src.can_clip ? "ok" : "bad") }, (BASES[c.rights] || { label: c.rights }).label),
+    " ", c.source_name, " ",
+    c.evidence_url ? h("a", { href: c.evidence_url, target: "_blank", rel: "noopener noreferrer" }, "evidence") : null);
+  const save = h("button", { onclick: async () => {
+    try { await saveEdits(c); renderQueue(); note("Saved."); }
+    catch (e) { $("e_bad").replaceChildren(h("div", { class: "problem" }, e.message)); }
+  } }, "Save changes");
+  q.replaceChildren(h("div", { class: "card" }, frame, h("div", {},
+    h("div", { class: "muted" }, c.kind + " - " + Math.round(c.duration_s || 0) + " s - " + (c.moment.summary || "")),
+    h("label", { for: "e_title" }, "Title"), title,
+    h("label", { for: "e_desc" }, "Description"), desc,
+    h("label", { for: "e_tags" }, "Hashtags"), tags,
+    h("label", {}, "Source and rights"), rights,
+    h("label", {}, "Credit line"), h("div", {}, c.credit || "-"),
+    bad,
+    h("div", { class: "row", style: "margin-top:12px" },
+      h("button", { class: "primary", onclick: () => decide("approve") }, "Approve (A)"),
+      h("button", { onclick: () => decide("reject") }, "Reject (R)"), save))));
+}
+/* Edits in the fields are saved before approving, so the approved clip carries what the reviewer sees. */
+function editedFields(c) {
+  const t = c.text || { title: "", description: "", hashtags: [] };
+  if (!$("e_title")) return null;
+  const now = { title: $("e_title").value, description: $("e_desc").value,
+    hashtags: $("e_tags").value.split(/[\s,]+/).filter(Boolean) };
+  const same = now.title === t.title && now.description === t.description &&
+    now.hashtags.join(" ") === (t.hashtags || []).join(" ");
+  return same ? null : now;
+}
+async function saveEdits(c) {
+  const now = editedFields(c); if (!now) return;
+  const upd = await api("/api/clips/" + c.id, { method: "PATCH", body: JSON.stringify(now) });
+  state.clips[state.i] = upd; Object.assign(c, upd);
+}
+async function decide(what) {
+  const c = state.clips[state.i]; if (!c) return;
+  try {
+    if (what === "approve") {
+      try { await saveEdits(c); }
+      catch (e) { $("e_bad").replaceChildren(h("div", { class: "problem" }, "Not approved: " + e.message)); return; }
+    }
+    let body = {};
+    if (what === "reject") { const r = window.prompt("Why reject? (optional)", ""); if (r === null) return; body = { reason: r }; }
+    await post("/api/clips/" + c.id + "/" + what, body);
+    state.clips.splice(state.i, 1);
+    note(what === "approve" ? "Approved." : "Rejected.");
+    renderQueue(); renderStatus(); loadSchedule();
+  } catch (e) { note(e.message, true); }
+}
+$("prev").onclick = () => { state.i--; renderQueue(); };
+$("next").onclick = () => { state.i++; renderQueue(); };
+document.addEventListener("keydown", (e) => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "a") decide("approve"); else if (k === "r") decide("reject");
+  else if (k === "arrowleft") { state.i--; renderQueue(); } else if (k === "arrowright") { state.i++; renderQueue(); }
+});
+
+/* ---------- schedule ---------- */
+async function loadSchedule() {
+  const rows = await api("/api/clips?status=approved,scheduled,uploading,uploaded,held,failed");
+  rows.sort((a, b) => String(a.publish_at || "~").localeCompare(String(b.publish_at || "~")));
+  $("sched").replaceChildren(
+    h("tr", {}, ["When", "Title", "Source", "State", ""].map((x) => h("th", {}, x))),
+    ...(rows.length ? rows.map((c) => h("tr", {},
+      h("td", {}, when(c.publish_at)), h("td", {}, c.text ? c.text.title : "-"), h("td", {}, c.source_name),
+      h("td", {}, c.status + (c.error ? " - " + c.error : "")),
+      h("td", {}, h("div", { class: "row" },
+        c.status === "held" ? h("button", { onclick: () => rowAct(c, "release") }, "Release") : null,
+        ["approved", "scheduled", "held"].includes(c.status) ? h("button", { onclick: () => rowAct(c, "reject") }, "Reject") : null))))
+      : [h("tr", {}, h("td", { colspan: "5", class: "muted" }, "Nothing scheduled."))]));
+}
+
+async function rowAct(c, what) {
+  try {
+    let body = {};
+    if (what === "reject") { const r = window.prompt("Why reject? (optional)", ""); if (r === null) return; body = { reason: r }; }
+    await post("/api/clips/" + c.id + "/" + what, body);
+    note(what === "release" ? "Released: it will get a new slot." : "Rejected.");
+    await refresh();
+  } catch (e) { note(e.message, true); }
+}
+
+/* ---------- sources ---------- */
+function renderSources() {
+  const head = h("tr", {}, ["Name", "Platform", "Rights", "State", ""].map((x) => h("th", {}, x)));
+  const rows = state.sources.map((s) => h("tr", {},
+    h("td", {}, s.name, h("div", { class: "muted" }, s.url || s.folder || "")),
+    h("td", {}, s.platform),
+    h("td", {}, (BASES[s.rights] || { label: s.rights }).label,
+      s.evidence_url ? h("div", {}, h("a", { href: s.evidence_url, target: "_blank", rel: "noopener noreferrer" }, "evidence")) : null),
+    h("td", {}, s.can_clip
+      ? h("span", { class: "pill " + (s.enabled ? "ok" : "") }, s.enabled ? "enabled" : "disabled")
+      : h("span", { class: "pill bad" }, "cannot be clipped"),
+      (s.reasons || []).map((r) => h("div", { class: "muted" }, r)),
+      s.download_note ? h("div", { class: "muted" }, s.download_note) : null),
+    h("td", {}, h("div", { class: "row" },
+      s.enabled ? h("button", { onclick: () => srcAct(s.id, "disable") }, "Disable")
+        : h("button", { disabled: !s.can_clip, onclick: () => srcAct(s.id, "enable") }, "Enable"),
+      h("button", { onclick: () => srcDel(s) }, "Remove")))));
+  $("sources").replaceChildren(head, ...(rows.length ? rows : [h("tr", {}, h("td", { colspan: "5", class: "muted" }, "No sources yet."))]));
+}
+async function srcAct(id, what) { try { await post("/api/sources/" + id + "/" + what); await refresh(); } catch (e) { note(e.message, true); } }
+async function srcDel(s) {
+  if (!window.confirm("Remove " + s.name + "?")) return;
+  try { await api("/api/sources/" + s.id, { method: "DELETE" }); await refresh(); } catch (e) { note(e.message, true); }
+}
+function renderForm() {
+  const sel = $("f_rights"); const b = sel.value || "none";
+  if (!sel.options.length) for (const [k, v] of Object.entries(BASES)) sel.append(h("option", { value: k }, v.label));
+  const info = BASES[sel.value || b];
+  $("f_hint").textContent = info.text + (info.need.length ? " Needs: " + info.need.map((n) => FIELDS[n][0]).join("; ") + "." : "");
+  $("f_evidence").replaceChildren(...info.need.map((n) => h("div", {},
+    h("label", { for: "f_" + n }, FIELDS[n][0]), h("input", { id: "f_" + n, type: FIELDS[n][1], placeholder: FIELDS[n][2], required: true }))));
+}
+$("f_rights").addEventListener("change", renderForm);
+$("addform").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const v = (id) => ($(id) ? $(id).value.trim() : "");
+  const body = { name: v("f_name"), platform: v("f_platform"), url: v("f_url"), folder: v("f_folder"), credit: v("f_credit"),
+    rights: v("f_rights"), evidence_url: v("f_evidence_url"), evidence_note: v("f_evidence_note"), evidence_date: v("f_evidence_date"),
+    enabled: $("f_enable").checked && v("f_rights") !== "none" };
+  try { await post("/api/sources", body); $("addform").reset(); renderForm(); note("Source added."); await refresh(); }
+  catch (e) { note(e.message, true); }
+});
+
+/* ---------- events ---------- */
+async function loadEvents() {
+  const ev = await api("/api/events?limit=30");
+  $("events").replaceChildren(...ev.map((e) => h("tr", {}, h("td", {}, when(e.at)), h("td", {}, e.kind), h("td", {}, e.message))));
+}
+
+/* ---------- loading ---------- */
+async function refresh() {
+  const [status, clips, sources] = await Promise.all([api("/api/status"), api("/api/clips?status=draft"), api("/api/sources")]);
+  state.status = status; state.sources = sources;
+  const keep = state.clips[state.i] && state.clips[state.i].id;
+  state.clips = clips;
+  const at = clips.findIndex((c) => c.id === keep); state.i = at >= 0 ? at : Math.min(state.i, Math.max(0, clips.length - 1));
+  renderStatus(); renderQueue(); renderSources();
+  await Promise.all([loadSchedule(), loadEvents()]);
+}
+function start() {
+  $("login").hidden = true; $("app").hidden = false; $("top").hidden = false;
+  renderForm();
+  refresh().catch((e) => { if (e.message !== "sign in needed") note(e.message, true); });
+}
+start();
+setInterval(() => { if (!$("app").hidden && document.visibilityState === "visible" && !document.activeElement.matches("input,textarea,select")) refresh().catch(() => {}); }, 60000);
+</script>
+</body>
+</html>
