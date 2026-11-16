@@ -386,8 +386,27 @@ def test_a_finished_job_is_posted_on_the_release_plan_full_video_first(world):
     times = [v["publish_at"] for v in world.channel.videos.values()]
     assert len(set(times)) == 4 and times[0] == min(times)
     job = api_main.job_store.get(job_id)
-    assert job.files_deleted  # everything is up, so the files went
+    # everything is up, but the files wait for the side panel's retention hours
+    assert not job.files_deleted
+    assert (get_settings().jobs_dir / job_id).is_dir()
     assert get_ledger().meeting_state("zoom:m1") == "posted"
+
+
+
+def test_posted_files_wait_for_the_side_panels_retention_hours(world):
+    from ledger import prefs
+
+    prefs.set_retention_hours(24)
+    job_id = _process(world)
+    world.step(minutes=1)
+    assert world.meeting("m1").state == "posted"
+    folder = get_settings().jobs_dir / job_id
+    now = datetime.now(UTC)
+    assert api_main.sweep_old_jobs(now + timedelta(hours=23)) == 0
+    assert folder.is_dir() and not api_main.job_store.get(job_id).files_deleted
+    assert api_main.sweep_old_jobs(now + timedelta(hours=25)) == 1
+    assert not folder.exists()
+    assert get_ledger().meeting_state("zoom:m1") == "posted"  # never posted twice afterwards
 
 
 def test_nothing_is_posted_twice_whatever_happens_next(world):
@@ -413,7 +432,7 @@ def test_a_crash_mid_posting_resumes_without_a_second_video(world):
     sessions = {v["session"] for v in world.channel.videos.values()}
     assert len(world.channel.videos) == len(sessions) == 4
     assert world.channel.calls.count("status") == 1
-    assert api_main.job_store.get(job_id).files_deleted
+    assert not api_main.job_store.get(job_id).files_deleted  # kept until the retention hours are up
 
 
 def test_a_failed_job_is_tried_again_three_times_then_waits_for_a_person(world):

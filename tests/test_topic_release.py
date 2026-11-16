@@ -375,7 +375,7 @@ def test_suggested_words_ignore_cuts_for_an_archive_team(monkeypatch):
 def test_posting_verdict_waits_for_the_cut(channel):
     job = _cut_job(with_shorts=False)
     assert publish_run.posting_verdict(job) == "left"
-    _run(job)
+    _run(job, delete_after=True)
     after = _reread(job.job_id)
     assert publish_run.posting_verdict(after) == "done" and publish_run.everything_published(after) is True
     assert after.files_deleted is True  # delete_after: everything, the cut included, is on the channel

@@ -456,7 +456,7 @@ def test_publish_uploads_the_full_video_then_removes_the_files(monkeypatch, clie
     job = _finished_job(with_shorts=False)
     fake = FakeYoutube(monkeypatch)
     res = client.post(f"/jobs/{job.job_id}/publish",
-                      json={"title": "Weekly sync", "description": "notes", "privacy": "unlisted"})
+                      json={"title": "Weekly sync", "description": "notes", "privacy": "unlisted", "delete_after": True})
     assert res.status_code == 200
     # the hidden tag finds the video on the channel if its upload link is ever lost
     marker = uploads.marker_for(f"job:{job.job_id}|full")
@@ -578,14 +578,26 @@ def test_the_files_are_removed_only_when_everything_is_published(monkeypatch, cl
     job = _finished_job()
     FakeYoutube(monkeypatch)
     # the full video and one of three shorts: the rest still needs the files
-    client.post(f"/jobs/{job.job_id}/publish", json={"title": "t", "shorts": [{"index": 1}]})
+    client.post(f"/jobs/{job.job_id}/publish", json={"title": "t", "shorts": [{"index": 1}], "delete_after": True})
     assert _reread(job.job_id).files_deleted is False
     assert (get_settings().jobs_dir / job.job_id / "shorts" / "short_02.mp4").exists()
     # the others: now everything is on the channel
-    client.post(f"/jobs/{job.job_id}/publish", json={"shorts": [{"index": 2}, {"index": 3}]})
+    client.post(f"/jobs/{job.job_id}/publish", json={"shorts": [{"index": 2}, {"index": 3}], "delete_after": True})
     reread = _reread(job.job_id)
     assert reread.files_deleted is True
     assert [p.name for p in (get_settings().jobs_dir / job.job_id).iterdir()] == ["job.json"]
+
+
+
+def test_by_default_the_files_stay_after_publishing(monkeypatch, client):
+    _connect_fake_channel()
+    job = _finished_job()
+    FakeYoutube(monkeypatch)
+    client.post(f"/jobs/{job.job_id}/publish",
+                json={"title": "t", "shorts": [{"index": 1}, {"index": 2}, {"index": 3}]})
+    reread = _reread(job.job_id)
+    assert reread.youtube_status == "published" and reread.files_deleted is False
+    assert (get_settings().jobs_dir / job.job_id / "shorts" / "short_01.mp4").exists()
 
 
 def test_after_the_files_are_removed_the_page_still_has_every_link(monkeypatch, client):
@@ -593,7 +605,7 @@ def test_after_the_files_are_removed_the_page_still_has_every_link(monkeypatch, 
     job = _finished_job()
     FakeYoutube(monkeypatch)
     client.post(f"/jobs/{job.job_id}/publish",
-                json={"title": "t", "shorts": [{"index": 1}, {"index": 2}, {"index": 3}]})
+                json={"title": "t", "shorts": [{"index": 1}, {"index": 2}, {"index": 3}], "delete_after": True})
     assert _reread(job.job_id).files_deleted is True
     options = client.get(f"/jobs/{job.job_id}/publish").json()
     assert options["files_deleted"] is True

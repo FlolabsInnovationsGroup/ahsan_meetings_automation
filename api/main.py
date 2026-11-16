@@ -159,9 +159,10 @@ class PublishRequest(BaseModel):
     title: str | None = Field(default=None, max_length=100)
     description: str | None = None
     privacy: YoutubePrivacy = "private"
-    # Remove the files from the server once the full video and every short
-    # are on the channel (never earlier, never after a failure).
-    delete_after: bool = True
+    # Remove the files from the server right away once the full video and
+    # every short are on the channel (never earlier, never after a failure).
+    # Off by default: they wait for the side panel's retention hours.
+    delete_after: bool = False
     shorts: list[PublishShortRequest] = Field(default_factory=list, max_length=20)
     # Topic cuts (topic/topic_NN.mp4): a topic of the meeting as its own video.
     topics: list[PublishTopicRequest] = Field(default_factory=list, max_length=3)

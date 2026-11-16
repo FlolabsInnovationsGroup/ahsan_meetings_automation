@@ -113,9 +113,11 @@ class PublishPlan:
     privacy: YoutubePrivacy
     shorts: tuple[ShortPlan, ...] = ()
     full: FullPlan | None = None
-    # Remove the files from the server once everything that can be published
-    # is on the channel (never while something is still to post or failed).
-    delete_after: bool = True
+    # Remove the files from the server right away once everything that can be
+    # published is on the channel (never while something is still to post or
+    # failed). Off by default: the files wait for the side panel's "Delete
+    # finished jobs after N hours" (the retention sweep) like any finished job.
+    delete_after: bool = False
     # who posted it, for the posted list: "person" or "autopilot"
     by: str = "person"
     # Public at once instead of on the release plan (only matters for public).
@@ -133,7 +135,7 @@ def build_plan(
     description: str | None = None,
     privacy: YoutubePrivacy = "private",
     shorts: Sequence[tuple[int, str | None, str | None]] = (),
-    delete_after: bool = True,
+    delete_after: bool = False,
     by: str = "person",
     right_away: bool = False,
     topics: Sequence[tuple[int, str | None, str | None]] = (),
@@ -398,7 +400,8 @@ def plan_everything(
         full = FullPlan(describe.full_title(job), describe.full_description(job))
     if not shorts and full is None and not cuts:
         return None
-    return PublishPlan(privacy, tuple(shorts), full, delete_after=True, by=by, topics=tuple(cuts))
+    # the files stay until the side panel's retention hours are up
+    return PublishPlan(privacy, tuple(shorts), full, delete_after=False, by=by, topics=tuple(cuts))
 
 
 def _suggested_topics(job: JobRecord, ledger, full_url: str | None) -> list[TopicPlan]:
