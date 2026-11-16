@@ -11,7 +11,7 @@ The order matters (ledger/uploads.py explains why):
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +27,26 @@ logger = get_logger(__name__)
 
 UNSURE = ("The upload was cut off and YouTube no longer knows it, and the video isn't on the channel "
           "(yet). Look in YouTube Studio, then tell the app whether it is there.")
+
+
+TAG_CHARS = 450  # YouTube allows 500 in all; room is kept for its quotes and commas
+TAG_COUNT = 12
+
+
+def tag_list(marker: str, extra: Sequence[str] = ()) -> list[str]:
+    """The upload's hidden tags: the marker first and always (it finds the video
+    again when the upload link is lost), then the search tags that fit: at most
+    TAG_COUNT tags and TAG_CHARS characters in all (a tag with a space counts 2
+    more, for the quotes YouTube adds), no exact repeats, no < or >."""
+    tags = [marker]
+    total = len(marker)
+    for raw in extra:
+        tag = " ".join(str(raw).replace("<", " ").replace(">", " ").split())[:100]
+        cost = len(tag) + (2 if " " in tag else 0)
+        if tag and tag not in tags and len(tags) < TAG_COUNT and total + cost <= TAG_CHARS:
+            tags.append(tag)
+            total += cost
+    return tags
 
 
 class NeverPost(Exception):
@@ -48,6 +68,7 @@ def upload_once(
     language: str | None = None,
     recording_date: str | None = None,
     localizations: dict | Callable[[], dict | None] | None = None,
+    tags: Sequence[str] = (),
 ) -> Upload:
     """Upload `item` unless the ledger says it is (or may be) on the channel.
     Returns the published record. Raises uploads.Refused subclasses when it
@@ -111,7 +132,7 @@ def upload_once(
             try:
                 video_id = youtube.upload_video(
                     path, title, description, privacy, on_progress,  # type: ignore[arg-type]
-                    tags=[attempt.upload.marker],
+                    tags=tag_list(attempt.upload.marker, tags),
                     session_uri=attempt.resume_uri,
                     start_byte=start,
                     on_session=lambda link: ledger.session_started(key, link),

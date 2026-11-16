@@ -65,7 +65,7 @@ def test_a_limit_of_zero_turns_the_rule_off(world):
 
 
 def test_a_title_already_on_the_channel_is_held(world):
-    # with "topic_first" describe.full_title adds the day itself to dodge a posted title, so the
+    # with "topic_first" describe.full_title falls back to the meeting name to dodge a posted title, so the
     # hold only fires for the meeting-and-date style, where the same meeting gets the same title
     settings.save({"title_style": "meeting_date"})
     job = _cut(world, minutes=45)
@@ -150,7 +150,7 @@ def test_an_old_state_file_loads_without_the_flag():
 
 
 def test_a_repeat_is_held_in_the_topic_first_style_too(world):
-    # full_title dodges a posted title by adding the day; the hold must still see the repeat
+    # full_title falls back to the meeting name when the dated title is posted; the hold must still see the repeat
     settings.save({"title_style": "topic_first"})
     job = _cut(world, minutes=45)
     other = job.model_copy(update={"zoom_meeting_uuid": "elsewhere", "job_id": "old-job"})

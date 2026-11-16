@@ -315,6 +315,84 @@ def pick(
     return Pick(r.t, KIND_SHARE, crop, best[0])
 
 
+# --------------------------------------------------------------- slide crop
+SLIDE_WINDOWS = ((-8.0, 8.0), (-3.0, 3.0), (0.0, 6.0))  # seconds around the frame that are looked at
+SLIDE_MIN_AREA = 0.25  # of the frame
+SLIDE_ASPECT = (1.55, 2.05)  # a slide is about 16:9; anything else is not trusted
+SLIDE_EDGE_SLACK = 0.04  # of the frame: how far a found edge may sit from the layout's box
+SLIDE_TRIM = 3  # source pixels cut off the found edges (a border or shadow)
+
+
+def _nearest(edges: list[float], target: float, lo: float, hi: float) -> float | None:
+    """The edge nearest `target` within [lo, hi], or None."""
+    near = [e for e in edges if lo <= e <= hi]
+    return min(near, key=lambda e: abs(e - target)) if near else None
+
+
+def _grow_to_edges(
+    gray: np.ndarray, panel: tuple[int, int, int, int], src_w: int, src_h: int
+) -> tuple[int, int, int, int]:
+    """The layout's panel moved out to the long edges of the picture itself. The
+    layout takes the tightest pair of edges that holds the change, which can end
+    inside a slide (a diagram that was scrolled); the slide's own border is the
+    nearest long edge at or beyond the box side. A side with no such edge stays."""
+    from slice import layout
+
+    sx, sy = src_w / gray.shape[1], src_h / gray.shape[0]
+    x0, y0, w, h = panel
+    gx0, gy0, gx1, gy1 = x0 / sx, y0 / sy, (x0 + w) / sx, (y0 + h) / sy
+    slack_x, slack_y = SLIDE_EDGE_SLACK * gray.shape[1], SLIDE_EDGE_SLACK * gray.shape[0]
+    rows = gray[max(int(gy0), 0): max(int(gy1), int(gy0) + 8)]
+    v = layout._vertical_edges(rows)
+    left = _nearest(v, gx0, gx0 - slack_x, gx0 + slack_x)
+    right = _nearest(v, gx1, gx1 - slack_x, gray.shape[1])
+    gx0 = left if left is not None else gx0
+    gx1 = right if right is not None else gx1
+    hz = layout._horizontal_edges(gray, int(gx0), int(gx1))
+    top = _nearest(hz, gy0, gy0 - slack_y, gy0 + slack_y)
+    bottom = _nearest(hz, gy1, gy1 - slack_y, gray.shape[0])
+    gy0 = top if top is not None else gy0
+    gy1 = bottom if bottom is not None else gy1
+    return layout._panel(gx0 * sx + SLIDE_TRIM, gy0 * sy + SLIDE_TRIM, gx1 * sx - SLIDE_TRIM, gy1 * sy - SLIDE_TRIM,
+                         src_w, src_h)
+
+
+def slide_crop(
+    source: str | Path, t: float, src_w: int, src_h: int, recording_type: str | None = None
+) -> tuple[int, int, int, int] | None:
+    """(x, y, w, h) in source pixels of the slide on a shared screen at `t`, or
+    None when no reliable slide box is found (the caller then keeps the
+    framing it has). The slide is found the way the Shorts find theirs
+    (slice/layout.py) on the seconds around `t`; a box is only trusted when the
+    clip is a shared screen (never people: a face would be cut in half), the box
+    came from picture edges, it is big enough and about 16:9. Never raises."""
+    try:
+        from slice import layout
+
+        lay = None
+        for before, after in SLIDE_WINDOWS:
+            start = max(t + before, 0.0)
+            found = layout.analyse_clip(source, start, max(t + after, start + 2.0), src_w, src_h, recording_type)
+            if found.kind == "screen" and found.metrics.get("panel_from_edges"):
+                lay = found
+                break
+        if lay is None:
+            return None
+        frames = layout.sample_frames(source, max(t, 0.0), max(t, 0.0) + 1.0, fps=1.0, src_size=(src_w, src_h))
+        if len(frames) == 0:
+            return None
+        x, y, w, h = _grow_to_edges(frames[0], lay.panel, src_w, src_h)
+        if lay.stamp:  # Zoom's date and time burned into the picture stays out
+            sx0, sy0, sw, sh = lay.stamp
+            if sx0 < x + w and sx0 + sw > x and sy0 < y + h and sy0 + sh > y and sy0 > y:
+                h = (sy0 - 2 - y) // 2 * 2
+        if w * h < SLIDE_MIN_AREA * src_w * src_h or not SLIDE_ASPECT[0] <= w / h <= SLIDE_ASPECT[1]:
+            return None
+        return x, y, w, h
+    except Exception:  # noqa: BLE001 - a thumbnail keeps its old framing when the slide cannot be found
+        return None
+
+
 # ------------------------------------------------------------------- extract
 def extract(
     source: str | Path,

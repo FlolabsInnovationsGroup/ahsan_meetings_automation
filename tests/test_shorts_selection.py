@@ -115,18 +115,31 @@ def test_count_follows_the_publishing_setting():
     publish_settings.save({"shorts_per_meeting": 2})
     assert len(select_shorts(moments, js, count=4)) == 2
     publish_settings.save({"shorts_per_meeting": 5})
-    assert len(select_shorts(moments, js, count=4)) == 4  # SHORTS_COUNT still caps
+    assert len(select_shorts(moments, js, count=4)) == 4  # a count asked for on one job still lowers it
+    assert len(select_shorts(moments, js)) == 5  # no count: the setting decides (SHORTS_COUNT no longer caps)
     publish_settings.save({"shorts_per_meeting": 0})
     assert select_shorts(moments, js, count=4) == []
+
+
+def test_six_quality_moments_make_six_shorts_and_weak_ones_are_not_used():
+    publish_settings.save({"shorts_per_meeting": 10})
+    js = [_j(i) for i in range(160)]
+    good = [_m(k, _far(k), _far(k) + 2, score=7 + k % 3, sa=7 + k % 3, js=js) for k in range(6)]
+    weak = [_m(6, _far(6), _far(6) + 2, score=6, sa=9, js=js),  # score below 7
+            _m(7, _far(7), _far(7) + 2, score=9, sa=6, js=js),  # does not stand alone
+            _m(8, _far(8), _far(8) + 2, score=9, sa=9, js=js).model_copy(update={"short_worthy": False})]
+    assert sorted(s.moment_id for s in select_shorts(good + weak, js)) == [0, 1, 2, 3, 4, 5]
+    publish_settings.save({"shorts_per_meeting": 4})  # the setting is only the most to make
+    assert len(select_shorts(good + weak, js)) == 4
 
 
 def test_stands_alone_moments_come_first():
     publish_settings.save({"shorts_per_meeting": 3})
     js = [_j(i) for i in range(80)]
-    low = _m(0, 0, 2, score=10, sa=5, js=js)
-    high = _m(1, 10, 12, score=6, sa=9, js=js)
+    low = _m(0, 0, 2, score=10, sa=5, js=js)  # does not stand alone (< 7): below the quality bar, never used
+    high = _m(1, 10, 12, score=7, sa=9, js=js)
     unknown = _m(2, 20, 22, score=9, js=js)
-    assert [s.moment_id for s in select_shorts([low, high, unknown], js, count=3)] == [1, 0, 2]
+    assert [s.moment_id for s in select_shorts([low, high, unknown], js, count=3)] == [1, 2]
     # without stands_alone anywhere: today's order, best score first
     plain = [m.model_copy(update={"stands_alone": None}) for m in (low, high, unknown)]
     assert [s.moment_id for s in select_shorts(plain, js, count=3)] == [0, 2, 1]

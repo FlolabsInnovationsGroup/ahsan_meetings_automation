@@ -1,6 +1,7 @@
 """The release plan's slot book (publish/schedule.py) and the request body it
 feeds (publish/youtube.py insert_body), rule by rule with a fixed clock."""
 
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -20,6 +21,18 @@ def _utc_team(monkeypatch):
     """Team time = UTC, so the window hours below are plain clock hours."""
     monkeypatch.setenv("LOCAL_TIMEZONE", "UTC")
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _slow_plan():
+    """The rule tests below are about the cautious plan (12 h review, 10-22
+    window, 6 a day); the shipped defaults are faster and tested at the end."""
+    pub_settings.save({"review_hours": 12, "window_start_hour": 10, "window_end_hour": 22, "min_gap_hours": 2,
+                       "max_per_day": 6, "shorts_per_day": 3, "full_per_day": 6, "topic_per_day": 6})
+
+
+def _shipped_defaults():
+    pub_settings.save(asdict(pub_settings.DEFAULTS))
 
 
 def zone(name: str, monkeypatch) -> None:
@@ -98,7 +111,7 @@ def test_the_gap_applies_on_both_sides_of_a_booking():
 
 
 def test_at_most_max_per_day_go_public_on_a_day():
-    pub_settings.save({"review_hours": 0, "min_gap_hours": 1, "max_per_day": 3, "shorts_per_day": 3})
+    pub_settings.save({"review_hours": 0, "min_gap_hours": 1, "max_per_day": 3, "shorts_per_day": 3, "full_per_day": 3, "topic_per_day": 3})
     got = [schedule.book(f"k{i}", "full", f"m{i}", now=NOW).at for i in range(4)]
     assert got[:3] == [at(16, 10), at(16, 11), at(16, 12)]
     assert got[3] == at(17, 10)  # the fourth waits for the next day
@@ -106,16 +119,16 @@ def test_at_most_max_per_day_go_public_on_a_day():
 
 def test_the_day_counts_in_team_time_not_utc(monkeypatch):
     zone("Asia/Karachi", monkeypatch)
-    pub_settings.save({"review_hours": 0, "min_gap_hours": 1, "max_per_day": 1, "shorts_per_day": 1,
+    pub_settings.save({"review_hours": 0, "min_gap_hours": 1, "max_per_day": 1, "shorts_per_day": 1, "full_per_day": 1, "topic_per_day": 1,
                        "window_start_hour": 0, "window_end_hour": 24})
     first = schedule.book("a", "full", "m1", now=at(16, 18, 30))  # 23:30 local, 16 Nov
-    assert first.at == at(16, 18, 30)
-    # 19:30 UTC (an hour later, the gap) is 00:30 on 17 Nov in Karachi: a new day, so one more is allowed
-    assert schedule.book("b", "full", "m2", now=at(16, 18, 30)).at == at(16, 19, 30)
+    assert first.at == at(16, 18, 45)  # review 0 still leaves the 15 minute lead
+    # 19:45 UTC (an hour later, the gap) is 00:45 on 17 Nov in Karachi: a new day, so one more is allowed
+    assert schedule.book("b", "full", "m2", now=at(16, 18, 30)).at == at(16, 19, 45)
 
 
 def test_at_most_shorts_per_day_are_shorts():
-    pub_settings.save({"review_hours": 0, "min_gap_hours": 1, "max_per_day": 4, "shorts_per_day": 2})
+    pub_settings.save({"review_hours": 0, "min_gap_hours": 1, "max_per_day": 4, "shorts_per_day": 2, "full_per_day": 4, "topic_per_day": 4})
     shorts = [schedule.book(f"s{i}", "short", "m1", now=NOW).at for i in range(3)]
     assert shorts[:2] == [at(16, 10), at(16, 11)]
     assert shorts[2] == at(17, 10)  # the third Short waits for the next day
@@ -137,7 +150,8 @@ def test_no_slot_within_max_days_ahead_is_none():
     assert schedule.book("a", "full", "m1", now=NOW) is None
     assert schedule.upcoming(NOW) == []
     # and a full calendar: everything inside the days is taken
-    pub_settings.save({"review_hours": 0, "max_per_day": 1, "shorts_per_day": 1, "max_days_ahead": 3})
+    pub_settings.save({"review_hours": 0, "max_per_day": 1, "shorts_per_day": 1, "full_per_day": 1, "topic_per_day": 1,
+                       "max_days_ahead": 3})
     booked = [schedule.book(f"k{i}", "full", "m", now=NOW) for i in range(4)]
     assert [b is not None for b in booked] == [True, True, True, False]  # 16th, 17th, 18th; the 19th is too far
 
@@ -250,7 +264,7 @@ def test_a_booking_keeps_the_meeting_name_and_old_rows_still_load():
 
 
 def test_a_topic_cut_counts_toward_the_day_cap_but_not_the_shorts_cap():
-    pub_settings.save({"max_per_day": 3, "shorts_per_day": 1, "min_gap_hours": 1})
+    pub_settings.save({"max_per_day": 3, "shorts_per_day": 1, "full_per_day": 3, "topic_per_day": 3, "min_gap_hours": 1})
     first = schedule.book("t", "topic", "m1", now=NOW)
     schedule.book("s", "short", "m1", now=NOW)
     schedule.book("f", "full", "m1", now=NOW)  # three on the first day: the cap
@@ -296,3 +310,47 @@ def test_a_schedule_file_with_topic_rows_and_an_old_one_both_load():
     files.write_json(schedule._path(), {"bookings": [
         {"key": "old", "kind": "short", "source": "zoom:x", "at": at(17, 12).isoformat(), "notify": False}]})
     assert schedule.get("old").kind == "short"
+
+
+# ---------------------------------------------------- the shipped (fast) defaults
+
+
+def test_the_defaults_have_no_review_wait_but_a_slot_is_never_less_than_the_lead_time():
+    _shipped_defaults()
+    assert pub_settings.DEFAULTS.review_hours == 0
+    first = schedule.book("a", "full", "m1", now=at(16, 9, 7))
+    assert first.at >= at(16, 9, 7) + schedule.MIN_LEAD  # YouTube needs a future publishAt
+    assert first.at == at(16, 9, 30)
+
+
+def test_a_kept_slot_that_is_already_past_is_replaced_with_review_zero():
+    _shipped_defaults()
+    first = schedule.book("a", "full", "m1", now=NOW)
+    again = schedule.book("a", "full", "m1", now=first.at - timedelta(minutes=5))  # inside the lead time
+    assert again.at >= first.at - timedelta(minutes=5) + schedule.MIN_LEAD
+
+
+def test_the_window_is_all_day_by_default_and_midnight_does_not_wrap():
+    _shipped_defaults()
+    got = [schedule.book(f"s{i}", "short", "m", now=at(16, 22, 0)).at for i in range(2)]
+    assert got == [at(16, 22, 15), at(17, 0, 15)]  # 22:15, then 2 h later, past midnight, still inside
+
+
+def test_full_meetings_and_topic_videos_have_their_own_daily_caps():
+    _shipped_defaults()
+    fulls = [schedule.book(f"f{i}", "full", "m", now=NOW).at for i in range(4)]
+    assert [t.day for t in fulls] == [16, 16, 16, 17]  # the 4th full meeting goes to the next day
+    topics = [schedule.book(f"t{i}", "topic", "m", now=NOW).at for i in range(4)]
+    assert [t.day for t in topics[:3]] == [16, 16, 16]  # topic videos are not counted with full meetings
+    assert topics[3].day == 17
+
+
+def test_five_shorts_a_day_and_eleven_videos_in_all():
+    _shipped_defaults()
+    shorts = [schedule.book(f"s{i}", "short", "m", now=NOW).at for i in range(6)]
+    assert [t.day for t in shorts] == [16] * 5 + [17]
+    longs = [schedule.book(f"f{i}", "full", "m", now=NOW) for i in range(3)]
+    longs += [schedule.book(f"t{i}", "topic", "m", now=NOW) for i in range(3)]
+    # 5 Shorts + 3 full + 3 topic = 11 = max_per_day, and the 12 two-hour slots of the day hold them all
+    assert all(b.at.day == 16 for b in longs)
+

@@ -62,12 +62,12 @@ def test_series_label():
 
 def test_topic_first_title_from_the_first_short():
     job = _job(rows=[_row(1), _row(2, title="Second")])
-    assert describe.full_title(job) == "Moving the session store to Redis | FloLabs Multi-modal perception"
+    assert describe.full_title(job) == "Moving the session store to Redis | FloLabs Multi-modal perception — 2026-11-04"
 
 
 def test_title_uses_the_reel_when_there_are_no_shorts():
     job = _job(highlights=[{"final_at_s": 1, "source_start": 1, "source_end": 9, "title": "Calibrating cameras"}])
-    assert describe.full_title(job) == "Calibrating cameras | FloLabs Multi-modal perception"
+    assert describe.full_title(job) == "Calibrating cameras | FloLabs Multi-modal perception — 2026-11-04"
 
 
 def test_ungrounded_title_is_rejected_when_the_clip_text_is_there():
@@ -87,19 +87,28 @@ def test_with_no_usable_moment_the_title_is_todays():
     assert describe.full_title(_job(rows=[])) == "Multi-modal perception team meeting — 2026-11-04"
 
 
-def test_a_repeated_title_gets_the_date(monkeypatch):
-    first = "Moving the session store to Redis | FloLabs Multi-modal perception"
+def test_a_repeated_dated_title_falls_back_to_the_meeting_name(monkeypatch):
+    first = "Moving the session store to Redis | FloLabs Multi-modal perception — 2026-11-04"
     monkeypatch.setattr(describe, "_posted_titles", lambda: {first.lower()})
     title = describe.full_title(_job(rows=[_row(1)]))
-    assert title == "Moving the session store to Redis (2026-11-04) | FloLabs Multi-modal perception"
+    assert title == "Multi-modal perception team meeting — 2026-11-04"
 
 
 def test_title_is_at_most_100_characters_and_keeps_the_label():
     job = _job(rows=[_row(1, title="A very long moment title " * 8)])
     title = describe.full_title(job)
     assert len(title) <= 100
-    assert title.endswith(" | FloLabs Multi-modal perception")
+    assert title.endswith(" | FloLabs Multi-modal perception — 2026-11-04")
     assert "<" not in title and ">" not in title
+
+
+def test_the_full_title_always_ends_with_the_date_and_fits_100_characters():
+    short = describe.full_title(_job(rows=[_row(1)]))
+    assert short.endswith(" | FloLabs Multi-modal perception — 2026-11-04")
+    assert "(" not in short
+    long = describe.full_title(_job(rows=[_row(1, title="A very long moment title " * 8)]))
+    assert len(long) <= 100
+    assert long.endswith(" | FloLabs Multi-modal perception — 2026-11-04")
 
 
 def test_meeting_date_style_keeps_todays_title():
@@ -121,7 +130,7 @@ def test_description_order_and_no_timestamp_above_the_chapters():
     ]
     assert blocks[1].splitlines()[0].startswith("00:00") or blocks[1].splitlines()[0].startswith("0:00")
     assert blocks[2] == "Website: https://example.com"
-    assert blocks[3] == "#FloLabs #MultiModalPerception"
+    assert blocks[3] == "#FloLabs #MultiModalPerception #ComputerVision #AI #Redis"
     assert not re.search(r"^\d{1,2}:\d{2}", blocks[0], re.MULTILINE)
 
 
@@ -130,7 +139,7 @@ def test_description_without_a_series_or_moment():
     assert text.startswith("Also in this meeting:")
     assert "A real R&D team meeting from FloLabs Innovations Group." in text
     assert "team meeting," not in text
-    assert text.endswith("#FloLabs")
+    assert text.endswith("#FloLabs #Tech #Innovation #Redis")  # no team: the general field tags
 
 
 def test_hashtags_can_be_turned_off():
@@ -143,7 +152,7 @@ def test_meeting_date_style_description_is_the_chapters_plus_links_and_tags():
     pub_settings.save({"title_style": "meeting_date", "links_text": "More: https://example.com"})
     text = describe.full_description(_job())
     chapters = "\n".join(f"{describe.fmt_clock(t)} {name}" for t, name in CHAPTERS)
-    assert text == f"{chapters}\n\nMore: https://example.com\n\n#FloLabs #MultiModalPerception"
+    assert text == f"{chapters}\n\nMore: https://example.com\n\n#FloLabs #MultiModalPerception #ComputerVision #AI #Redis"
 
 
 def test_long_links_still_leave_room_for_the_shorts_list(monkeypatch):
@@ -159,22 +168,22 @@ def test_long_links_still_leave_room_for_the_shorts_list(monkeypatch):
     combined, kept = describe.with_shorts_block(text, shorts)
     assert describe.description_problem(combined) is None
     assert kept == [0, 1, 2, 3]
-    assert text.endswith("#FloLabs #MultiModalPerception")
+    assert text.endswith("#FloLabs #MultiModalPerception #ComputerVision #AI #Redis")
 
 
-def test_at_most_three_hashtags_never_shorts():
+def test_a_short_gets_its_named_tool_after_the_team_and_field_tags_never_shorts():
     job = _job(rows=[_row(1, title="ESP32 firmware update")])
     info = describe.load_shorts(job)[0]
     text = describe.short_description(info, job)
     tags = text.splitlines()[-1].split()
-    assert tags == ["#FloLabs", "#MultiModalPerception", "#ESP32"]
+    assert tags == ["#FloLabs", "#MultiModalPerception", "#ComputerVision", "#AI", "#ESP32"]
     assert "#shorts" not in text.lower()
 
 
-def test_short_description_without_a_proper_noun_has_two_hashtags():
+def test_short_description_without_a_proper_noun_has_no_tool_hashtag():
     job = _job(rows=[_row(1, title="why the store was slow")])
     text = describe.short_description(describe.load_shorts(job)[0], job)
-    assert text.splitlines()[-1] == "#FloLabs #MultiModalPerception"
+    assert text.splitlines()[-1] == "#FloLabs #MultiModalPerception #ComputerVision #AI"
     assert text.startswith("Why the old store kept timing out.\n\nFrom the full meeting:")
 
 
@@ -232,7 +241,7 @@ def test_a_label_override_changes_the_title_and_the_description_line():
     _team("multi modal perception", label="Perception Lab")
     job = _job(rows=[_row(1)])
     assert describe.series_label(job) == "FloLabs Perception Lab"
-    assert describe.full_title(job).endswith("| FloLabs Perception Lab")
+    assert describe.full_title(job).endswith("| FloLabs Perception Lab — 2026-11-04")
     assert "Perception Lab team meeting, 4 November 2026." in describe.full_description(job)
 
 
@@ -245,7 +254,7 @@ def test_registry_hashtags_are_used_capped_and_valid():
     _team("multi modal perception", hashtags=["#Percept", "#Vision"])
     job = _job(rows=[_row(1, title="Moving the session store to Redis ESP32")])
     tags = describe._hashtags(job, "#ESP32").split()
-    assert tags == ["#FloLabs", "#Percept", "#Vision"]
+    assert tags == ["#FloLabs", "#Percept", "#Vision", "#ComputerVision", "#AI", "#ESP32"]
     assert all(re.fullmatch(r"#[A-Za-z0-9]+", t) for t in tags)
     assert "#shorts" not in describe._hashtags(job, "#shorts").lower()
 
@@ -256,11 +265,11 @@ def test_without_a_registry_tag_the_camel_case_tag_stays():
 
 def test_the_old_label_still_counts_as_a_duplicate_title():
     job = _job(rows=[_row(1)])
-    old = "Moving the session store to Redis | FloLabs Multi-modal perception"
+    old = "Moving the session store to Redis | FloLabs Multi-modal perception — 2026-11-04"
     _team("multi modal perception", label="Perception Lab")
     variants = describe.title_variants(job)
     assert old.lower() in variants
-    assert "moving the session store to redis | flolabs perception lab" in variants
+    assert "moving the session store to redis | flolabs perception lab — 2026-11-04" in variants
 
 
 def test_short_info_style_defaults_to_classic_and_reads_new():

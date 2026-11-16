@@ -116,3 +116,20 @@ def test_stage_is_skipped_when_thumbnails_and_short_thumbnails_are_off(tmp_path,
     assert not (job_dir / "thumbnails").exists()
     assert "thumbnails" not in job.stage_timings
     assert not [w for w in job.warnings if "thumbnails" in w]
+
+
+def test_a_shared_screen_pick_uses_the_slide_box_and_anything_else_keeps_its_crop(monkeypatch):
+    from types import SimpleNamespace
+
+    import deliver
+    from publish import thumbframes as tf
+
+    seen = []
+    monkeypatch.setattr(tf, "slide_crop", lambda *a, **k: seen.append(a) or (250, 100, 800, 450))
+    share = SimpleNamespace(kind=tf.KIND_SHARE, t=30.0, crop=(0, 70, 1280, 650))
+    assert deliver._slide_or(tf, "s.mp4", share, 1280, 720, "shared_screen") == ((250, 100, 800, 450), True)
+    camera = SimpleNamespace(kind=tf.KIND_CAMERA, t=30.0, crop=None)
+    assert deliver._slide_or(tf, "s.mp4", camera, 1280, 720, None) == (None, False)
+    assert len(seen) == 1
+    monkeypatch.setattr(tf, "slide_crop", lambda *a, **k: None)  # no reliable slide box: today's framing
+    assert deliver._slide_or(tf, "s.mp4", share, 1280, 720, None) == ((0, 70, 1280, 650), False)

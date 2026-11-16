@@ -141,7 +141,7 @@ def test_shorts_prefer_learning_moments_then_fill_and_never_overlap():
     moments = [
         _m(0, js[2].start, js[3].end, 7, "concept", True, 2, 3),
         _m(1, js[10].start, js[11].end, 10, "funny", True, 10, 11),
-        _m(2, js[20].start, js[21].end, 6, "new_architecture", True, 20, 21),
+        _m(2, js[20].start, js[21].end, 7, "new_architecture", True, 20, 21),
         _m(3, js[3].start, js[4].end, 8, "insight", True, 3, 4),  # overlaps short 0... picked first (8 > 7)
         _m(4, js[40].start, js[41].end, 9, "concept", False, 40, 41),  # not short-worthy
     ]

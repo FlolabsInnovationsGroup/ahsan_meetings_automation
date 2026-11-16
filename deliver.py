@@ -455,7 +455,8 @@ def _thumbnails(job: JobRecord, job_dir: Path, source, out: RenderOutputs, highl
         if cfg.thumbnail_mode == "off" and not cfg.thumbnail_shorts:
             return
         with _stage(job, "thumbnails"):
-            rows = _thumbnail_rows(job_dir, Path(source), out, highlights, shorts_rows, reel or [], cfg, tf)
+            rows = _thumbnail_rows(job_dir, Path(source), out, highlights, shorts_rows, reel or [], cfg, tf,
+                                   (job.zoom_meeting or {}).get("recording_type"))
             folder = job_dir / tf.THUMBS_DIR
             folder.mkdir(exist_ok=True)
             _write_json(folder / tf.THUMBS_FILE, rows)
@@ -470,7 +471,7 @@ def _thumbnails(job: JobRecord, job_dir: Path, source, out: RenderOutputs, highl
 
 
 def _thumbnail_rows(job_dir: Path, source: Path, out: RenderOutputs, highlights, shorts_rows,
-                    reel: list[Moment], cfg, tf) -> list[dict]:
+                    reel: list[Moment], cfg, tf, recording_type: str | None = None) -> list[dict]:
     import re
 
     from slice.profile import probe_header
@@ -506,9 +507,10 @@ def _thumbnail_rows(job_dir: Path, source: Path, out: RenderOutputs, highlights,
             result.append(tf.row(tf.VIDEO_FULL, 1, start, end, None, tf.KIND_CARD))
         for n, (p, start, end) in enumerate(picks, 1):
             name = f"{tf.THUMBS_DIR}/base_full_{n}.jpg"
-            tf.extract(source, p.t, p.crop, job_dir / name)
-            result.append(tf.row(tf.VIDEO_FULL, n, start, end, p.t, p.kind, p.crop, name,
-                                 {"score": round(p.score, 2)}))
+            crop, slide = _slide_or(tf, source, p, src_w, src_h, recording_type)
+            tf.extract(source, p.t, crop, job_dir / name)
+            result.append(tf.row(tf.VIDEO_FULL, n, start, end, p.t, p.kind, crop, name,
+                                 {"score": round(p.score, 2), "slide": slide}))
     shorts_out = {r.path.relative_to(job_dir).as_posix(): r for r in out.shorts}
     for row in shorts_rows:
         res = shorts_out.get(row[0])
@@ -539,6 +541,17 @@ def _thumbnail_rows(job_dir: Path, source: Path, out: RenderOutputs, highlights,
         result.append(tf.row(tf.VIDEO_SHORT, number, row[1], row[2], t, kind,
                              None, name, scores))
     return result
+
+
+def _slide_or(tf, source, pick, src_w: int, src_h: int, recording_type: str | None):
+    """(crop, True) with the slide's own box when the pick is a shared screen and
+    the slide can be found (the thumbnail then shows the slide, not the whole
+    screen); else the pick's own crop and False."""
+    if pick.kind == tf.KIND_SHARE:
+        box = tf.slide_crop(source, pick.t, src_w, src_h, recording_type)
+        if box is not None:
+            return box, True
+    return pick.crop, False
 
 
 # ---------------------------------------------------------------- topic cuts
@@ -712,9 +725,11 @@ def _topic_thumbnails(job: JobRecord, job_dir: Path, source, topics: list[dict])
                     rows.append(tf.row(tf.VIDEO_TOPIC, number, start, end, None, tf.KIND_CARD))
                     continue
                 name = f"{tf.THUMBS_DIR}/base_topic_{number:02d}.jpg"
-                tf.extract(source, p.t, p.crop, job_dir / name)
-                rows.append(tf.row(tf.VIDEO_TOPIC, number, start, end, p.t, p.kind, p.crop, name,
-                                   {"score": round(p.score, 2)}))
+                crop, slide = _slide_or(tf, source, p, header.width, header.height,
+                                        (job.zoom_meeting or {}).get("recording_type"))
+                tf.extract(source, p.t, crop, job_dir / name)
+                rows.append(tf.row(tf.VIDEO_TOPIC, number, start, end, p.t, p.kind, crop, name,
+                                   {"score": round(p.score, 2), "slide": slide}))
                 made.append(name)
             _write_json(path, rows)
             for name in [f"{tf.THUMBS_DIR}/{tf.THUMBS_FILE}", *made]:

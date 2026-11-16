@@ -254,17 +254,21 @@ LEARNING_CATEGORIES = ("concept", "new_architecture", "new_feature", "insight")
 # category (e.g. funny) needs the higher bar
 _STANDS_ALONE = 7.0
 _OTHER_STANDS_ALONE = 8.0
+# The quality bar for a Short: every moment that meets it is used (up to the
+# owner's "Shorts per meeting" cap): short-worthy, score >= 7 and, when known,
+# stands_alone >= 7.
+_SHORT_MIN_SCORE = 7.0
 
 
 def select_shorts(
     moments: list[Moment],
     judgments: list[SegmentJudgment],
     *,
-    count: int = 4,
+    count: int | None = None,
     min_s: float = 20.0,
     max_s: float = 60.0,
     preferred_categories: list[str] | tuple[str, ...] = LEARNING_CATEGORIES,
-    min_score: float = 5.0,
+    min_score: float = _SHORT_MIN_SCORE,
 ) -> list[ShortClip]:
     """Short-worthy moments, preferred categories first (by score) — by
     default the ones people learn from — then any other short-worthy moment
@@ -276,11 +280,13 @@ def select_shorts(
     stripped of filler at either end. Shorts never overlap. A short may
     include material the cleanup removed — by design — but never starts or
     ends on removed filler/small talk/housekeeping."""
-    # fewer, better Shorts: the owner's "Shorts per meeting" choice caps the
-    # count (imported late: the publish package pulls in the whole app)
+    # The quality bar decides how many Shorts there are; the owner's "Shorts
+    # per meeting" is only the most to make (imported late: the publish
+    # package pulls in the whole app). `count` can only lower that cap.
     from publish.settings import current as publishing
 
-    count = min(count, publishing().shorts_per_meeting)
+    cap = publishing().shorts_per_meeting
+    count = cap if count is None else min(count, cap)
     if count <= 0 or not judgments:
         return []
     if any(m.reranked for m in moments):
@@ -288,10 +294,10 @@ def select_shorts(
     else:
         pool = [m for m in moments if m.category in preferred_categories and m.score >= min_score]
     # A moment that only works with the rest of the meeting is not a Short:
-    # one of another category (e.g. funny) must stand on its own (>= 8). Without
-    # the re-rank's stands_alone nothing changes.
-    pool = [m for m in pool if m.stands_alone is None or m.category in preferred_categories
-            or m.stands_alone >= _OTHER_STANDS_ALONE]
+    # it must stand on its own (>= 7), one of another category (e.g. funny)
+    # even more so (>= 8). Without the re-rank's stands_alone nothing changes.
+    pool = [m for m in pool if m.stands_alone is None
+            or m.stands_alone >= (_STANDS_ALONE if m.category in preferred_categories else _OTHER_STANDS_ALONE)]
 
     def rank(m: Moment):
         # stands-alone moments first, then learning categories, then the score

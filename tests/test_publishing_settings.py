@@ -23,11 +23,11 @@ def test_get_returns_settings_and_defaults(client):
 
 
 def test_post_saves_and_get_returns_the_new_values(client):
-    res = client.post("/publishing/settings", json={"max_per_day": 3, "hashtags": False, "links_text": "https://flolabs.com"})
+    res = client.post("/publishing/settings", json={"max_per_day": 9, "hashtags": False, "links_text": "https://flolabs.com"})
     assert res.status_code == 200
-    assert res.json()["settings"]["max_per_day"] == 3
+    assert res.json()["settings"]["max_per_day"] == 9
     got = client.get("/publishing/settings").json()
-    assert got["settings"]["max_per_day"] == 3
+    assert got["settings"]["max_per_day"] == 9
     assert got["settings"]["hashtags"] is False
     assert got["settings"]["links_text"] == "https://flolabs.com"
     assert got["defaults"]["max_per_day"] == publishing.DEFAULTS.max_per_day
@@ -55,14 +55,14 @@ def test_damaged_saved_value_falls_back_to_its_default(client):
     assert json.dumps(got)
 
 
-# --- the growth settings (all 49 new fields, looks(), capacity) ---------------
+# --- the growth settings (all 51 new fields, looks(), capacity) ---------------
 
 NEW_FIELDS = [
     "shorts_style", "shorts_hook_seconds", "shorts_top_text", "shorts_end_line", "shorts_caption_px",
     "shorts_caption_max_chars", "shorts_layout", "shorts_screen_zoom", "shorts_speaker_layout", "shorts_hd",
     "shorts_trim_pauses", "shorts_max_pause_s", "shorts_loudness", "full_loudness", "loudness_target_lufs",
     "audio_denoise", "full_hd", "full_hook_overlay", "thumbnail_mode", "thumbnail_shorts", "thumbnail_faces",
-    "thumbnail_label", "captions_full", "captions_shorts", "translations", "translation_languages", "playlists",
+    "thumbnail_label", "thumbnail_design", "thumbnail_ai", "captions_full", "captions_shorts", "translations", "translation_languages", "playlists",
     "playlist_shorts", "playlist_cuts", "playlist_full_template", "playlist_shorts_template",
     "playlist_cuts_template", "series_mode", "series_archive_privacy", "topic_cuts", "topic_cuts_per_meeting",
     "topic_min_minutes", "topic_max_minutes", "topic_min_score", "topic_cold_open", "topic_front_door",
@@ -71,7 +71,7 @@ NEW_FIELDS = [
 ]
 CHOICES = {
     "shorts_style": "classic", "shorts_top_text": "none", "shorts_layout": "fit", "shorts_screen_zoom": "zoom",
-    "shorts_speaker_layout": "panel", "thumbnail_mode": "custom", "series_mode": "allow_all",
+    "shorts_speaker_layout": "panel", "thumbnail_mode": "custom", "thumbnail_design": "card_only", "series_mode": "allow_all",
     "series_archive_privacy": "skip", "shorts_link_target": "full",
 }
 OUT_OF_RANGE = {
@@ -86,15 +86,23 @@ def _save(**changes):
     return publishing.save(changes)
 
 
-def test_the_release_plan_defaults_are_six_a_day_two_hours_apart():
-    # the owner's decision (2026-11-14): 6 a day, 2 h gaps (were 5 and 2.5)
-    assert publishing.DEFAULTS.max_per_day == 6
-    assert publishing.DEFAULTS.min_gap_hours == 2.0
-    assert publishing.DEFAULTS.shorts_per_day == 3
+def test_the_release_plan_defaults_are_fast_and_all_day_two_hours_apart():
+    # owner's decision (2026-11-16): no review wait, all day, 2 h gaps, 3 full + 3 topic + 5 Shorts = 11 a day
+    d = publishing.DEFAULTS
+    assert (d.review_hours, d.window_start_hour, d.window_end_hour, d.shorts_after_full_hours) == (0, 0, 24, 1.0)
+    assert (d.max_per_day, d.min_gap_hours) == (11, 2.0)
+    assert (d.full_per_day, d.topic_per_day, d.shorts_per_day, d.shorts_per_meeting) == (3, 3, 5, 10)
+    assert publishing.capacity_warning(d) is None
+
+
+def test_each_daily_cap_may_not_be_more_than_the_total():
+    for name in ("full_per_day", "topic_per_day", "shorts_per_day"):
+        with pytest.raises(ValueError):
+            publishing.save({"max_per_day": 2, name: 3})
 
 
 def test_every_new_field_exists_and_comes_back_with_its_default(client):
-    assert len(NEW_FIELDS) == 49
+    assert len(NEW_FIELDS) == 51
     body = client.get("/publishing/settings").json()
     for name in NEW_FIELDS:
         assert name in body["settings"], name
@@ -130,6 +138,16 @@ def test_a_select_refuses_an_unknown_value(client, name):
     res = client.post("/publishing/settings", json={name: "sideways"})
     assert res.status_code == 400
     assert f"{name}: one of " in res.json()["detail"]
+
+
+def test_thumbnail_design_defaults_and_checks():
+    assert publishing.DEFAULTS.thumbnail_design == "smart"
+    assert publishing.DEFAULTS.thumbnail_ai is True
+    for value in publishing._CHOICES["thumbnail_design"]:
+        assert publishing.save({"thumbnail_design": value}).thumbnail_design == value
+    with pytest.raises(ValueError, match="thumbnail_ai"):
+        publishing.save({"thumbnail_ai": "yes"})
+    assert publishing.save({"thumbnail_ai": False}).thumbnail_ai is False
 
 
 def test_title_styles_stay_exported():
@@ -289,25 +307,27 @@ def test_looks_can_be_built_from_given_settings():
 def test_capacity_warning_keeps_todays_messages_and_defaults_fit():
     assert publishing.capacity_warning(publishing.DEFAULTS) is None
     assert "some Shorts would be skipped" in publishing.capacity_warning(publishing.Publishing(shorts_per_day=1))
+    # (the next tests set 2 Shorts a meeting: the old fixed count they were written for)
     # without topic cuts the second message is word for word as before
-    msg = publishing.capacity_warning(publishing.Publishing(topic_cuts=False, max_per_day=3, shorts_per_day=3))
+    msg = publishing.capacity_warning(publishing.Publishing(topic_cuts=False, max_per_day=3, shorts_per_day=3, full_per_day=3, topic_per_day=3, shorts_per_meeting=2))
     assert msg == "About 9 public meetings a week make 27 videos, but only 21 fit in a week: some would be skipped."
 
 
 def test_capacity_warning_counts_topic_cuts():
     # 9 meetings + 9 * 0.6 cuts + 18 Shorts = 32.4 videos a week
-    tight = publishing.Publishing(max_per_day=4, shorts_per_day=3, min_gap_hours=1.0)
+    tight = publishing.Publishing(max_per_day=4, shorts_per_day=3, min_gap_hours=1.0, shorts_per_meeting=2)
     assert "topic cuts" in publishing.capacity_warning(tight)
     assert publishing.capacity_warning(dataclasses.replace(tight, topic_cuts=False)) is None  # 27 fit in 28
     assert publishing.capacity_warning(
-        publishing.Publishing(max_per_day=5, shorts_per_day=3, min_gap_hours=1.0)) is None
+        publishing.Publishing(max_per_day=5, shorts_per_day=3, min_gap_hours=1.0, shorts_per_meeting=2)) is None
     # more cuts per meeting push it over
     assert "topic cuts" in publishing.capacity_warning(
-        publishing.Publishing(max_per_day=5, shorts_per_day=3, min_gap_hours=1.0, topic_cuts_per_meeting=3))
+        publishing.Publishing(max_per_day=5, shorts_per_day=3, min_gap_hours=1.0, shorts_per_meeting=2, topic_cuts_per_meeting=3))
 
 
 def test_capacity_warning_says_when_the_release_hours_cannot_hold_the_videos():
-    p = publishing.Publishing(window_start_hour=10, window_end_hour=22, min_gap_hours=2.5, max_per_day=6)
+    p = publishing.Publishing(window_start_hour=10, window_end_hour=22, min_gap_hours=2.5, max_per_day=6,
+                              full_per_day=3, topic_per_day=3, shorts_per_day=3, shorts_per_meeting=2)
     assert publishing.capacity_warning(p) == (
         "Only 5 videos fit in the release hours with 2.5 h between them, but videos per day is 6.")
     # no gap, or off: no such warning

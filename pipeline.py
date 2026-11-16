@@ -458,12 +458,15 @@ def _select(job, job_dir, judgments, moments, words, media, fade, duration, opts
     else:
         job.warnings.append("not enough highlight-worthy material for a highlights reel")
 
-    count = settings.shorts_count if opts.shorts_count is None else opts.shorts_count
-    # the owner's "Shorts per meeting" cap applies here too, so the shortage
-    # warning below compares with the number that was really asked for
+    # The quality bar decides how many Shorts a meeting gets; the owner's
+    # "Shorts per meeting" is the most to make (SHORTS_COUNT in .env no longer
+    # caps it). Only a count asked for on this one job lowers it, and only
+    # then is finding fewer worth a warning.
     from publish.settings import current as publishing
 
-    count = min(count, publishing().shorts_per_meeting)
+    cap = publishing().shorts_per_meeting
+    asked = opts.shorts_count
+    count = cap if asked is None else min(asked, cap)
     shorts = select_shorts(
         moments,
         judgments,
@@ -472,7 +475,7 @@ def _select(job, job_dir, judgments, moments, words, media, fade, duration, opts
         max_s=settings.shorts_max_s,
         preferred_categories=settings.shorts_categories,
     )
-    if count and len(shorts) < count:
+    if asked and len(shorts) < count:
         job.warnings.append(f"found {len(shorts)} short-worthy moment(s), {count} requested")
     if silences:
         shorts = [s.model_copy(update=dict(zip(("start", "end"), trim_to_speech(

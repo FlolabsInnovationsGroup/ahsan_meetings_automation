@@ -225,7 +225,7 @@ def _cut_the_week(job, update):
     done.meeting_date = m.team_day
     job_dir = get_settings().jobs_dir / job.job_id
     # the owner's "2 Shorts per meeting": the cut makes as many as that
-    count = pub_settings.current().shorts_per_meeting
+    count = min(pub_settings.current().shorts_per_meeting, 2)  # the fixture has two clips
     for k in range(count + 1, 4):
         done.artifacts.pop(f"shorts/short_{k:02d}.mp4", None)
         (job_dir / "shorts" / f"short_{k:02d}.mp4").unlink(missing_ok=True)

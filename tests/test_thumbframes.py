@@ -169,3 +169,113 @@ def test_real_clip_scores_and_extracts(tmp_path):
         [get_settings().ffmpeg_bin, "-hide_banner", "-i", str(out), "-f", "null", "-"], timeout=30
     )
     assert "1280x720" in probe.stderr
+
+
+# ------------------------------------------------------------ the slide crop
+
+
+def _screen(w=1280, h=720, slide=(250, 100, 800, 450), inner=None):
+    """A grey frame: dark screen, a light slide, a dark toolbar on top."""
+    g = np.full((h, w), 34, np.uint8)
+    g[:70] = 68
+    x, y, sw, sh = slide
+    g[y:y + sh, x:x + sw] = 235
+    return g
+
+
+def test_the_layouts_box_grows_to_the_slides_own_border():
+    full = _screen()
+    small = np.array(full[::3, ::3])  # the 480-wide copy the layout works on is about this
+    sx, sy = 1280 / small.shape[1], 720 / small.shape[0]
+    # a layout box that ends inside the slide (right side) and above its bottom edge
+    x, y, w, h = tf._grow_to_edges(small, (250, 100, 500, 300), 1280, 720)
+    assert abs(x - (250 + tf.SLIDE_TRIM)) <= 2 * sx and abs(y - (100 + tf.SLIDE_TRIM)) <= 2 * sy
+    assert abs((x + w) - (1050 - tf.SLIDE_TRIM)) <= 2 * sx and abs((y + h) - (550 - tf.SLIDE_TRIM)) <= 2 * sy
+
+
+def test_a_box_that_is_already_the_slide_stays_the_slide():
+    small = np.array(_screen()[::3, ::3])
+    _x, _y, w, h = tf._grow_to_edges(small, (250, 100, 800, 450), 1280, 720)
+    assert abs(w - (800 - 2 * tf.SLIDE_TRIM)) <= 8 and abs(h - (450 - 2 * tf.SLIDE_TRIM)) <= 8
+
+
+class _Lay:
+    def __init__(self, kind="screen", panel=(250, 100, 800, 448), from_edges=True, stamp=None):
+        self.kind, self.panel, self.stamp = kind, panel, stamp
+        self.metrics = {"panel_from_edges": from_edges}
+
+
+def _patch_layout(monkeypatch, lay, frame=None):
+    from slice import layout
+
+    frame = _screen() if frame is None else frame
+    monkeypatch.setattr(layout, "analyse_clip", lambda *a, **k: lay)
+    monkeypatch.setattr(layout, "sample_frames", lambda *a, **k: np.array(frame[::3, ::3])[None])
+
+
+def test_the_slide_crop_is_the_slide_on_a_shared_screen(monkeypatch):
+    _patch_layout(monkeypatch, _Lay())
+    x, y, w, h = tf.slide_crop("x.mp4", 30.0, 1280, 720)
+    assert abs(x - 250) <= 12 and abs(y - 100) <= 12 and abs(w - 800) <= 20 and abs(h - 450) <= 20
+    assert abs(w / h - 16 / 9) < 0.1
+
+
+@pytest.mark.parametrize("lay", [
+    _Lay(kind="gallery"),  # people: a face could be cut in half
+    _Lay(kind="speaker"),
+    _Lay(kind="fit"),
+    _Lay(from_edges=False),  # a box that did not come from picture edges is not trusted
+])
+def test_no_slide_crop_when_the_clip_is_not_a_screen_or_the_box_is_a_guess(monkeypatch, lay):
+    _patch_layout(monkeypatch, lay)
+    assert tf.slide_crop("x.mp4", 30.0, 1280, 720) is None
+
+
+def test_no_slide_crop_for_a_box_that_is_too_small_or_not_slide_shaped(monkeypatch):
+    _patch_layout(monkeypatch, _Lay(panel=(250, 100, 100, 60)), _screen(slide=(250, 100, 100, 60)))
+    assert tf.slide_crop("x.mp4", 30.0, 1280, 720) is None
+    tall = _screen(slide=(400, 80, 300, 620))
+    _patch_layout(monkeypatch, _Lay(panel=(400, 80, 300, 620)), tall)
+    assert tf.slide_crop("x.mp4", 30.0, 1280, 720) is None
+
+
+def test_the_burned_in_timestamp_stays_out_of_the_slide(monkeypatch):
+    frame = _screen(slide=(250, 100, 800, 540))
+    _patch_layout(monkeypatch, _Lay(panel=(250, 100, 800, 536), stamp=(900, 600, 140, 30)), frame)
+    _x, y, _w, h = tf.slide_crop("x.mp4", 30.0, 1280, 720)
+    assert y + h <= 600
+
+
+def test_the_slide_crop_never_raises(monkeypatch):
+    from slice import layout
+
+    def boom(*a, **k):
+        raise OSError("ffmpeg")
+
+    monkeypatch.setattr(layout, "analyse_clip", boom)
+    assert tf.slide_crop("x.mp4", 30.0, 1280, 720) is None
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg not installed")
+def test_a_real_shared_screen_is_cropped_to_its_slide_and_a_busy_picture_is_not(tmp_path):
+    from core.proc import run_checked
+
+    ffmpeg = get_settings().ffmpeg_bin
+    shared = tmp_path / "share.mp4"
+    graph = ("color=c=0x222222:s=1280x720:r=10:d=24,drawbox=x=0:y=0:w=1280:h=70:color=0x444466:t=fill,"
+             "drawbox=x=250:y=100:w=800:h=450:color=0xf2f0e6:t=fill,"
+             "drawbox=x=300:y=150:w=160:h=80:color=0x10a0a0:t=fill:enable='lt(mod(t,1.5),0.7)'")
+    run_checked([ffmpeg, "-hide_banner", "-y", "-f", "lavfi", "-i", graph,
+                 "-g", "20", "-pix_fmt", "yuv420p", str(shared)], timeout=60)
+    box = tf.slide_crop(shared, 12.0, 1280, 720)
+    assert box is not None
+    x, y, w, h = box
+    assert abs(x - 250) <= 12 and abs(y - 100) <= 12 and abs(x + w - 1050) <= 12 and abs(y + h - 550) <= 12
+    out = tmp_path / "base.jpg"
+    tf.extract(shared, 12.0, box, out)
+    probe = run_checked([ffmpeg, "-hide_banner", "-i", str(out), "-f", "null", "-"], timeout=30)
+    assert "1280x720" in probe.stderr
+    busy = tmp_path / "busy.mp4"  # moving test pattern: not a screen share
+    run_checked([ffmpeg, "-hide_banner", "-y", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=10:d=24",
+                 "-g", "20", "-pix_fmt", "yuv420p", str(busy)], timeout=60)
+    assert tf.slide_crop(busy, 12.0, 1280, 720) is None

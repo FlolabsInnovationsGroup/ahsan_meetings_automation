@@ -15,6 +15,7 @@ with the topic.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, fields
 
 from ledger import prefs
@@ -28,6 +29,7 @@ _CHOICES: dict[str, tuple[str, ...]] = {
     "shorts_screen_zoom": ("whole_slide", "zoom"),
     "shorts_speaker_layout": ("full", "panel"),
     "thumbnail_mode": ("off", "test", "custom"),
+    "thumbnail_design": ("smart", "frame_only", "card_only"),
     "series_mode": ("allow_list", "allow_all"),
     "series_archive_privacy": ("unlisted", "skip"),
     "shorts_link_target": ("topic", "full"),
@@ -41,29 +43,37 @@ class Publishing:
     # Upload public videos as private with a time YouTube makes them public
     # (status.publishAt), spread out by the rules below. Off = public at once.
     scheduled: bool = True
-    # The first slot is at least this long after the upload, so a mistake can
-    # be caught in YouTube Studio before anyone sees it.
-    review_hours: float = 12.0
+    # The first slot is at least this long after the upload. 0 = no waiting
+    # period (nobody reviews); schedule.MIN_LEAD still keeps a slot ahead of
+    # now, because YouTube needs that. Raise it to leave time to catch a
+    # mistake in YouTube Studio before anyone sees it.
+    review_hours: float = 0.0
     # At least this long between two videos going public.
     min_gap_hours: float = 2.0
     # At most this many videos go public on one day (team time zone)...
-    max_per_day: int = 6
-    # ...of which at most this many are Shorts.
-    shorts_per_day: int = 3
+    max_per_day: int = 11
+    # ...of which at most this many are Shorts...
+    shorts_per_day: int = 5
+    # ...at most this many are full meetings...
+    full_per_day: int = 3
+    # ...and at most this many are topic videos.
+    topic_per_day: int = 3
     # Slots only between these hours (team time zone, settings.local_timezone);
-    # start < end, end is exclusive.
-    window_start_hour: int = 10
-    window_end_hour: int = 22
+    # start < end, end is exclusive; 0 to 24 = all day.
+    window_start_hour: int = 0
+    window_end_hour: int = 24
     # A meeting's Shorts go public at least this long after its full video,
     # so the link in each Short points at a video that is already public.
-    shorts_after_full_hours: float = 24.0
+    shorts_after_full_hours: float = 1.0
     # A video with no free slot within this many days is not uploaded; it
     # waits for a person (Publish button).
     max_days_ahead: int = 7
 
     # --- what is made and posted ------------------------------------------
-    # Shorts cut per meeting (at most SHORTS_COUNT from .env).
-    shorts_per_meeting: int = 2
+    # The most Shorts cut per meeting. Every Short that meets the quality bar
+    # is used, up to this number (a safety cap on render time). This setting
+    # decides the count; SHORTS_COUNT from .env no longer caps it.
+    shorts_per_meeting: int = 10
     # The autopilot holds a meeting for a person instead of posting it when
     # its final video is longer / shorter than this (minutes; 0 = no limit).
     hold_over_minutes: float = 120.0
@@ -76,6 +86,9 @@ class Publishing:
     title_style: str = "topic_first"
     # A few hashtags at the end of each description.
     hashtags: bool = True
+    # The most hashtags on one video (0 = none). YouTube shows the first 3 above
+    # the title and ignores all of them past 60.
+    hashtags_max: int = 8
     # Added at the end of every full video's description (website, socials).
     links_text: str = ""
 
@@ -116,6 +129,13 @@ class Publishing:
     thumbnail_shorts: bool = False
     thumbnail_faces: bool = False
     thumbnail_label: bool = True
+    # "smart": a real frame when the recording gave a good one (slides, demos,
+    # hardware), else a designed card; "frame_only": real frames only (no
+    # frame = YouTube's own picture); "card_only": always a designed card.
+    thumbnail_design: str = "smart"
+    # Let the AI (one call per card, the app's configured provider) design the
+    # card of a video without a good frame; off = a card from the topic title.
+    thumbnail_ai: bool = True
 
     # --- caption tracks --------------------------------------------------------
     captions_full: bool = True
@@ -169,6 +189,8 @@ _RANGES: dict[str, tuple[float, float]] = {
     "min_gap_hours": (0, 24),
     "max_per_day": (1, 24),
     "shorts_per_day": (0, 24),
+    "full_per_day": (0, 24),
+    "topic_per_day": (0, 24),
     "window_start_hour": (0, 23),
     "window_end_hour": (1, 24),
     "shorts_after_full_hours": (0, 168),
@@ -188,6 +210,7 @@ _RANGES: dict[str, tuple[float, float]] = {
     "quota_daily_units": (1000, 1000000),
     "quota_reserve_units": (0, 9000),
     "extras_retry_days": (1, 30),
+    "hashtags_max": (0, 15),
 }
 END_LINE_LIMIT = 40  # characters
 PLAYLIST_LIMIT = 150  # characters, with a 50-character series filled in
@@ -265,6 +288,9 @@ def _cross_check(values: dict) -> None:
         raise ValueError("The release window must start before it ends.")
     if values["shorts_per_day"] > values["max_per_day"]:
         raise ValueError("Shorts per day can't be more than videos per day.")
+    for name, label in (("full_per_day", "Full meetings"), ("topic_per_day", "Topic videos")):
+        if values[name] > values["max_per_day"]:
+            raise ValueError(f"{label} per day can't be more than videos per day.")
     if values["topic_min_minutes"] >= values["topic_max_minutes"]:
         raise ValueError("A topic cut's shortest length must be less than its longest.")
     if values["quota_reserve_units"] >= values["quota_daily_units"]:
@@ -279,6 +305,9 @@ def _cross_check(values: dict) -> None:
 WEEKLY_MEETINGS = 9
 # About what share of meetings make a topic cut (score and length rules).
 TOPIC_SHARE = 0.6
+# About how many Shorts a meeting really yields: the quality bar, not the
+# "Shorts per meeting" cap, decides, and few moments clear it.
+TYPICAL_SHORTS = 3
 
 
 def capacity_warning(p: Publishing | None = None) -> str | None:
@@ -288,11 +317,17 @@ def capacity_warning(p: Publishing | None = None) -> str | None:
     p = p or current()
     if not p.scheduled:
         return None
-    shorts = WEEKLY_MEETINGS * p.shorts_per_meeting
+    shorts = WEEKLY_MEETINGS * min(p.shorts_per_meeting, TYPICAL_SHORTS)
     if shorts > 7 * p.shorts_per_day:
-        return (f"About {WEEKLY_MEETINGS} public meetings a week with {p.shorts_per_meeting} Shorts each is "
+        return (f"About {WEEKLY_MEETINGS} public meetings a week with {min(p.shorts_per_meeting, TYPICAL_SHORTS)} Shorts each is "
                 f"{shorts} Shorts, but only {7 * p.shorts_per_day} fit in a week: some Shorts would be skipped.")
+    if WEEKLY_MEETINGS > 7 * p.full_per_day:
+        return (f"About {WEEKLY_MEETINGS} public meetings a week, but only {7 * p.full_per_day} full meetings "
+                f"fit in a week: some would be skipped.")
     cuts = WEEKLY_MEETINGS * TOPIC_SHARE * p.topic_cuts_per_meeting if p.topic_cuts else 0
+    if cuts > 7 * p.topic_per_day:
+        return (f"About {round(cuts)} topic videos a week, but only {7 * p.topic_per_day} fit in a week: "
+                f"some would be skipped.")
     videos = WEEKLY_MEETINGS + cuts + shorts
     if videos > 7 * p.max_per_day:
         if not cuts:
@@ -301,7 +336,7 @@ def capacity_warning(p: Publishing | None = None) -> str | None:
         return (f"About {WEEKLY_MEETINGS} public meetings a week with topic cuts make about {round(videos)} videos, "
                 f"but only {7 * p.max_per_day} fit in a week: some would be skipped.")
     if p.min_gap_hours > 0:
-        fit = int((p.window_end_hour - p.window_start_hour) // p.min_gap_hours) + 1
+        fit = math.ceil((p.window_end_hour - p.window_start_hour) / p.min_gap_hours - 1e-9)  # slots start, start+gap, ... < end
         if fit < p.max_per_day:
             return (f"Only {fit} videos fit in the release hours with {p.min_gap_hours:g} h between them, "
                     f"but videos per day is {p.max_per_day}.")

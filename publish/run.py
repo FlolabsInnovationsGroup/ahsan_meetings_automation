@@ -626,8 +626,8 @@ def _after_published(gap_hours: float, *items: uploads.Item | None) -> datetime 
 def _slot_for(item: uploads.Item, not_before: datetime | None, cfg, *, quiet: bool = False) -> schedule.Booking | None:
     """The slot an item goes public in. A cut-off upload carries on through
     the link it started with, so it keeps the time that was fixed then and
-    books nothing new, but only while that time still leaves the full review
-    time (a video must never go public without review). When it doesn't, a
+    books nothing new, but only while that time still leaves the lead time
+    (the review time, at least schedule.MIN_LEAD: never a publishAt in the past). When it doesn't, a
     new slot is booked here and the upload (publish/once.py) drops the old link
     for a new one, unless YouTube turns out to hold the video already. None
     when there is no free slot. `quiet`: the video never tells subscribers (the
@@ -641,7 +641,7 @@ def _slot_for(item: uploads.Item, not_before: datetime | None, cfg, *, quiet: bo
     if (held is not None and held.state in ("interrupted", "uploading") and held.session_uri
             and held.job_id == item.job_id and held.publish_at):
         at = datetime.fromisoformat(held.publish_at)
-        earliest = now + timedelta(hours=cfg.review_hours)
+        earliest = now + schedule.lead(cfg)
         if not_before is not None:
             earliest = max(earliest, not_before)
         if at >= earliest:
@@ -672,7 +672,7 @@ def _after_full(full_item: uploads.Item, cfg, front_item: uploads.Item | None = 
     later, when that one is on the channel with a release time. None = no such
     wait (it went up right away, or isn't posted from here)."""
     # Also after the full video went public: schedule.book takes the later of
-    # this and now + review_hours, so a long-past full video adds no wait.
+    # this and now + the lead time, so a long-past full video adds no wait.
     return _after_published(cfg.shorts_after_full_hours, full_item, front_item)
 
 
@@ -733,11 +733,13 @@ def _release_slot(item: uploads.Item) -> None:
 
 
 def _upload_fields(job: JobRecord, cfg, slot: schedule.Booking | None, *, item: uploads.Item | None = None,
-                   title: str = "", description: str = "") -> dict:
+                   title: str = "", description: str = "", tags: Sequence[str] = ()) -> dict:
     """What every upload carries besides its words: the owner's category and
     language, the meeting's day, and (release plan) when it goes public."""
     fields = {"category_id": cfg.category_id, "language": cfg.language,
               "recording_date": naming.meeting_date(job)}
+    if tags:
+        fields["tags"] = list(tags)  # the hidden search tags (publish/once.py adds the marker)
     if slot is not None:
         fields.update(publish_at=slot.at, notify=slot.notify)
     if item is not None and getattr(cfg, "translations", False) and cfg.language:
@@ -820,7 +822,8 @@ def _upload_short(job: JobRecord, update: Update, short: ShortPlan, plan: Publis
             item, lambda: media.open_media(job, media.short_member(short.index)),
             title=short.title, description=short.description, privacy=plan.privacy, by=plan.by,
             on_progress=progress,
-            **_upload_fields(job, cfg, slot, item=item, title=short.title, description=short.description),
+            **_upload_fields(job, cfg, slot, item=item, title=short.title, description=short.description,
+                             tags=describe.search_tags(job, "short", short.index)),
         )
     except uploads.Refused as exc:
         if exc.upload.key == item.key and exc.upload.state == "published":
@@ -884,7 +887,8 @@ def _upload_topic(job: JobRecord, update: Update, cut: TopicPlan, plan: PublishP
             item, lambda: media.open_media(job, _topic_member(cut.index)),
             title=cut.title, description=description, privacy=plan.privacy, by=plan.by,
             on_progress=progress,
-            **_upload_fields(job, cfg, slot, item=item, title=cut.title, description=description),
+            **_upload_fields(job, cfg, slot, item=item, title=cut.title, description=description,
+                             tags=describe.search_tags(job, "topic", cut.index)),
         )
     except uploads.Refused as exc:
         if exc.upload.key == item.key and exc.upload.state == "published":
@@ -938,7 +942,8 @@ def _upload_full(job: JobRecord, update: Update, full: FullPlan, plan: PublishPl
         posted = once.upload_once(
             item, lambda: media.open_media(job, member),
             title=full.title, description=description, privacy=plan.privacy, by=plan.by, on_progress=progress,
-            **_upload_fields(job, cfg, slot, item=item, title=full.title, description=description),
+            **_upload_fields(job, cfg, slot, item=item, title=full.title, description=description,
+                             tags=describe.search_tags(job, "full")),
         )
     except uploads.Refused as exc:
         if exc.upload.key == item.key and exc.upload.state == "published":

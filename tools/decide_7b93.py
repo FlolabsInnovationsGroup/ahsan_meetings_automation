@@ -91,7 +91,7 @@ def main() -> int:
     reel_edl = build_edl([Decision(start=m.start, end=m.end, decision="keep") for m in reel], words, DURATION,
                          fps=FPS, fade_frames=d, min_segment_s=settings.highlights_min_moment_s,
                          full_video_fallback=False, total_frames=TOTAL_FRAMES, min_gap_s=2.0) if reel else None
-    shorts = select_shorts(moments, judgments, count=settings.shorts_count, min_s=settings.shorts_min_s,
+    shorts = select_shorts(moments, judgments, min_s=settings.shorts_min_s,
                            max_s=settings.shorts_max_s, preferred_categories=settings.shorts_categories)
 
     kept_s = sum(r.end - r.start for r in edl.ranges)

@@ -59,6 +59,13 @@ RUN useradd --create-home --uid 1000 app \
 
 COPY --chown=app:app . .
 
+# The thumbnail font (Montserrat, SIL OFL: assets/fonts/) comes in with the COPY
+# above. .dockerignore must not exclude it; the build stops if a file is missing
+# (the thumbnails would fall back to a thinner font).
+RUN test -f assets/fonts/Montserrat-ExtraBold.ttf \
+    && test -f assets/fonts/Montserrat-SemiBold.ttf \
+    && test -f assets/fonts/OFL.txt
+
 USER app
 ENV STORAGE_DIR=/data \
     HF_HOME=/home/app/.cache/huggingface \

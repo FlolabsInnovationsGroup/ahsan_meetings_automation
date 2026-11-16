@@ -47,6 +47,9 @@ def _at(video) -> datetime:
 
 
 def test_a_public_upload_goes_up_private_full_video_first_then_the_shorts(channel):
+    # this test is about the cautious plan (12 h review, Shorts a day after the full video); the defaults are faster
+    pub_settings.save({"review_hours": 12, "shorts_after_full_hours": 24, "window_start_hour": 10,
+                       "window_end_hour": 22})
     job = _finished_job()
     _, stopped = _run(job)
     assert stopped is None
@@ -341,7 +344,7 @@ def test_the_posted_list_carries_the_time_it_goes_public(client, channel):
 def test_the_publish_options_tell_the_page_about_the_plan(client, channel):
     job = _finished_job()
     body = client.get(f"/jobs/{job.job_id}/publish").json()
-    assert body["release"]["scheduled"] is True and body["release"]["review_hours"] == 12
+    assert body["release"]["scheduled"] is True and body["release"]["review_hours"] == 0  # no waiting period by default
     _run(job)
     again = client.get(f"/jobs/{job.job_id}/publish").json()
     assert again["full"]["publish_at"] and all(s["publish_at"] for s in again["shorts"] if s["status"])

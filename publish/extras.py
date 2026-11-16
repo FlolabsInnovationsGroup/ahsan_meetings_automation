@@ -46,6 +46,7 @@ _lock = threading.RLock()  # the saved list
 _run_lock = threading.Lock()  # one run_due at a time
 _builders: dict[str, Callable] = {}
 _runners: dict[str, Callable] = {}
+_once: list[tuple[str, str, Callable]] = []  # (kind, name, pass): one-time clean-ups, see register_once
 _loaded = False
 
 
@@ -111,7 +112,8 @@ def _read() -> dict:
         if isinstance(raw, dict) and raw.get("kind") and raw.get("id"):
             tasks.append({k: v for k, v in raw.items() if k in names})
     blocked = data.get("blocked") if isinstance(data.get("blocked"), dict) else {}
-    return {"tasks": tasks, "blocked": blocked}
+    once = data.get("once") if isinstance(data.get("once"), dict) else {}
+    return {"tasks": tasks, "blocked": blocked, "once": once}
 
 
 def _write(state: dict) -> None:
@@ -171,6 +173,52 @@ def _remove_file(task: Task) -> None:
 def register(kind: str, builder: Callable, runner: Callable) -> None:
     _builders[kind] = builder
     _runners[kind] = runner
+
+
+def register_once(kind: str, name: str, fn: Callable) -> None:
+    """A clean-up that runs one time, the first time the queue runs after a
+    deploy (while `kind` has a runner), and is then marked done in the saved
+    state under `name`. `fn()` returns False when something failed and it
+    should be tried again on the next run; anything else marks it done."""
+    _once[:] = [row for row in _once if row[1] != name]
+    _once.append((kind, name, fn))
+
+
+def _once_passes() -> None:
+    for kind, name, fn in _once:
+        if kind not in _runners:
+            continue
+        with _lock:
+            if _read()["once"].get(name):
+                continue
+        try:
+            finished = fn() is not False
+        except Exception:
+            logger.exception("one-time follow-up pass %s failed", name)
+            continue
+        if finished:
+            with _lock:
+                state = _read()
+                state["once"][name] = _iso(_now())
+                _write(state)
+
+
+def replace_picture(task_id: str, source: Path | str, data: dict) -> bool:
+    """Put a task back in the queue, due now, with a new picture and new data
+    (its retry window starts over). False when the id is unknown."""
+    with _lock:
+        state = _read()
+        for raw in state["tasks"]:
+            if raw["id"] == task_id:
+                old = raw.get("file")
+                new = stash_file(task_id, source, "jpg")
+                if old and old != new:
+                    _remove_file(_task(raw))
+                now = _iso(_now())
+                raw.update(file=new, data=data, state=WAITING, reason="", attempts=0, not_before=now, created_at=now)
+                _write(state)
+                return True
+    return False
 
 
 def _load_features() -> None:
@@ -329,6 +377,7 @@ def _run(now: datetime) -> int:
     from publish import quota
 
     _load_features()
+    _once_passes()
     _expire(now)
     with _lock:
         state = _read()

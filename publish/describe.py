@@ -328,7 +328,6 @@ _LEADING_TIME = re.compile(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\s*")
 _ANY_TIME = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?!\d)")
 _CLOCK_TIME = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?!\d)(?:\s*[ap]\.?m\b\.?)?|\b\d{1,2}\s*[ap]m\b", re.IGNORECASE)
 _CHAPTER_LINE = re.compile(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\s+(.+?)\s*$")
-_HASHTAG_MAX = 3
 _BRAND_TAG = "#FloLabs"
 
 
@@ -521,21 +520,24 @@ def _posted_titles() -> set[str]:
 
 
 def _title_candidates(job: JobRecord, label: str | None = None) -> list[str]:
-    """The topic-first titles this meeting could get, best first: the plain
-    "<moment> | FloLabs <Series>", then the same with the day added."""
+    """The topic-first title this meeting gets: "<moment> | FloLabs <Series> — <day>".
+    The day is always there; only the moment is shortened to fit TITLE_LIMIT."""
     label = label or series_label(job)
     room = TITLE_LIMIT - len(label) - 3
     moment, _ = _best_moment(job)
     if not moment or room < 15:
         return []
     day = meeting_date(job)
-    return [f"{one_line(moment, room)} | {label}", f"{one_line(moment, room - len(day) - 3)} ({day}) | {label}"]
+    room -= len(day) + 3  # " — <day>"
+    if room < 15:
+        return []
+    return [f"{one_line(moment, room)} | {label} — {day}"]
 
 
 def title_variants(job: JobRecord) -> set[str]:
     """Every title the full video of this job may carry, lower-cased, ignoring
     what is already posted. The autopilot's duplicate check compares these, so
-    the day-adding dodge in full_title cannot hide a repeat."""
+    a repeat can't hide behind a changed team name."""
     if pub_settings.current().title_style != "topic_first":
         return {_title_meeting_date(job).lower()}
     # both the team-list name and the old name taken from the meeting's title,
@@ -545,7 +547,7 @@ def title_variants(job: JobRecord) -> set[str]:
 
 
 def full_title(job: JobRecord) -> str:
-    """The full video's title: "<best moment> | FloLabs <Series>" (topic_first),
+    """The full video's title: "<best moment> | FloLabs <Series> — <day>" (topic_first),
     or the meeting's name and day (meeting_date)."""
     if pub_settings.current().title_style != "topic_first":
         return _title_meeting_date(job)
@@ -571,12 +573,219 @@ def _chapter_entries(job: JobRecord) -> list[str]:
     return [one_line(m[1]) for m in found if m]
 
 
-def _hashtags(job: JobRecord, extra: str = "") -> str:
+# What a team is about -> (hashtag, plain search word) pairs; the first rule whose
+# keyword is a word of the team's name wins. A team no rule knows gets the last row.
+_FIELD_RULES: tuple[tuple[tuple[str, ...], tuple[tuple[str, str], ...]], ...] = (
+    (("humanoid",), (("#HumanoidRobots", "Humanoid Robots"), ("#Robotics", "Robotics"))),
+    (("robotics", "robotic", "robot"), (("#Robotics", "Robotics"), ("#Engineering", "Engineering"))),
+    (("iot", "internet of things"), (("#IoT", "IoT"), ("#EmbeddedSystems", "Embedded Systems"))),
+    (("space",), (("#SpaceTech", "Space Tech"), ("#Astronomy", "Astronomy"))),
+    (("perception", "vision"), (("#ComputerVision", "Computer Vision"), ("#AI", "AI"))),
+    (("flobrain", "backend"), (("#AI", "AI"), ("#Backend", "Backend"))),
+    (("moodchanger",), (("#MentalHealth", "Mental Health"), ("#AppDevelopment", "App Development"))),
+    (("neuroscience",), (("#Neuroscience", "Neuroscience"),)),
+    (("automation",), (("#Automation", "Automation"), ("#AI", "AI"))),
+    (("design",), (("#Design", "Design"), ("#UX", "UX"))),
+    (("data", "analytics"), (("#DataAnalytics", "Data Analytics"),)),
+    (("frontend",), (("#WebDevelopment", "Web Development"),)),
+    (("ai",), (("#AI", "AI"), ("#MachineLearning", "Machine Learning"))),
+)
+_BRAND_SPELLINGS = ("FloLabs", "Flolabs", "FloLabs Innovations", "Flomad Labs")
+_FIELD_UNKNOWN =(("#Tech", "Tech"), ("#Innovation", "Innovation"))
+_HASHTAG_SHAPE = re.compile(r"#[A-Za-z0-9]{1,29}")
+_NAME_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+_SENTENCE_BREAK = re.compile(r"[.!?:;|\n]\s*|\s[—–-]\s")
+_EDGE_PUNCT = ".,;:!?()[]{}\"'“”‘’*_"
+_ORDINAL = re.compile(r"\d+(?:st|nd|rd|th)", re.IGNORECASE)
+_NOT_NAMES = {
+    # little words and question words that start sentences
+    "the", "and", "but", "for", "nor", "yet", "our", "your", "his", "her", "its", "their", "she", "they",
+    "why", "how", "what", "when", "where", "who", "whom", "whose", "which", "this", "that", "these", "those",
+    "there", "here", "then", "than", "with", "from", "into", "onto", "over", "under", "about", "after",
+    "before", "while", "because", "since", "also", "just", "only", "still", "next", "last", "first", "second",
+    "third", "new", "old", "open", "some", "any", "all", "most", "more", "much", "many", "one", "two", "three",
+    "let", "lets", "can", "could", "should", "would", "will", "may", "might", "must", "yes", "not", "now",
+    "today", "tomorrow", "yesterday", "tonight", "again", "maybe", "sure", "okay", "please", "thanks",
+    # meeting words
+    "meeting", "meetings", "team", "weekly", "daily", "sync", "call", "standup", "update", "updates", "highlights",
+    "highlight", "summary", "overview", "intro", "introduction", "agenda", "questions", "question", "discussion",
+    "review", "plan", "plans", "status", "demo", "goals", "goal", "notes", "topic", "topics", "recap", "welcome",
+    "steps", "step", "wrap", "outro", "closing", "action", "items", "item", "progress", "decision", "decisions",
+    "short", "shorts", "clip", "video", "part", "session", "sessions", "week", "month", "year",
+    # days and months
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march",
+    "april", "june", "july", "august", "september", "october", "november", "december",
+    # the brand is a hashtag of its own
+    "flolabs", "flomad", "flomadlabs",
+}
+# Plain capitalised words are taken only when they are a known tool, never for the capital alone.
+_KNOWN_TOOLS = {
+    "redis", "kafka", "docker", "postgres", "grafana", "nginx", "celery", "pytest", "vite", "kubernetes",
+    "python", "rust", "linux", "ubuntu", "arduino", "raspberry", "jetson", "ros", "opencv", "pytorch",
+    "tensorflow", "numpy", "pandas", "fastapi", "django", "flask", "react", "vue", "angular", "svelte",
+    "mongodb", "sqlite", "mysql", "rabbitmq", "terraform", "ansible", "jenkins", "github", "gitlab",
+    "zoom", "youtube", "whisper", "whisperx", "ffmpeg", "unity", "unreal", "blender", "gazebo", "esp",
+}
+_NOT_ACRONYMS = {"ok", "us", "uk", "it", "vs", "pm", "am", "and", "the", "not", "why", "how", "faq", "tbd", "eta", "fyi"}
+
+
+def _ground_set(text: str) -> tuple[set[str], str]:
+    low = text.lower()
+    return set(re.findall(r"[a-z0-9]+", low)), re.sub(r"[^a-z0-9]", "", low)
+
+
+def _said(word: str, tokens: set[str], compact: str) -> bool:
+    """Whether a name is spoken in the clip: as a word, as a close stem of one, or
+    (for names with digits, "ESP 32") with the spaces taken out."""
+    low = word.lower()
+    if low in tokens:
+        return True
+    if len(low) >= 5 and low.isalpha() and low[:5] in {t[:5] for t in tokens if len(t) >= 5}:
+        return True
+    return any(c.isdigit() for c in low) and low in compact
+
+
+def _name_like(word: str) -> str | None:
+    """Why a word looks like a name or a tool ("digit", "camel", "acronym", "tool"), or None.
+    A plain capitalised word ("Sarah", "Battery") never counts on its capital
+    alone: it has to be on the known-tools list."""
+    if not _NAME_WORD.fullmatch(word) or len(word) > 29:
+        return None
+    if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9]*", word) and not _ORDINAL.fullmatch(word):
+        return "digit" if len(word) >= 3 else None
+    if re.search(r"[a-z][A-Z]", word):
+        return "camel"
+    if re.fullmatch(r"[A-Z]{2,6}", word):
+        return None if word.lower() in _NOT_ACRONYMS else "acronym"
+    if re.fullmatch(r"[A-Z][a-z]{2,}", word) and word.lower() in _KNOWN_TOOLS:
+        return "tool"
+    return None
+
+
+def _names_in(text: str) -> list[str]:
+    """The words of `text` that look like tools: a digit inside ("ESP32"),
+    CamelCase ("FloBrain", "IoT"), a 2-6 letter all-caps acronym ("MQTT") or a
+    known tool ("Redis"). Other capitalised words are never taken (they may be
+    people or Title Case)."""
+    found: list[str] = []
+    for sentence in _SENTENCE_BREAK.split(text):
+        for raw in sentence.split():
+            word = raw.strip(_EDGE_PUNCT)
+            if _name_like(word) is not None and word.lower() not in _NOT_NAMES:
+                found.append(word)
+    return found
+
+
+def _named_words(job: JobRecord, kind: str, index: int | None = None, limit: int = 10) -> list[str]:
+    """The names and tools actually said in a video, as written ("ESP32", "Redis"),
+    in the order of its title, hook and chapter titles. A word has to be said in
+    the clip's own text (when the render kept it), never names a person who spoke,
+    and is never a never-post word. A video's own chapter titles are trusted."""
+    try:
+        from autopilot import never_post  # here: this module is imported early
+
+        texts: list[tuple[str, bool]] = []  # (text, to be checked against what was said)
+        spoken = ""
+        if kind == "full":
+            title, why = _best_moment(job)
+            texts = [(title, True), (why, True)]
+            spoken = " . ".join([s.text for s in load_shorts(job)] + [t.text for t in load_topics(job)])
+            chapters = _chapter_entries(job)[1:]
+        elif kind == "topic":
+            info = next((t for t in load_topics(job) if t.index == index), None)
+            if info is None:
+                return []
+            texts, spoken = [(info.title, True), (info.hook, True), (info.screen_hook, True)], info.text
+            chapters = [c[1] for c in info.chapters[1:]]
+        else:
+            info = next((s for s in load_shorts(job) if s.index == index), None)
+            if info is None:
+                return []
+            texts, spoken, chapters = [(info.title, True), (info.hook, True)], info.text, []
+        texts += [(c, False) for c in chapters]
+        tokens, compact = _ground_set(spoken)
+        people = _speaker_names(job)
+        found: list[str] = []
+        for text, check in texts:
+            for word in _names_in(_ANGLE.sub(" ", text or "")):
+                low = word.lower()
+                if low in {w.lower() for w in found} or low in people or low == "shorts":
+                    continue
+                if check and spoken.strip() and not _said(word, tokens, compact):
+                    continue
+                if never_post.match_words(word) is not None:
+                    continue
+                found.append(word)
+        return found[:limit]
+    except Exception:  # a hashtag nicety must never stop a publish
+        logger.warning("could not find the names in job %s's words", getattr(job, "job_id", "?"), exc_info=True)
+        return []
+
+
+def _team_words(job: JobRecord) -> tuple[set[str], str]:
+    name = _team_name(job).lower()
+    return set(re.findall(r"[^\W_]+", name.replace("-", ""))) | set(re.findall(r"[^\W_]+", name)), name
+
+
+def _field_pairs(job: JobRecord) -> tuple[tuple[str, str], ...]:
+    """The field hashtags (with the plain word of each) the team's name points to:
+    robotics -> #Robotics #Engineering ... a team no rule knows -> #Tech #Innovation."""
+    words, name = _team_words(job)
+    for keywords, pairs in _FIELD_RULES:
+        for kw in keywords:
+            if kw in words or (" " in kw and kw in name) or (len(kw) >= 5 and any(w.startswith(kw) for w in words)):
+                return pairs
+    return _FIELD_UNKNOWN
+
+
+def _valid_hashtag(tag: str) -> bool:
+    return _HASHTAG_SHAPE.fullmatch(tag) is not None and any(c.isalpha() for c in tag) and tag.lower() != "#shorts"
+
+
+def _hashtags(job: JobRecord, extra: str | list[str] | tuple[str, ...] = ()) -> str:
+    """Up to the owner's hashtags_max hashtags, space-separated, in this order:
+    #FloLabs, the team, the team's field, then `extra` (the tools and topics said
+    in the video, each "#Name"). Each is letters and digits only, at most 30
+    characters, never #shorts, and appears once (any case). YouTube shows the
+    first three above the title and ignores them all past 60."""
+    limit = pub_settings.current().hashtags_max
+    if limit <= 0:
+        return ""
+    if isinstance(extra, str):
+        extra = extra.split()
     tags: list[str] = []
-    for tag in (_BRAND_TAG, *_series_tag(job).split(), extra):
-        if tag and tag.lower() not in {t.lower() for t in tags} and tag.lower() != "#shorts":
+    seen: set[str] = set()
+    for tag in (_BRAND_TAG, *_series_tag(job).split(), *(h for h, _ in _field_pairs(job)), *extra):
+        if tag and _valid_hashtag(tag) and tag.lower() not in seen:
+            seen.add(tag.lower())
             tags.append(tag)
-    return " ".join(tags[:_HASHTAG_MAX])
+    return " ".join(tags[:limit])
+
+
+def named_hashtags(job: JobRecord, kind: str, index: int | None = None) -> list[str]:
+    """"#Redis", "#ESP32" ... the names said in a full video (kind "full"), a topic
+    cut ("topic") or a Short ("short", with its number)."""
+    return [f"#{w}" for w in _named_words(job, kind, index)]
+
+
+def search_tags(job: JobRecord, kind: str = "full", index: int | None = None, limit: int = 11) -> list[str]:
+    """The hidden search tags (snippet.tags) beside the upload's own marker, as
+    plain words: the brand's spellings, the team, its field and the names said in
+    the video. At most `limit`, no repeats (any case), none with a never-post word."""
+    try:
+        from autopilot import never_post
+
+        found = list(_BRAND_SPELLINGS)  # the spellings people type, kept as they are
+        words = [_team_name(job), *(plain for _, plain in _field_pairs(job)), *_named_words(job, kind, index)]
+        for word in words:
+            word = one_line(word, 100)
+            if word and word.lower() not in {t.lower() for t in found} and word.lower() != "shorts" \
+                    and never_post.match_words(word) is None:
+                found.append(word)
+        return found[:limit]
+    except Exception:  # a tag nicety must never stop a publish
+        logger.warning("could not build search tags for job %s", getattr(job, "job_id", "?"), exc_info=True)
+        return []
 
 
 def _no_times(text: str) -> str:
@@ -618,7 +827,7 @@ def full_description(job: JobRecord) -> str:
     cfg = pub_settings.current()
     chapters = _chapters_text(job)
     summary = "\n".join(_summary_lines(job)) if cfg.title_style == "topic_first" else ""
-    tags = _hashtags(job) if cfg.hashtags else ""
+    tags = _hashtags(job, named_hashtags(job, "full")) if cfg.hashtags else ""
     links = cfg.links_text.strip()
 
     def build(summary_text: str, links_text: str) -> str:
@@ -635,19 +844,13 @@ def full_description(job: JobRecord) -> str:
         text = build(summary, "\n".join(kept))
     if len(text.encode("utf-8")) > budget and summary:
         text = build("", "")
+    if len(text.encode("utf-8")) > budget and tags:  # the chapters are never cut: hashtags give way last
+        for keep in range(len(tags.split()) - 1, 0, -1):
+            tags = " ".join(tags.split()[:keep])
+            text = build("", "")
+            if len(text.encode("utf-8")) <= budget:
+                break
     return text
-
-
-def _topic_tag(title: str) -> str:
-    """A hashtag from a proper noun or tool name in a Short's title ("ESP32",
-    "FloBrain", "IoT"); "" when there is none."""
-    for raw in title.split():
-        word = "".join(c for c in raw if c.isalnum())
-        has_digit = any(c.isdigit() for c in word) and any(c.isalpha() for c in word)
-        camel = re.fullmatch(r"[A-Z]?[a-z]+[A-Z][A-Za-z0-9]*", word) is not None
-        if len(word) >= 3 and (has_digit or camel):
-            return f"#{word}"
-    return ""
 
 
 def _team_name(job: JobRecord) -> str:
@@ -724,7 +927,7 @@ def topic_description(info: TopicInfo, job: JobRecord, full_url: str | None = No
         rest.append(f"Full meeting: {full_url}?t={at}" if at else f"Full meeting: {full_url}")
     intro = "\n\n".join(p for p in (hook, "\n".join(rest)) if p)
     chapters = "\n".join(f"{fmt_clock(t)} {title}" for t, title in topic_chapters(info))
-    tags = _hashtags(job, _topic_tag(info.title)) if cfg.hashtags else ""
+    tags = _hashtags(job, named_hashtags(job, "topic", info.index)) if cfg.hashtags else ""
     links = cfg.links_text.strip()
 
     def build(links_text: str) -> str:
@@ -769,7 +972,7 @@ def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = No
     elif full_url:
         lines.append(full_url)
     if pub_settings.current().hashtags:
-        tags = _hashtags(job, _topic_tag(info.title))
+        tags = _hashtags(job, named_hashtags(job, "short", info.index))
         if tags:
             lines += ["", tags]
     return "\n".join(lines)
@@ -786,7 +989,7 @@ def _short_description_cut(info: ShortInfo, job: JobRecord, cut_url: str, cut_at
     lines.append("The whole topic, from the start:")
     lines.append(f"{cut_url}?t={cut_at_s}" if cut_at_s else cut_url)
     if pub_settings.current().hashtags:
-        tags = _hashtags(job, _topic_tag(info.title))
+        tags = _hashtags(job, named_hashtags(job, "short", info.index))
         if tags:
             lines += ["", tags]
     return "\n".join(lines)

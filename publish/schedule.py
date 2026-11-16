@@ -8,13 +8,15 @@ is uploaded private with a time YouTube makes it public (status.publishAt),
 and this module hands out those times, one slot per video.
 
 The rules (all from the owner's Publishing settings, publish/settings.py):
-- a slot is at least `review_hours` after now, so a mistake can be caught in
-  YouTube Studio before anyone sees the video;
+- a slot is at least `review_hours` after now (0 by default: no waiting
+  period; raise it to leave time to catch a mistake in YouTube Studio), and
+  never less than MIN_LEAD, which YouTube needs (see below);
 - on a quarter hour, inside the daily window in the team's time zone
   (settings.local_timezone; daylight saving is handled by zoneinfo);
 - at least `min_gap_hours` from every other booked video;
 - at most `max_per_day` videos on a team-time calendar day, of which at most
-  `shorts_per_day` are Shorts;
+  `shorts_per_day` are Shorts, at most `full_per_day` full meetings and at
+  most `topic_per_day` topic videos;
 - no further than `max_days_ahead` days out (else no slot: None).
 
 Only the first full video or topic cut booked on a day may notify subscribers;
@@ -23,7 +25,7 @@ follows its topic cut). That keeps to one notification a day.
 
 Bookings live in storage_dir/state/schedule.json. The app can't cancel a
 scheduled video afterwards (that would need a wider YouTube permission); the
-owner can, in YouTube Studio, during the review window.
+owner can, in YouTube Studio, before it goes public.
 """
 
 from __future__ import annotations
@@ -48,6 +50,16 @@ FILE = "schedule.json"
 # Bookings older than this are forgotten on every write.
 KEEP_DAYS = 8
 _STEP = timedelta(minutes=15)
+# The least time between now and a slot. Not a review window: YouTube needs
+# publishAt to be clearly in the future when the upload starts, and an upload
+# takes a while to begin, so a slot "right now" could already be in the past.
+MIN_LEAD = timedelta(minutes=15)
+
+
+def lead(cfg) -> timedelta:
+    """How far ahead of now the earliest slot is: the review time, but never
+    less than MIN_LEAD."""
+    return max(timedelta(hours=cfg.review_hours), MIN_LEAD)
 
 # Read-modify-write of the file happens under this lock, so two uploads
 # booking at once can't be given the same slot.
@@ -166,10 +178,10 @@ def book(
     with _lock:
         bookings = _load()
         mine = next((b for b in bookings if b.key == key), None)
-        # Keep an old slot only while it still leaves the full review time (and
+        # Keep an old slot only while it still leaves the lead time (and
         # respects not_before). One left over from a cut-off upload could be
-        # minutes away now, and a video must never go public without review.
-        earliest = now + timedelta(hours=cfg.review_hours)
+        # minutes away now, or already past, and YouTube would refuse it.
+        earliest = now + lead(cfg)
         if not_before is not None:
             earliest = max(earliest, _now(not_before))
         if mine is not None and mine.at >= earliest:
@@ -189,7 +201,7 @@ def book(
 
 
 def _find(others, kind, cfg, zone, now, not_before) -> datetime | None:
-    earliest = now + timedelta(hours=cfg.review_hours)
+    earliest = now + lead(cfg)
     if not_before is not None:
         earliest = max(earliest, _now(not_before))
     last = now + timedelta(days=cfg.max_days_ahead)
@@ -218,7 +230,10 @@ def _fits(others, kind, cfg, zone, t: datetime, gap: timedelta) -> bool:
     same_day = [b for b in others if _day(b, zone) == day]
     if len(same_day) >= cfg.max_per_day:
         return False
-    return not (kind == "short" and sum(1 for b in same_day if b.kind == "short") >= cfg.shorts_per_day)
+    if kind == "short":
+        return sum(1 for b in same_day if b.kind == "short") < cfg.shorts_per_day
+    limit = cfg.topic_per_day if kind == "topic" else cfg.full_per_day
+    return sum(1 for b in same_day if b.kind == kind) < limit
 
 
 def _day(booking: Booking, zone: tzinfo) -> date:

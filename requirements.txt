@@ -10,6 +10,8 @@ google-genai>=0.3
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
 reportlab>=4.4,<6
+# thumbnails are drawn with Pillow (publish/thumbart.py); reportlab pulls it in too
+pillow>=10.1
 # silence detection (slice/silence.py); EC2 installs no WhisperX/torch to pull it in
 numpy>=1.26
 yt-dlp[default,curl-cffi] @ git+https://github.com/yt-dlp/yt-dlp.git

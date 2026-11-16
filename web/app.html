@@ -2393,7 +2393,7 @@ function updatePublishButton() {
   // public videos are spread out (release plan): say so, and offer the way around it
   const spread = ytPrivacy.value === "public" && !!(o.release && o.release.scheduled);
   const hours = o.release ? Number(o.release.review_hours) : 0;
-  ytSpread.textContent = `Public videos are spread out: each goes public at its own time, at least ${hours} hour${hours === 1 ? "" : "s"} from now (Publishing settings).`;
+  ytSpread.textContent = `Public videos are spread out: each goes public at its own time, ${hours > 0 ? `at least ${hours} hour${hours === 1 ? "" : "s"} from now` : "at the next free slot"} (Publishing settings).`;
   ytSpread.style.display = spread ? "block" : "none";
   ytRightAwayLabel.style.display = spread ? "" : "none";
   ytRightAway.disabled = !!o.busy;
@@ -2769,24 +2769,27 @@ const PUB_CATEGORIES = [["28", "Science & Technology"], ["27", "Education"], ["2
 const PUB_GROUPS = [
   ["When videos go public", [
     ["scheduled", "check", "Spread videos out (schedule them)", "Off: every video goes public as soon as it is uploaded."],
-    ["review_hours", "number", "Hours to check before going public", "Time to catch a mistake before anyone sees the video."],
+    ["review_hours", "number", "Hours to wait before going public", "Hours to wait before going public; 0 = as soon as a slot is free."],
     ["min_gap_hours", "number", "Hours between two videos", "The least time between two videos going public."],
     ["max_per_day", "number", "Videos per day", "The most videos that go public on one day (team time)."],
     ["shorts_per_day", "number", "Shorts per day", "Of those, the most that are Shorts on one day (team time)."],
+    ["full_per_day", "number", "Full meetings per day", "Full meetings per day."],
+    ["topic_per_day", "number", "Topic videos per day", "Topic videos per day."],
     ["window_start_hour", "number", "Release hours from", "Earliest hour (0-23) a video goes public, in the team's time zone."],
     ["window_end_hour", "number", "Release hours to", "Latest hour (1-24), in the team's time zone."],
     ["shorts_after_full_hours", "number", "Hours between a full video and its Shorts", "So the link in each Short points at a video that is already public."],
     ["max_days_ahead", "number", "Days ahead before a video waits for a person", "With no free time that soon, it is not uploaded; you press Publish."],
   ]],
   ["What is posted", [
-    ["shorts_per_meeting", "number", "Shorts per meeting", "0 posts no Shorts."],
+    ["shorts_per_meeting", "number", "Shorts per meeting", "Shorts per meeting: the most to make; every Short that meets the quality bar is used, up to this number."],
     ["hold_over_minutes", "number", "Hold for a person when the video is longer than (minutes)", "0 = never hold."],
     ["hold_under_minutes", "number", "Hold for a person when the video is shorter than (minutes)", "0 = never hold."],
   ]],
   ["Words", [
     ["title_style", "select", "Title style", "How each video is named.",
       [["topic_first", "Topic first, then the team (recommended)"], ["meeting_date", "Meeting name and date"]]],
-    ["hashtags", "check", "Add hashtags", "A few at the end of each description."],
+    ["hashtags", "check", "Add hashtags", "Hashtags at the end of each description."],
+    ["hashtags_max", "number", "Most hashtags per video", "0-15; 0 = none. The brand, the team and the field come first, then tools named in the video. YouTube shows the first 3 above the title."],
     ["links_text", "area", "Links added to every full video's description", "Your website or socials. No < or > signs."],
   ]],
   ["Upload fields", [
@@ -2828,6 +2831,9 @@ const PUB_GROUPS = [
     ["thumbnail_shorts", "check", "Thumbnails on Shorts too", "Set a custom thumbnail on Shorts once YouTube has finished processing them (new in the API, unproven)."],
     ["thumbnail_faces", "check", "Allow faces", "Allow a camera or gallery frame (people's faces) when the moment has no shared screen; off = a text card in the team's colour."],
     ["thumbnail_label", "check", "Add a short label", "A 2-5 word label (from the checked title or hook) and the team chip on the thumbnail."],
+    ["thumbnail_design", "select", "Thumbnail design", "Smart: a real frame when the recording has a good one (slides, demos, hardware), otherwise a designed card with an illustration. Frame only: real frames only, no good frame = YouTube's own picture. Card only: always a designed card.",
+      [["smart", "Smart: frame or designed card (recommended)"], ["frame_only", "Real frames only"], ["card_only", "Designed cards only"]]],
+    ["thumbnail_ai", "check", "Let the AI design cards for videos without a good frame", "One short AI call per card (about a cent); the words must come from the video and are checked like a title. Off = a card from the topic title."],
   ]],
   ["Caption tracks", [
     ["captions_full", "check", "Caption track for full videos", "Our own English caption track from the kept transcript. Needs the reconnect; 400 quota units each."],

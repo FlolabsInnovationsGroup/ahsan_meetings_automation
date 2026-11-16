@@ -2,7 +2,8 @@
 subscribers, the full video follows quietly but is uploaded first), the release plan,
 the never-post checks, and the verdicts. A fake YouTube; synthetic data only."""
 
-from datetime import timedelta
+import dataclasses
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -86,6 +87,28 @@ def test_the_cut_is_the_front_door_the_full_video_is_uploaded_first_and_follows_
     assert cut_slot.kind == "topic" and cut_slot.notify and not full_slot.notify
 
 
+def test_with_the_defaults_one_meeting_is_all_out_within_about_six_hours(monkeypatch, channel):
+    """Uploaded at 09:00 team time: the topic cut, the full video and two Shorts."""
+    monkeypatch.setenv("LOCAL_TIMEZONE", "UTC")
+    get_settings.cache_clear()
+    pub_settings.save(dataclasses.asdict(pub_settings.DEFAULTS))  # explicit: the shipped defaults
+    nine = datetime(2026, 11, 16, 9, 0, tzinfo=UTC)
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return nine
+
+    monkeypatch.setattr(publish_run, "datetime", Frozen)
+    monkeypatch.setattr(schedule, "datetime", Frozen)
+    job = _cut_job()
+    _, stopped = _run(job, shorts=[(1, None, None), (2, None, None)])
+    assert stopped is None and len(channel.uploaded) == 4
+    times = sorted(v["publish_at"] for v in channel.uploaded)
+    assert times[0] >= nine + schedule.MIN_LEAD  # a real future publishAt, even with no review wait
+    assert times[-1] - nine <= timedelta(hours=7), times  # 4 videos 2 h apart: 09:15, 11:15, 13:15, 15:15
+
+
 def test_a_posted_cut_queues_its_thumbnail_and_playlist_as_a_topic(channel, queued):
     job = _cut_job()
     _run(job)
@@ -108,6 +131,7 @@ def test_a_description_a_person_typed_for_the_cut_is_never_rewritten(channel):
 
 
 def test_the_shorts_come_after_the_front_door_and_link_to_the_cut_only_when_inside_it(channel):
+    pub_settings.save({"shorts_after_full_hours": 24})  # the old one-day wait; the default is 1 h
     job = _cut_job()
     _run(job, shorts=[(1, None, None), (2, None, None)])
     full, cut = _full_and_cut(channel)
@@ -265,7 +289,7 @@ def test_a_cut_off_cut_resumes_with_a_new_slot_when_its_old_one_is_stale(monkeyp
 
 
 def test_without_the_front_door_the_cut_goes_after_the_full_video(channel):
-    pub_settings.save({"topic_front_door": False})
+    pub_settings.save({"topic_front_door": False, "shorts_after_full_hours": 24})  # old one-day wait
     job = _cut_job()
     _run(job, shorts=[(1, None, None)])
     full, cut = _full_and_cut(channel)
