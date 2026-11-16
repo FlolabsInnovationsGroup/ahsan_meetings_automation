@@ -80,12 +80,15 @@ class Settings(BaseSettings):
     highlights_criteria: str = (
         "moments people can learn from or would find new and interesting: new architectures or system designs "
         "explained; new features announced or demoed; important concepts or how something works explained "
-        "clearly; surprising insights, facts or numbers; decisions and the reasons behind them. Genuinely funny "
+        "clearly; surprising insights, facts or numbers; decisions and the reasons behind them; new or trending "
+        "ideas in tech, AI and science (like recursive self-improvement, moonshot projects, new AI models or "
+        "frontier research), even when they come up as a side discussion. Genuinely funny "
         "moments are welcome too, but only when they are really good"
     )
     shorts_criteria: str = (
         "a self-contained moment someone outside the meeting can learn from — a clear explanation of a concept "
-        "or of how something works, a new architecture or feature, a useful insight or lesson — or, less often, "
+        "or of how something works, a new architecture or feature, a useful insight or lesson, a take on a new or "
+        "trending idea in tech, AI or science (RSI, moonshots, new models) — or, less often, "
         "a genuinely funny moment that stands on its own"
     )
     # Highlight categories that shorts are drawn from first (then any other

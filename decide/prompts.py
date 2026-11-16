@@ -61,8 +61,9 @@ REMOVAL_LABELS = {
 }
 
 CLEANUP_RULES = """You are lightly cleaning up a meeting recording transcript. The goal \
-is to keep only what is actually on the meeting's agenda — the substance people came \
-for — and cut everything else, while staying a light trim, not a highlight reel.
+is to keep the substance — the agenda people came for, plus any real discussion of new \
+ideas in technology, AI or science — and cut everything else, while staying a light trim, \
+not a highlight reel.
 
 For EVERY segment, decide "keep" or "remove":
 
@@ -84,7 +85,11 @@ a status update and is kept ("I missed Monday, but I've started the parser rewri
 finish it by Friday").
 - Thanks, goodbyes, apologies, welcomes ("feel welcome") and reassurance ("it's okay", "no \
 problem") — remove, also when they sit between kept lines.
-- Any tangent that isn't the thing the meeting was called to discuss.
+- Any tangent that isn't the thing the meeting was called to discuss AND isn't about \
+technology, AI, science or engineering (personal stories, weather, sports, food, office chat). \
+A side discussion of a new or trending idea — recursive self-improvement (RSI), moonshot \
+projects, a new AI model or paper, frontier research, a breakthrough in robotics, space or \
+hardware — is NOT a tangent to remove, even when it is off the agenda: keep it.
 - Hand-offs and bare calls to speak that only pass the floor ("let's move to the design \
 team", "any updates?", "go ahead", "you can share your screen") and praise with no content \
 ("looks great", "nice work") — always remove these as housekeeping, wherever they occur. A \
@@ -99,6 +104,9 @@ states a decision, or would be missed by someone who only wants the meeting's re
 This includes status updates, blockers, and task assignments even when they're introduced by \
 someone being called on by name ("can you give us an update?") — being called on is not the \
 same as being asked to introduce yourself; judge the answer by whether it's substance or filler.
+- Discussion of new or trending ideas in technology, AI and science (RSI, moonshots, new AI \
+models, frontier research, industry news), even off the agenda: these are what new viewers \
+search for, so keep every line that carries the idea.
 - A line that opens a real item ("you said you drafted the points") or gives a work \
 instruction is content; a bare check ("did you hear me?") is not. Setting up for this meeting \
 on screen — logging in, opening or sharing a file, naming or logging this meeting in a \
@@ -129,9 +137,11 @@ score of that moment. Anchors: 0-2 logistics, filler, routine status ("I worked 
 on it"); 3-5 useful substance (a concrete update, a real question answered), a mildly funny \
 remark; 6-7 something a viewer can learn from — a concept or how something works explained \
 clearly, a new architecture or feature explained or demoed, a surprising fact or number, a \
-decision or opinion with its reason, a root cause found — or a genuinely funny moment; 8-10 \
-the best of the meeting: new ideas or explanations people would want to watch even if they \
-missed the meeting (a clear teaching moment belongs here). Score independently of \
+decision or opinion with its reason, a root cause found, a real discussion of a new or \
+trending idea in tech, AI or science (RSI, moonshots, a new model or paper) — or a genuinely \
+funny moment; 8-10 the best of the meeting: new ideas or explanations people would want to \
+watch even if they missed the meeting (a clear teaching moment, or a trending topic explained \
+or debated with substance, belongs here). Score independently of \
 keep/remove; small talk, thanks and scheduling are 0-2 even inside a good stretch.
 - highlight code when the score is 3 or more, the best fit: {highlight_codes}
 - Every line has all five fields in this order: number, k or r, score (a number), removal \
@@ -152,7 +162,10 @@ candidate id (even weak ones), nothing else:
 <id>|<score>|<code>|<a>|<b>|<y or n>|<title>|<why>|<hook>|<stands_alone>|<short_start>
 - score 0-10, spread across the candidates: the best ~15% get 8-10, the weakest 1-3. Rank \
 highest what a viewer can learn from or would find new: clear explanations, new \
-architectures or features, insights, decisions with their reasons. A decision, opinion or \
+architectures or features, insights, decisions with their reasons, and new or trending \
+ideas in tech, AI and science (recursive self-improvement, moonshots, new models, frontier \
+research): these bring in viewers searching for them, so rank them high even when they came \
+up as a side discussion, under "idea" or "ins". A decision, opinion or \
 root cause stated with its reason is worth at least 5, even when short. Score the best point \
 inside a candidate, not the small talk, thanks or welcomes around it. A funny moment ranks \
 high only when it is genuinely funny; a routine update ranks low.
@@ -163,7 +176,8 @@ the payoff; usually 15-45 seconds; you may use the "~" lines; leave out small ta
 thanks and scheduling at either end
 - y if, as a 20-60 second vertical clip, it is: {shorts_criteria}. That means the clip itself \
 explains or shows something — what a concept is, how something works, what a new feature or \
-design does and why, a lesson learned — so a viewer comes away knowing something new; a line \
+design does and why, a lesson learned, a take on a new or trending idea in tech, AI or \
+science — so a viewer comes away knowing something new; a line \
 of setup inside the clip is fine. n for plain status ("I finished X, next I will do Y"), lists \
 of tasks, logistics, or a moment that only makes sense with the rest of the meeting
 - title: at most 60 characters, specific ("Moving the session store to Redis"), no "|", \
