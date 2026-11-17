@@ -332,25 +332,27 @@ def test_a_kept_slot_that_is_already_past_is_replaced_with_review_zero():
 
 def test_the_window_is_all_day_by_default_and_midnight_does_not_wrap():
     _shipped_defaults()
-    got = [schedule.book(f"s{i}", "short", "m", now=at(16, 22, 0)).at for i in range(2)]
-    assert got == [at(16, 22, 15), at(17, 0, 15)]  # 22:15, then 2 h later, past midnight, still inside
+    got = [schedule.book(f"s{i}", "short", "m", now=at(16, 22, 0)).at for i in range(3)]
+    assert got == [at(16, 22, 15), at(16, 23, 15), at(17, 0, 15)]  # an hour apart, past midnight, still inside
 
 
 def test_full_meetings_and_topic_videos_have_their_own_daily_caps():
     _shipped_defaults()
-    fulls = [schedule.book(f"f{i}", "full", "m", now=NOW).at for i in range(4)]
-    assert [t.day for t in fulls] == [16, 16, 16, 17]  # the 4th full meeting goes to the next day
-    topics = [schedule.book(f"t{i}", "topic", "m", now=NOW).at for i in range(4)]
-    assert [t.day for t in topics[:3]] == [16, 16, 16]  # topic videos are not counted with full meetings
-    assert topics[3].day == 17
+    fulls = [schedule.book(f"f{i}", "full", "m", now=NOW).at for i in range(9)]
+    assert [t.day for t in fulls] == [16] * 8 + [17]  # the 9th full meeting goes to the next day
+    topics = [schedule.book(f"t{i}", "topic", "m", now=NOW).at for i in range(9)]
+    assert [t.day for t in topics[:8]] == [16] * 8  # topic videos are not counted with full meetings
+    assert topics[8].day == 17
 
 
-def test_five_shorts_a_day_and_eleven_videos_in_all():
+def test_sixteen_shorts_a_day_and_twenty_four_videos_in_all():
     _shipped_defaults()
-    shorts = [schedule.book(f"s{i}", "short", "m", now=NOW).at for i in range(6)]
-    assert [t.day for t in shorts] == [16] * 5 + [17]
-    longs = [schedule.book(f"f{i}", "full", "m", now=NOW) for i in range(3)]
-    longs += [schedule.book(f"t{i}", "topic", "m", now=NOW) for i in range(3)]
-    # 5 Shorts + 3 full + 3 topic = 11 = max_per_day, and the 12 two-hour slots of the day hold them all
+    shorts = [schedule.book(f"s{i}", "short", "m", now=NOW).at for i in range(16)]
+    assert all(t.day == 16 for t in shorts)
+    longs = [schedule.book(f"f{i}", "full", "m", now=NOW) for i in range(4)]
+    longs += [schedule.book(f"t{i}", "topic", "m", now=NOW) for i in range(4)]
+    # 16 Shorts + 4 full + 4 topic = 24 = max_per_day, and the 24 one-hour slots of the day hold them all
     assert all(b.at.day == 16 for b in longs)
+    assert schedule.book("s16", "short", "m", now=NOW).at.day == 17  # a 17th Short waits for the next day
+    assert schedule.book("one-more", "full", "m", now=NOW).at.day == 17  # and so does a 25th video
 

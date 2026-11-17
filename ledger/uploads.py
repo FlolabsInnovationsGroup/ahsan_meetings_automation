@@ -272,6 +272,8 @@ class Ledger:
             upload.error = event.get("error")
         elif kind == "unsure":
             upload.state, upload.error = "unsure", event.get("error")
+        elif kind == "rescheduled":  # its time to go public was moved (publish/repack.py)
+            upload.publish_at = event["publish_at"]
         elif kind == "resolved":
             if event["outcome"] == "posted":
                 upload.state, upload.error = "published", None
@@ -416,6 +418,10 @@ class Ledger:
             self._active.discard(key)
             files.append_jsonl(self.posted_path, _posted_line(upload))
             return replace(upload)
+
+    def rescheduled(self, key: str, publish_at: str) -> None:
+        """YouTube now makes the video public at `publish_at` (ISO, UTC)."""
+        self._write(key, "rescheduled", publish_at=publish_at)
 
     def stopped(self, key: str, error: str) -> None:
         self._write(key, "stopped", error=error[:500])

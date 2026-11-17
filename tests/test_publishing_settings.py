@@ -23,11 +23,11 @@ def test_get_returns_settings_and_defaults(client):
 
 
 def test_post_saves_and_get_returns_the_new_values(client):
-    res = client.post("/publishing/settings", json={"max_per_day": 9, "hashtags": False, "links_text": "https://flolabs.com"})
+    res = client.post("/publishing/settings", json={"max_per_day": 20, "hashtags": False, "links_text": "https://flolabs.com"})
     assert res.status_code == 200
-    assert res.json()["settings"]["max_per_day"] == 9
+    assert res.json()["settings"]["max_per_day"] == 20
     got = client.get("/publishing/settings").json()
-    assert got["settings"]["max_per_day"] == 9
+    assert got["settings"]["max_per_day"] == 20
     assert got["settings"]["hashtags"] is False
     assert got["settings"]["links_text"] == "https://flolabs.com"
     assert got["defaults"]["max_per_day"] == publishing.DEFAULTS.max_per_day
@@ -86,12 +86,13 @@ def _save(**changes):
     return publishing.save(changes)
 
 
-def test_the_release_plan_defaults_are_fast_and_all_day_two_hours_apart():
-    # owner's decision (2026-11-16): no review wait, all day, 2 h gaps, 3 full + 3 topic + 5 Shorts = 11 a day
+def test_the_release_plan_defaults_are_fast_and_all_day_one_hour_apart():
+    # owner's decisions: no review wait, all day (2026-11-16); one hour between anything, many more a day
+    # (2026-11-17): up to 8 full + 8 topic + 16 Shorts, 24 in all
     d = publishing.DEFAULTS
     assert (d.review_hours, d.window_start_hour, d.window_end_hour, d.shorts_after_full_hours) == (0, 0, 24, 1.0)
-    assert (d.max_per_day, d.min_gap_hours) == (11, 2.0)
-    assert (d.full_per_day, d.topic_per_day, d.shorts_per_day, d.shorts_per_meeting) == (3, 3, 5, 10)
+    assert (d.max_per_day, d.min_gap_hours) == (24, 1.0)
+    assert (d.full_per_day, d.topic_per_day, d.shorts_per_day, d.shorts_per_meeting) == (8, 8, 16, 10)
     assert publishing.capacity_warning(d) is None
 
 

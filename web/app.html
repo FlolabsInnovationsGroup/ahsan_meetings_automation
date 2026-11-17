@@ -3053,6 +3053,10 @@ async function loadRelease() {
   }
   const rows = body.upcoming || [];
   releaseCount.textContent = rows.length ? `· ${rows.length} coming` : "";
+  const pulled = body.pull_forward || {};
+  if (pulled.note) releaseList.appendChild(sideEl("p", "side-empty", pulled.note));
+  else if (pulled.moved) releaseList.appendChild(sideEl("p", "side-empty",
+    `Moved ${pulled.moved} video${pulled.moved === 1 ? "" : "s"} into earlier free slots.`));
   if (!rows.length) {
     releaseList.appendChild(sideEl("p", "side-empty", "Nothing is waiting to go public."));
     return;

@@ -48,16 +48,17 @@ class Publishing:
     # now, because YouTube needs that. Raise it to leave time to catch a
     # mistake in YouTube Studio before anyone sees it.
     review_hours: float = 0.0
-    # At least this long between two videos going public.
-    min_gap_hours: float = 2.0
+    # At least this long between two videos going public, whatever kind
+    # (owner, 2026-11-17: one hour between anything, use the whole day).
+    min_gap_hours: float = 1.0
     # At most this many videos go public on one day (team time zone)...
-    max_per_day: int = 11
+    max_per_day: int = 24
     # ...of which at most this many are Shorts...
-    shorts_per_day: int = 5
+    shorts_per_day: int = 16
     # ...at most this many are full meetings...
-    full_per_day: int = 3
+    full_per_day: int = 8
     # ...and at most this many are topic videos.
-    topic_per_day: int = 3
+    topic_per_day: int = 8
     # Slots only between these hours (team time zone, settings.local_timezone);
     # start < end, end is exclusive; 0 to 24 = all day.
     window_start_hour: int = 0
@@ -354,9 +355,32 @@ def _without_main_language(values: dict) -> None:
     values["translation_languages"] = ",".join(kept)
 
 
+# Saves from before RULES_VERSION wrote out every setting, so the release rules
+# of their day (a 12-hour wait, 10 AM to 10 PM, 6 a day, Shorts a day later)
+# stayed in force after the owner changed the rules, and posting fell days
+# behind. Those saved release numbers are dropped once, in favour of today's
+# defaults; a save from now on keeps only what differs from the defaults, so
+# a later change of the rules reaches every server.
+RULES_VERSION = 3
+_RULES_KEY = "_rules_version"
+RELEASE_FIELDS = (
+    "review_hours", "min_gap_hours", "max_per_day", "shorts_per_day", "full_per_day", "topic_per_day",
+    "window_start_hour", "window_end_hour", "shorts_after_full_hours", "max_days_ahead", "shorts_per_meeting",
+)
+
+
+def _saved() -> dict:
+    """The saved choices, without release numbers from before RULES_VERSION."""
+    saved = prefs.publishing()
+    version = saved.get(_RULES_KEY)
+    if not isinstance(version, int) or isinstance(version, bool) or version < RULES_VERSION:
+        saved = {k: v for k, v in saved.items() if k not in RELEASE_FIELDS}
+    return saved
+
+
 def current() -> Publishing:
     """The choices in force: saved ones that pass the checks, else defaults."""
-    saved = prefs.publishing()
+    saved = _saved()
     values = asdict(DEFAULTS)
     for name in values:
         if name in saved:
@@ -385,7 +409,10 @@ def save(changes: dict) -> Publishing:
     if "translation_languages" not in changes:
         _without_main_language(values)  # only an explicit list is refused for clashing
     _cross_check(values)
-    prefs.set_publishing(values)
+    defaults = asdict(DEFAULTS)
+    stored = {k: v for k, v in values.items() if v != defaults[k]}
+    stored[_RULES_KEY] = RULES_VERSION
+    prefs.set_publishing(stored)
     return Publishing(**values)
 
 

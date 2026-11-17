@@ -54,6 +54,30 @@ def video_privacy(video_id: str) -> dict | None:
     return {"privacyStatus": status.get("privacyStatus"), "publishAt": status.get("publishAt")}
 
 
+# What videos.update may set in "status"; every one present is sent back as it
+# is, because a field left out of an update is reset to YouTube's default.
+_STATUS_WRITABLE = ("privacyStatus", "embeddable", "license", "publicStatsViewable", "selfDeclaredMadeForKids",
+                    "containsSyntheticMedia")
+
+
+def set_publish_at(video_id: str, publish_at: str) -> bool:
+    """Move a scheduled video's time to go public to `publish_at` (RFC 3339,
+    UTC). Only a video that is still private with a time to go public is
+    changed; returns False (nothing changed) for any other, or when it is not
+    found. Costs 1 + 50 quota units. Needs the youtube.force-ssl permission."""
+    service = _service()
+    items = service.videos().list(part="status", id=video_id).execute().get("items", [])
+    if not items:
+        return False
+    status = items[0].get("status") or {}
+    if status.get("privacyStatus") != "private" or not status.get("publishAt"):
+        return False  # already public, or a private video nobody scheduled
+    body = {k: status[k] for k in _STATUS_WRITABLE if k in status}
+    body["publishAt"] = publish_at
+    service.videos().update(part="status", body={"id": video_id, "status": body}).execute()
+    return True
+
+
 def insert_caption(video_id: str, srt_path: Path | str, language: str, name: str) -> dict:
     """Add a published (not draft) caption track from a subtitle file."""
     from googleapiclient.http import MediaFileUpload

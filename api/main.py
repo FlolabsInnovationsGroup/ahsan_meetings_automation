@@ -942,9 +942,9 @@ _KIND_LABELS = {"full": "Full video", "short": "Short", "topic": "Topic cut"}
 def get_release_plan() -> dict:
     """The release plan: the videos booked to go public, soonest first, with
     the time in UTC and in the team's time zone (publish/schedule.py)."""
-    from publish import schedule
+    from publish import repack, schedule
 
-    return {"upcoming": [
+    return {"pull_forward": repack.last_round(), "upcoming": [
         {"key": b.key, "kind": b.kind, "kind_label": _KIND_LABELS.get(b.kind, b.kind), "source": b.source,
          "notify": b.notify,
          "at": b.at.astimezone(UTC).isoformat(timespec="seconds"), "at_team": schedule.team_time_text(b.at),
@@ -1514,6 +1514,17 @@ def _run_follow_ups() -> None:
         logger.exception("follow-up queue could not start")
 
 
+def _pull_forward() -> None:
+    """Runs publish.repack in its own thread (a round already going makes a
+    second one return at once). Never raises and never holds the loop."""
+    try:
+        from publish import repack
+
+        threading.Thread(target=repack.pull_forward, name="pull-forward", daemon=True).start()
+    except Exception:
+        logger.exception("pulling scheduled videos forward could not start")
+
+
 def _sweep_loop() -> None:
     """Every few minutes while the app runs (startup itself is reconcile_on_startup's)."""
     while not _sweep_stop.wait(RETENTION_SWEEP_EVERY_S):
@@ -1523,6 +1534,7 @@ def _sweep_loop() -> None:
         except Exception:  # the next round tries again
             logger.exception("retention sweep failed")
         _run_follow_ups()  # thumbnails, caption tracks, playlist adds (publish/extras.py)
+        _pull_forward()  # scheduled videos into earlier free slots (publish/repack.py)
         _daily_channel_check()  # starts its own thread, at most once a day
         _daily_views_pull()  # likewise (analytics/pull.py)
 

@@ -74,7 +74,7 @@ def test_the_cut_is_the_front_door_the_full_video_is_uploaded_first_and_follows_
     full, cut = _full_and_cut(channel)
     assert full["privacy"] == cut["privacy"] == "private" and full["publish_at"] and cut["publish_at"]
     assert cut["publish_at"] < full["publish_at"]  # but the cut goes public first
-    assert full["publish_at"] - cut["publish_at"] >= timedelta(hours=2)
+    assert full["publish_at"] - cut["publish_at"] >= timedelta(hours=1)
     assert cut["notify"] is True and full["notify"] is False
     full_id = next(i for i, v in channel.videos.items() if v is full)
     assert f"Full meeting: https://youtu.be/{full_id}?t=100" in cut["description"]  # 60 s intro + 40 s in

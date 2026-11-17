@@ -322,7 +322,7 @@ def test_publish_request_goes_on_the_release_plan_unless_right_away(client, chan
 
 
 def test_the_release_plan_route_lists_what_is_coming(client, channel):
-    assert client.get("/publishing/schedule").json() == {"upcoming": []}
+    assert client.get("/publishing/schedule").json()["upcoming"] == []
     job = _finished_job()
     _run(job)
     rows = client.get("/publishing/schedule").json()["upcoming"]

@@ -248,6 +248,52 @@ def _notifies(others, kind, slot: datetime, zone: tzinfo) -> bool:
     return not any(b.notify and _day(b, zone) == day for b in others)
 
 
+def hold_earlier(
+    key: str,
+    *,
+    not_before: datetime | None = None,
+    lead_time: timedelta = MIN_LEAD,
+    min_gain: timedelta = timedelta(minutes=45),
+    now: datetime | None = None,
+) -> tuple[Booking, Booking] | None:
+    """Move the booking of `key` to the earliest slot today's rules allow, when
+    that is at least `min_gain` sooner: (old, new), with the new slot already
+    held so no other video takes it while YouTube is told. None when there is
+    no such slot (or no future booking). A booking that tells subscribers only
+    moves to a day no other booking tells them on. The caller puts `old` back
+    with keep() when YouTube can't be changed."""
+    now = _now(now)
+    cfg = pub_settings.current()
+    with _lock:
+        bookings = _load()
+        mine = next((b for b in bookings if b.key == key), None)
+        if mine is None or mine.at <= now + lead_time:
+            return None
+        others = [b for b in bookings if b.key != key]
+        zone = team_zone()
+        earliest = now + max(lead(cfg), lead_time)
+        if not_before is not None:
+            earliest = max(earliest, _now(not_before))
+        gap = timedelta(hours=cfg.min_gap_hours)
+        start_min, end_min = cfg.window_start_hour * 60, cfg.window_end_hour * 60
+        t = _round_up(earliest)
+        while t <= mine.at - min_gain:
+            local = t.astimezone(zone)
+            if (start_min <= local.hour * 60 + local.minute < end_min and _fits(others, mine.kind, cfg, zone, t, gap)
+                    and (not mine.notify or _notifies(others, mine.kind, t, zone))):
+                moved = replace(mine, at=t)
+                _save([*others, moved], now)
+                return mine, moved
+            t += _STEP
+        return None
+
+
+def for_source(source: str) -> list[Booking]:
+    """Every kept booking of a meeting (past ones too), soonest first."""
+    with _lock:
+        return sorted((b for b in _load() if b.source == source), key=lambda b: b.at)
+
+
 def keep(booking: Booking, *, now: datetime | None = None) -> None:
     """Record `booking` exactly as given, replacing any other booking of its
     key: for a video YouTube already holds at that time."""
