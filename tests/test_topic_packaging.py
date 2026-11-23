@@ -108,8 +108,14 @@ def test_a_title_about_something_else_falls_back_to_the_first_chapter():
     assert describe.topic_title(_info(job), job) == "Why the old store failed | FloLabs"
 
 
-def test_when_nothing_is_grounded_the_title_names_the_meeting():
+def test_when_nothing_is_grounded_a_chapter_title_leads():
     row = topic_row(title="Quarterly budget planning", chapters=[{"t": 0, "title": "Holiday rota planning"}])
+    job = job_with_topics([row])
+    assert describe.topic_title(_info(job), job) == "Holiday rota planning | FloLabs"
+
+
+def test_when_nothing_is_grounded_and_chapters_are_generic_the_title_names_the_meeting():
+    row = topic_row(title="Quarterly budget planning", chapters=[{"t": 0, "title": "Intro"}])
     job = job_with_topics([row])
     title = describe.topic_title(_info(job), job)
     assert title == "Weekly Sync — topic 1" and "|" not in title

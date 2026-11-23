@@ -289,7 +289,8 @@ def _valid(problem: str | None, what: str) -> None:
 
 def _short_item(job: JobRecord, info: describe.ShortInfo) -> uploads.Item:
     return uploads.short_item(job, info.index, info.source_start, info.source_end,
-                              style=info.style or None, layout=info.layout or None)
+                              style=info.style or None, layout=info.layout or None,
+                              length_type=info.length_type or None)
 
 
 def _topic_item(job: JobRecord, info: describe.TopicInfo) -> uploads.Item:
@@ -798,14 +799,16 @@ def _listed_now(job: JobRecord) -> str | None:
 
 
 def _short_item_of(job: JobRecord, short: ShortPlan) -> uploads.Item:
-    style = layout = None
+    style = layout = length_type = None
     try:
         info = next((i for i in describe.load_shorts(job) if i.index == short.index), None)
         if info is not None:
             style, layout = info.style or None, info.layout or None
+            length_type = info.length_type or None
     except Exception:  # noqa: BLE001 - the look is only bookkeeping
         logger.warning("job %s: short %s: its look could not be read", job.job_id, short.index)
-    return uploads.short_item(job, short.index, *(short.clip or (None, None)), style=style, layout=layout)
+    return uploads.short_item(job, short.index, *(short.clip or (None, None)), style=style, layout=layout,
+                              length_type=length_type)
 
 
 def _upload_short(job: JobRecord, update: Update, short: ShortPlan, plan: PublishPlan, cfg,

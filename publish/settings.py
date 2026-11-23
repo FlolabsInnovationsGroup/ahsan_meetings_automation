@@ -114,6 +114,15 @@ class Publishing:
     shorts_hd: bool = True
     shorts_trim_pauses: bool = True
     shorts_max_pause_s: float = 0.6
+    # a closing card after the speech pointing to the full meeting video; it
+    # counts against the Shorts maximum length
+    # Shorts are up to 60 s with the end card; a complete, high-quality thought
+    # that needs more may run long, up to this many seconds (end card included;
+    # YouTube allows 3 minutes)
+    shorts_long: bool = True
+    shorts_long_max_seconds: float = 180.0
+    shorts_end_card: bool = True
+    shorts_end_card_seconds: float = 4.5
 
     # --- sound ---------------------------------------------------------------
     shorts_loudness: bool = True
@@ -126,7 +135,9 @@ class Publishing:
     full_hook_overlay: bool = False
 
     # --- thumbnails ------------------------------------------------------------
-    thumbnail_mode: str = "test"
+    # "custom": every full and topic video gets our thumbnail (owner,
+    # 2026-11-23); "test" leaves every other one on YouTube's own frame.
+    thumbnail_mode: str = "custom"
     thumbnail_shorts: bool = False
     thumbnail_faces: bool = False
     thumbnail_label: bool = True
@@ -203,6 +214,8 @@ _RANGES: dict[str, tuple[float, float]] = {
     "shorts_caption_px": (56, 110),
     "shorts_caption_max_chars": (16, 40),
     "shorts_max_pause_s": (0.3, 2.0),
+    "shorts_end_card_seconds": (0, 6),
+    "shorts_long_max_seconds": (61, 180),
     "loudness_target_lufs": (-23, -10),
     "topic_cuts_per_meeting": (0, 3),
     "topic_min_minutes": (2, 30),
@@ -361,21 +374,24 @@ def _without_main_language(values: dict) -> None:
 # behind. Those saved release numbers are dropped once, in favour of today's
 # defaults; a save from now on keeps only what differs from the defaults, so
 # a later change of the rules reaches every server.
-RULES_VERSION = 3
+RULES_VERSION = 4
 _RULES_KEY = "_rules_version"
 RELEASE_FIELDS = (
     "review_hours", "min_gap_hours", "max_per_day", "shorts_per_day", "full_per_day", "topic_per_day",
     "window_start_hour", "window_end_hour", "shorts_after_full_hours", "max_days_ahead", "shorts_per_meeting",
 )
+# field -> the rules version that reset it: a value saved before that version
+# is dropped once (version 4: thumbnails went from the A/B test to ours on all).
+_RESET_AT = {**dict.fromkeys(RELEASE_FIELDS, 3), "thumbnail_mode": 4}
 
 
 def _saved() -> dict:
-    """The saved choices, without release numbers from before RULES_VERSION."""
+    """The saved choices, without values saved before the rules version that reset them."""
     saved = prefs.publishing()
     version = saved.get(_RULES_KEY)
-    if not isinstance(version, int) or isinstance(version, bool) or version < RULES_VERSION:
-        saved = {k: v for k, v in saved.items() if k not in RELEASE_FIELDS}
-    return saved
+    if not isinstance(version, int) or isinstance(version, bool):
+        version = 0
+    return {k: v for k, v in saved.items() if version >= _RESET_AT.get(k, 0)}
 
 
 def current() -> Publishing:
@@ -438,6 +454,8 @@ class ShortsLook:
     denoise: bool
     trim_pauses: bool
     max_pause_s: float
+    end_card: bool = False
+    end_card_seconds: float = 4.5
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -474,7 +492,8 @@ def looks(p: Publishing | None = None) -> Looks:
             caption_max_chars=p.shorts_caption_max_chars, layout=p.shorts_layout,
             screen_zoom=p.shorts_screen_zoom, speaker_layout=p.shorts_speaker_layout, hd=p.shorts_hd,
             loudness=p.shorts_loudness, target_lufs=p.loudness_target_lufs, denoise=p.audio_denoise,
-            trim_pauses=p.shorts_trim_pauses, max_pause_s=p.shorts_max_pause_s),
+            trim_pauses=p.shorts_trim_pauses, max_pause_s=p.shorts_max_pause_s,
+            end_card=p.shorts_end_card, end_card_seconds=p.shorts_end_card_seconds),
         full=FullLook(loudness=p.full_loudness, target_lufs=p.loudness_target_lufs, hd=p.full_hd,
                       hook_overlay=p.full_hook_overlay),
     )

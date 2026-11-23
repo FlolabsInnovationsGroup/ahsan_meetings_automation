@@ -156,13 +156,13 @@ def test_a_funny_moment_needs_stands_alone_of_8():
 def test_short_start_trims_the_setup_but_keeps_the_minimum_length():
     js = [_j(i) for i in range(40)]  # 9 s lines, 10 s apart
     m = _m(0, 0, 5, js=js, ss=2)  # 0..59 s; start on line 2 -> 20..59 = 39 s
-    (s,) = select_shorts([m], js, count=1, min_s=20, max_s=60)
+    (s,) = select_shorts([m], js, count=1, min_s=20, max_s=60, tail_pad_s=0)
     assert s.start == js[2].start and s.end == js[5].end
     late = _m(0, 0, 5, js=js, ss=5)  # would leave 9 s: under the minimum, keep the old start
-    (s,) = select_shorts([late], js, count=1, min_s=20, max_s=60)
+    (s,) = select_shorts([late], js, count=1, min_s=20, max_s=60, tail_pad_s=0)
     assert s.start == js[0].start
     outside = _m(0, 0, 5, js=js).model_copy(update={"short_start": js[20].start})
-    (s,) = select_shorts([outside], js, count=1, min_s=20, max_s=60)
+    (s,) = select_shorts([outside], js, count=1, min_s=20, max_s=60, tail_pad_s=0)
     assert s.start == js[0].start and s.end == js[5].end
 
 

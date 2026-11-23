@@ -139,7 +139,7 @@ SILENCES = SilenceMap(ranges=[(2.0, 4.6), (6.0, 7.3)], threshold_db=None, audio_
 
 def _look(**changes):
     base = {"hd": False, "loudness": False, "layout": "fit", "denoise": False, "trim_pauses": True,
-            "max_pause_s": 0.6}
+            "max_pause_s": 0.6, "end_card": False}
     return dataclasses.replace(pub_settings.looks().shorts, **{**base, **changes})
 
 

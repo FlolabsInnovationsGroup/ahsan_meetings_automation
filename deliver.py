@@ -149,6 +149,7 @@ def deliver(job: JobRecord, update: Callable[[JobRecord], None], inp: DeliverInp
                  "duration_s": round(r.duration_s, 3), "title": r.clip.title, "hook": r.clip.hook,
                  "category": r.clip.category, "captions": row[0].replace(".mp4", ".srt"),
                  "style": r.style, "layout": r.layout_kind, "gain_db": r.gain_db,
+                 "length_type": r.clip.length_type,
                  "screen_hook_shown": r.hook_text if r.style == "new" else "",
                  "trimmed_s": r.trimmed_s}
                 for row, r in zip(shorts_rows, out.shorts, strict=True)])
@@ -339,7 +340,7 @@ def shorts_manifest_rows(shorts_rows, clips, words: list[Word], results=None) ->
              "screen_hook": c.screen_hook, "stands_alone": c.stands_alone, "text": clip_text(words, s, e)}
             for (f, s, e, t, h), c in zip(shorts_rows, clips, strict=True)]
     for row, r in zip(rows, results or [], strict=False):
-        row.update(style=r.style, layout=r.layout_kind, gain_db=r.gain_db,
+        row.update(style=r.style, layout=r.layout_kind, gain_db=r.gain_db, length_type=r.clip.length_type,
                    screen_hook_shown=r.hook_text if r.style == "new" else "", trimmed_s=r.trimmed_s)
     return rows
 

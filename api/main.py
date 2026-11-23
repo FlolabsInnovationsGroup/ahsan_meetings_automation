@@ -1255,6 +1255,19 @@ def get_posted() -> dict:
     return {"meetings": list(groups.values()), "needs_check": checks, "timezone": schedule.team_zone_name()}
 
 
+def _queue_thumbnail_in_background(upload) -> None:
+    def work() -> None:
+        try:
+            from publish import extras, thumbnail
+
+            if thumbnail.queue_for_posted(upload):
+                extras.run_due()
+        except Exception:
+            logger.exception("thumbnail for the settled upload %s could not be queued", upload.key)
+
+    threading.Thread(target=work, name="thumb-settled", daemon=True).start()
+
+
 @app.post("/posted/resolve")
 def resolve_posted(body: ResolveRequest) -> dict:
     """A person looked on YouTube for an upload the app couldn't settle: it
@@ -1270,6 +1283,8 @@ def resolve_posted(body: ResolveRequest) -> dict:
     # the autopilot's meeting that waited for this check carries on posting
     autopilot_engine.after_check(upload.job_id, upload.source)
     autopilot_loop.wake()
+    if body.on_youtube:
+        _queue_thumbnail_in_background(upload)  # a video settled by hand never had its thumbnail queued
     return get_posted()
 
 

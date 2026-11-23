@@ -172,9 +172,9 @@ high only when it is genuinely funny; a routine update ranks low.
 - code: the category, one of {highlight_codes}
 - a, b: first and last line number of a clip that works on its own: start where the thought \
 starts (include the setup; never start on "which", "and", "so", "the first one"…), end after \
-the payoff; usually 15-45 seconds; you may use the "~" lines; leave out small talk, \
+the payoff, so a to b spans the complete thought; usually 15-45 seconds, longer when it needs it; you may use the "~" lines; leave out small talk, \
 thanks and scheduling at either end
-- y if, as a 20-60 second vertical clip, it is: {shorts_criteria}. That means the clip itself \
+- y if, as a vertical clip (usually 20-60 seconds, up to 3 minutes only when the thought needs it and is genuinely valuable; never pad), it is: {shorts_criteria}. That means the clip itself \
 explains or shows something — what a concept is, how something works, what a new feature or \
 design does and why, a lesson learned, a take on a new or trending idea in tech, AI or \
 science — so a viewer comes away knowing something new; a line \
@@ -191,6 +191,7 @@ no people's names, no "|"; "-" when the moment is not short-worthy
 - short_start: the line number where a Short of this moment should start: on the claim or \
 the question itself, with at most one sentence of setup before it (the reel clip a-b keeps its \
 full setup; a Short is tighter); it must be between a and b; "-" when not short-worthy
+- b must be a line that finishes a complete sentence and the thought: never end on a line without a final . ? or !; if the thought runs on, pick a later b so a and b span the complete thought
 Example: 12|8|arch|402|409|y|Moving the session store to Redis|Cuts API latency from 800 to 120 ms.|Redis cut our latency|8|404"""
 
 CHAPTERS_TEMPLATE = """You are writing YouTube chapters for an edited meeting recording. You \

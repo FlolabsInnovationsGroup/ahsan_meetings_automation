@@ -55,6 +55,7 @@ from core.timeline import (
 )
 
 from . import layout as layout_mod
+from .align import align_clip
 from .captions import (
     Cue,
     ass_document,
@@ -63,6 +64,7 @@ from .captions import (
     choose_hook,
     srt_text,
 )
+from .endcard import render_end_card
 from .ffmpeg_wrapper import (
     AudioPiece,
     audio_input_args,
@@ -664,6 +666,13 @@ def _pause_spans(audio_flac: Path, start_s: float, end_s: float, s: int, e: int,
     return kept_spans(start_s, end_s, ranges, max_pause_s, fps=fps)
 
 
+def _aligned_times(audio_flac: Path, words: list[Word], start_s: float, end_s: float):
+    """Aligned word times for a Short's captions ({} = spread by character weight)."""
+    from publish.settings import current as publishing
+
+    return align_clip(audio_flac, words, start_s, end_s, publishing().language or "en")
+
+
 def render_short_clip(
     source: Path,
     audio_flac: Path,
@@ -684,6 +693,8 @@ def render_short_clip(
     job_id: str = "",
     index: int = 0,
     silences: SilenceMap | None = None,
+    card_title: str = "",
+    card_picture: Path | None = None,
 ) -> ShortResult:
     """One vertical short cut from the SOURCE at [clip.start, clip.end]
     (plan D7): blurred background, captions burned in (and written as .srt),
@@ -692,7 +703,8 @@ def render_short_clip(
     if style == "new" and look is not None:
         return _render_short_new(source, audio_flac, clip, media, words, out_path, srt_path, work_dir, font,
                                  width=width, height=height, burn_captions=burn_captions, look=look,
-                                 recording_type=recording_type, silences=silences)
+                                 recording_type=recording_type, silences=silences,
+                                 card_title=card_title, card_picture=card_picture)
     fps = media.fps
     s = min(max(0, to_frame(clip.start, fps)), media.total_frames - 1)
     e = min(max(s + 1, to_frame(clip.end, fps)), media.total_frames)
@@ -701,7 +713,7 @@ def render_short_clip(
     piece = AudioPiece(src_start=a0, samples=a1 - a0, fade_in=True, fade_out=True)
     _, pre = audio_input_args(audio_flac, piece)
     start_s, end_s = float(Fraction(s) / fps), float(Fraction(e) / fps)
-    cues = caption_cues(words, start_s, end_s)
+    cues = caption_cues(words, start_s, end_s, word_times=_aligned_times(audio_flac, words, start_s, end_s))
     work_dir.mkdir(parents=True, exist_ok=True)
     notes = []
     try:
@@ -751,6 +763,8 @@ def _render_short_new(
     look,
     recording_type: str | None,
     silences: SilenceMap | None = None,
+    card_title: str = "",
+    card_picture: Path | None = None,
 ) -> ShortResult:
     """The new Shorts look: a cropped slide or speaker, a hook card, bigger
     captions, levelled sound. A failure in the layout analysis or the loudness
@@ -808,8 +822,17 @@ def _render_short_new(
     if len(pieces) > 1:
         pres = [audio_input_args(audio_flac, pc)[1] for pc in pieces]
     total_samples = sum(pc.samples for pc in pieces)
+    # the end card: after the speech, counted in the Short's frames and samples
+    card_frames = 0
+    if getattr(look, "end_card", False) and getattr(look, "end_card_seconds", 0) > 0:
+        card_frames = max(1, round(look.end_card_seconds * float(fps)))
+    card_samples = samples_at_frame(card_frames, fps) if card_frames else 0
+    speech_frames = frames
 
-    cues = caption_cues(words, start_s, end_s, max_chars=look.caption_max_chars, max_words=5)
+    # real word times from the Short's own audio (source time); remap_cues below then moves them over
+    # any trimmed pauses, so the captions follow the trimmed timeline
+    cues = caption_cues(words, start_s, end_s, max_chars=look.caption_max_chars, max_words=5,
+                        word_times=_aligned_times(audio_flac, words, start_s, end_s))
     if len(spans) > 1:  # captions follow the picture: cues move up over the removed pauses
         cues = remap_cues(cues, [(float(Fraction(a - s) / fps), float(Fraction(b - s) / fps)) for a, b in spans])
     out_s = float(Fraction(frames) / fps)
@@ -823,27 +846,48 @@ def _render_short_new(
             ass = work_dir / "captions.ass"
             # ass_document_new wraps every cue to two rows itself (cap_two_lines)
             ass.write_text(ass_document_new(cues, hook=hook, title=clip.title, end_line=look.end_line,
-                                            duration_s=out_s, look=look,
-                                            font_family=font_family(font), width=width, height=height),
+                                            duration_s=out_s + float(Fraction(card_frames) / fps), look=look,
+                                            font_family=font_family(font), width=width, height=height,
+                                            card_s=float(Fraction(card_frames) / fps)),
                            encoding="utf-8")
             subtitles = subtitles_filter(ass, font.parent)
         elif burn_captions:
             notes.append("no font found: captions not burned in")
+        card_png: Path | None = None
+        if card_frames:
+            try:
+                card_png = render_end_card(work_dir / "end_card.png", card_title or clip.title, (width, height),
+                                           card_picture)
+            except Exception as exc:
+                if is_fatal(exc):
+                    raise
+                logger.warning("short %s: end card failed: %s", clip.index, exc)
+                notes.append(f"end card failed ({type(exc).__name__}): left out")
+                card_frames = card_samples = 0
+                if subtitles:  # the end line / title timing assumed the card
+                    ass = work_dir / "captions.ass"
+                    ass.write_text(ass_document_new(cues, hook=hook, title=clip.title, end_line=look.end_line,
+                                                    duration_s=out_s, look=look, font_family=font_family(font),
+                                                    width=width, height=height), encoding="utf-8")
         if len(spans) > 1:
             graph = build_short_graph_new(spans_frames=[b - a for a, b in spans], fps=fps, width=width,
                                           height=height, pre=pres, samples=total_samples, layout=lay, look=look,
                                           subtitles=subtitles, gain_db=gain_db, n_audio=len(pieces),
-                                          audio_pieces=pieces, src_size=(media.width, media.height))
+                                          audio_pieces=pieces, src_size=(media.width, media.height),
+                                          card_frames=card_frames, card_samples=card_samples)
             render_arg = ([InputSpan(a, b) for a, b in spans], pieces)
         else:
             graph = build_short_graph_new(spans_frames=[frames], fps=fps, width=width, height=height, pre=pre,
                                           samples=piece.samples, layout=lay, look=look, subtitles=subtitles,
-                                          gain_db=gain_db, src_size=(media.width, media.height))
+                                          gain_db=gain_db, src_size=(media.width, media.height),
+                                          card_frames=card_frames, card_samples=card_samples)
             render_arg = (InputSpan(s, e), piece)
         tmp = work_dir / "short.mp4"
-        render_short(source, audio_flac, *render_arg, graph, work_dir / "short_graph.txt", tmp, fps, hd=look.hd)
+        render_short(source, audio_flac, *render_arg, graph, work_dir / "short_graph.txt", tmp, fps, hd=look.hd,
+                     card_image=card_png, card_frames=card_frames)
+        frames = speech_frames + card_frames
         header = assert_frames(tmp, frames, f"short {clip.index}")
-        want_s = total_samples / AUDIO_RATE
+        want_s = (total_samples + card_samples) / AUDIO_RATE
         if header.audio_duration is None or abs(header.audio_duration - want_s) > AAC_TOLERANCE_S:
             raise RenderAssertError(f"short {clip.index} audio is {header.audio_duration}s, expected {want_s:.3f}s")
         assert_duration(header, frames, fps, f"short {clip.index}", AAC_TOLERANCE_S)

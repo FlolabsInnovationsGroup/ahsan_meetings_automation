@@ -604,7 +604,8 @@ def _blur_stamp(lines: list[str], head: str, stamp, shown, src_size) -> str:
 def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int, height: int, pre,
                           samples: int, layout, look, subtitles: str = "", gain_db: float | None = None,
                           n_audio: int = 1, audio_pieces: list[AudioPiece] | None = None,
-                          src_size: tuple[int, int] | None = None) -> str:
+                          src_size: tuple[int, int] | None = None, card_frames: int = 0,
+                          card_samples: int = 0) -> str:
     """Vertical short, new look. One video input per span (hard-cut together
     when there are several), then by `layout.kind`: a screen share or gallery
     is cropped to its content and shown 1080 wide over a dark blurred copy; a
@@ -613,9 +614,14 @@ def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int,
     optional gain with a peak limiter, trimmed to exactly `samples` again.
     `pre` is the seek margin of the one audio piece (a list for several;
     `audio_pieces` then holds the pieces). `src_size` (w, h) lets crops be
-    clamped to the source."""
+    clamped to the source. `card_frames` > 0 appends an end card: a still
+    image is the input after the audio inputs, shown for that many frames
+    after the speech, with `card_samples` of silence after the audio; the
+    subtitles are then applied over the whole (speech + card) picture."""
     n_spans = len(spans_frames)
     sy = height / SHORT_H
+    vlabel = "vsp" if card_frames else "vout"
+    sub_all = ""
     kind = getattr(layout, "kind", "fit")
     panel = getattr(layout, "panel", None)
     if kind in ("screen", "gallery") and not panel:
@@ -629,11 +635,13 @@ def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int,
             lines.append(exact_frames_chain(k, frames, fps) + f"[v{k}]")
         head = "".join(f"[v{k}]" for k in range(n_spans)) + f"concat=n={n_spans}:v=1:a=0"
     sub = f",{subtitles}" if subtitles else ""
+    if card_frames:
+        sub_all, sub = sub, ""
     stamp = getattr(layout, "stamp", None)
     if speaker_full:
         head = _blur_stamp(lines, head, stamp, None, src_size)
         lines.append(f"{head},{_speaker_crop('9/16', getattr(layout, 'focus_x', None))},"
-                     f"scale={width}:{height}:flags=lanczos,setsar=1{sub},format=yuv420p[vout]")
+                     f"scale={width}:{height}:flags=lanczos,setsar=1{sub},format=yuv420p[{vlabel}]")
     else:
         bw, bh = max(2, width // 4 // 2 * 2), max(2, height // 4 // 2 * 2)
         shown = None
@@ -659,13 +667,21 @@ def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int,
             lines.append(f"[f0]scale={width}:{height}:force_original_aspect_ratio=decrease:"
                          f"force_divisible_by=2,setsar=1[fg]")
             pos = "x=(W-w)/2:y=(H-h)/2"
-        lines.append(f"[bg][fg]overlay={pos}{sub},format=yuv420p[vout]")
+        lines.append(f"[bg][fg]overlay={pos}{sub},format=yuv420p[{vlabel}]")
+    n_audio_inputs = max(1, n_audio)
+    if card_frames:
+        ci = n_spans + n_audio_inputs
+        lines.append(f"[{ci}:v]fps={rate_str(fps)}:start_time=0:round=down,scale={width}:{height},setsar=1,"
+                     f"format=yuv420p,tpad=stop_mode=clone:stop=3,trim=end_frame={card_frames},"
+                     f"setpts=PTS-STARTPTS[vcard]")
+        lines.append(f"[{vlabel}][vcard]concat=n=2:v=1:a=0{sub_all},format=yuv420p[vout]")
 
     # audio
     fade = min(SHORT_FADE_SAMPLES, samples // 4)
     denoise = "afftdn=nr=10:nf=-40," if getattr(look, "denoise", False) else ""
     gain = (f",volume={gain_db:.2f}dB,alimiter=limit={PEAK_LIMIT}:level=0:latency=1,"
             f"apad,atrim=end_sample={samples}") if gain_db is not None else ""
+    tail = f",apad,atrim=end_sample={samples + card_samples}" if card_frames else ""
     if n_audio > 1:
         if not audio_pieces or len(audio_pieces) != n_audio or not isinstance(pre, (list, tuple)):
             raise ValueError("several audio pieces need audio_pieces and a list of seek margins")
@@ -675,7 +691,10 @@ def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int,
                 denoise = (f"{denoise}atrim=start_sample={AFFTDN_DELAY},asetpts=PTS-STARTPTS,"
                            f"apad,atrim=end_sample={samples},")
             lines.append(f"[araw]{denoise.rstrip(',')}{',' if denoise else ''}"
-                         f"{gain.lstrip(',') if gain else 'anull'}[aout]")
+                         f"{gain.lstrip(',') if gain else 'anull'}{tail}[aout]")
+        elif tail:
+            lines.append(build_audio_graph(audio_pieces, list(pre), n_spans, "araw"))
+            lines.append(f"[araw]anull{tail}[aout]")
         else:
             lines.append(build_audio_graph(audio_pieces, list(pre), n_spans, "aout"))
     else:
@@ -684,7 +703,7 @@ def build_short_graph_new(*, spans_frames: list[int], fps: Fraction, width: int,
                      f"end_sample={pre + (AFFTDN_DELAY if denoise else 0) + samples},"
                      f"asetpts=PTS-STARTPTS"
                      + (f",afade=t=in:ss=0:ns={fade},afade=t=out:ss={samples - fade}:ns={fade}" if fade else "")
-                     + f"{gain}[aout]")
+                     + f"{gain}{tail}[aout]")
     return ";\n".join(lines)
 
 
@@ -696,7 +715,8 @@ def subtitles_filter(ass_path: Path, fonts_dir: Path | None) -> str:
 
 
 def render_short(src: Path, flac: Path, span: InputSpan | list[InputSpan], piece: AudioPiece | list[AudioPiece],
-                 graph: str, graph_path: Path, dest: Path, fps: Fraction, hd: bool = False) -> None:
+                 graph: str, graph_path: Path, dest: Path, fps: Fraction, hd: bool = False,
+                 card_image: Path | None = None, card_frames: int = 0) -> None:
     """Encode one short. `span` and `piece` are one each (the classic graph) or
     lists (the new graph with several cuts); video inputs come first, then the
     audio inputs. `hd` selects the high-quality encode, which takes longer."""
@@ -709,6 +729,10 @@ def render_short(src: Path, flac: Path, span: InputSpan | list[InputSpan], piece
     for p in pieces:
         cmd += audio_input_args(flac, p)[0]
     frames = sum(s.frames for s in spans)
+    if card_image is not None and card_frames:
+        cmd += ["-loop", "1", "-framerate", rate_str(fps), "-t", ts(Fraction(card_frames + 3) / fps),
+                "-i", str(card_image)]
+        frames += card_frames
     cmd += [*filter_graph_args(graph_path), "-map", "[vout]", "-map", "[aout]",
             *(shorts_video_args(fps, True) if hd else video_args(fps)), *AUDIO_ARGS,
             "-frames:v", str(frames), "-movflags", "+faststart", str(dest)]

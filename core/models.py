@@ -107,6 +107,8 @@ class ShortClip(BaseModel):
     hook: str = ""
     screen_hook: str | None = None
     stands_alone: float | None = None
+    # "standard" (up to 60 s with its end card) or "long" (a complete, high-quality thought that needs more)
+    length_type: str = "standard"
 
 
 class Chapter(BaseModel):

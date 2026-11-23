@@ -256,15 +256,19 @@ def reach_end(silences: list[tuple[float, float]], audio_s: float, end_s: float)
 
 
 def trim_to_speech(start: float, end: float, silences: list[tuple[float, float]], pad_after_s: float,
-                   pad_before_s: float) -> tuple[float, float]:
+                   pad_before_s: float, min_end: float | None = None) -> tuple[float, float]:
     """Pull a single window's edges (a short) out of the silences they sit in,
-    down to the padding. Nothing inside the window changes."""
+    down to the padding. Nothing inside the window changes. `min_end`: the end
+    is never pulled earlier than this (a Short's last sentence end, whose
+    trailing words may be quiet)."""
     new_start, new_end = start, end
     for s, e in silences:
         if s <= start < e:
             new_start = max(start, e - pad_before_s)
         if s < end <= e:
             new_end = min(end, s + pad_after_s)
+    if min_end is not None:
+        new_end = max(new_end, min(end, min_end))
     if new_end - new_start < 1.0:  # the window is (nearly) all silence: leave it alone
         return start, end
     return new_start, new_end

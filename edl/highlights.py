@@ -25,6 +25,7 @@ as candidates and let 69% of the reel come from 11 minutes of the meeting.
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from core.models import Moment, SegmentJudgment, ShortClip
@@ -258,6 +259,43 @@ _OTHER_STANDS_ALONE = 8.0
 # owner's "Shorts per meeting" cap): short-worthy, score >= 7 and, when known,
 # stands_alone >= 7.
 _SHORT_MIN_SCORE = 7.0
+# a Short ends on a line that finishes a sentence
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*$")
+# seconds kept after the last line's end (its end time is an estimate)
+SHORT_TAIL_PAD_S = 0.5
+# a Short longer than the normal cap needs this re-rank score and stands_alone
+_LONG_MIN_SCORE = 8.0
+
+
+def _ends_sentence(j: SegmentJudgment) -> bool:
+    return bool(_SENTENCE_END.search(j.text.strip()))
+
+
+def _finish_sentence(first: int, last: int, judgments: list[SegmentJudgment], min_s: float, max_s: float,
+                     max_steps: int = 12) -> int | None:
+    """The last line for a Short [first, last]: `last` when it ends a
+    sentence; otherwise the nearest later line that does (same speaker, still
+    within `max_s`), else the nearest earlier one that keeps `min_s`. None
+    when no line ends a sentence within bounds: the clip is dropped rather
+    than cut mid-sentence."""
+    if _ends_sentence(judgments[last]):
+        return last
+    n = len(judgments)
+    k = last
+    for _ in range(max_steps):
+        if k + 1 >= n or judgments[k + 1].speaker != judgments[last].speaker:
+            break
+        if judgments[k + 1].end - judgments[first].start > max_s:
+            break
+        k += 1
+        if _ends_sentence(judgments[k]):
+            return k
+    for k in range(last - 1, first - 1, -1):
+        if judgments[k].end - judgments[first].start < min_s:
+            break
+        if _ends_sentence(judgments[k]):
+            return k
+    return None
 
 
 def select_shorts(
@@ -269,6 +307,8 @@ def select_shorts(
     max_s: float = 60.0,
     preferred_categories: list[str] | tuple[str, ...] = LEARNING_CATEGORIES,
     min_score: float = _SHORT_MIN_SCORE,
+    tail_pad_s: float = SHORT_TAIL_PAD_S,
+    long_max_s: float | None = None,
 ) -> list[ShortClip]:
     """Short-worthy moments, preferred categories first (by score) — by
     default the ones people learn from — then any other short-worthy moment
@@ -279,7 +319,12 @@ def select_shorts(
     trimmed to <= `max_s` from the side farther from the moment's core, and
     stripped of filler at either end. Shorts never overlap. A short may
     include material the cleanup removed — by design — but never starts or
-    ends on removed filler/small talk/housekeeping."""
+    ends on removed filler/small talk/housekeeping. `long_max_s` (speech
+    seconds, the end card already taken off): a moment that needs more than
+    `max_s` to be a complete thought may run up to it, only when it is
+    high quality (score >= 8 and stands_alone >= 8); the Short is then marked
+    length_type "long". Every other moment is trimmed to its last full
+    sentence within `max_s`, or dropped."""
     # The quality bar decides how many Shorts there are; the owner's "Shorts
     # per meeting" is only the most to make (imported late: the publish
     # package pulls in the whole app). `count` can only lower that cap.
@@ -308,19 +353,37 @@ def select_shorts(
     for m in sorted(pool, key=rank):
         if len(shorts) >= count:
             break
-        window = _fit_window(m.first_index, m.last_index, judgments, min_s, max_s, m.peak_index)
+        cap = max_s
+        if (long_max_s and long_max_s > max_s and m.score >= _LONG_MIN_SCORE
+                and m.stands_alone is not None and m.stands_alone >= _LONG_MIN_SCORE
+                and judgments[m.last_index].end - judgments[m.first_index].start > max_s):
+            cap = long_max_s
+        window = _fit_window(m.first_index, m.last_index, judgments, min_s, cap, m.peak_index)
         if window is None:
             continue
         first, last = _strip_junk(*window, judgments, min_s, keep=m.peak_index)
         first = _short_start_index(m, first, last, judgments, min_s)
-        start, end = judgments[first].start, judgments[last].end
-        if end - start < min_s or end - start > max_s:
+        # a Short never ends mid-sentence (and the end card, if any, was
+        # already taken off max_s by the caller)
+        fin = _finish_sentence(first, last, judgments, min_s, cap)
+        if fin is None:
             continue
+        last = fin
+        start, end = judgments[first].start, judgments[last].end
+        if end - start < min_s or end - start > cap:
+            continue
+        length_type = "long" if end - start > max_s else "standard"
+        # end times are estimates: a short tail pad, never into the next line
+        pad_to = end + max(0.0, tail_pad_s)
+        if last + 1 < len(judgments):
+            pad_to = min(pad_to, judgments[last + 1].start)
+        end = max(end, min(pad_to, start + (cap if length_type == "long" else max_s)))
         if any(start < s.end and s.start < end for s in shorts):
             continue
         shorts.append(ShortClip(index=0, moment_id=m.id, start=start, end=end, score=m.score,
                                 category=m.category, title=m.title, hook=m.hook,
-                                screen_hook=m.screen_hook, stands_alone=m.stands_alone))
+                                screen_hook=m.screen_hook, stands_alone=m.stands_alone,
+                                length_type=length_type))
     # numbered in pick order: preferred (learning) shorts first, best first
     return [s.model_copy(update={"index": k + 1}) for k, s in enumerate(shorts)]
 

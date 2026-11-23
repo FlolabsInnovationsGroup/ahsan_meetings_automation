@@ -285,7 +285,8 @@ def test_looks_are_frozen_snapshots_that_match_current():
                   "screen_zoom": p.shorts_screen_zoom, "speaker_layout": p.shorts_speaker_layout,
                   "hd": p.shorts_hd, "loudness": p.shorts_loudness, "target_lufs": p.loudness_target_lufs,
                   "denoise": p.audio_denoise, "trim_pauses": p.shorts_trim_pauses,
-                  "max_pause_s": p.shorts_max_pause_s}
+                  "max_pause_s": p.shorts_max_pause_s, "end_card": p.shorts_end_card,
+                  "end_card_seconds": p.shorts_end_card_seconds}
     assert lk.full.as_dict() == {"loudness": p.full_loudness, "target_lufs": p.loudness_target_lufs,
                                  "hd": p.full_hd, "hook_overlay": p.full_hook_overlay}
     assert lk.as_dict() == {"shorts": sd, "full": lk.full.as_dict()}

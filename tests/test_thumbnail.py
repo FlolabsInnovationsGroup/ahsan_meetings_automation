@@ -41,6 +41,8 @@ def _env(monkeypatch):
     monkeypatch.setattr(youtube, "granted_scopes", lambda: set(youtube.SCOPES))
     monkeypatch.setattr(youtube, "youtube_status", lambda: {"connected": True})
     monkeypatch.setattr(quota, "_limits", lambda: (10000, 2000))
+    # full videos and topic cuts wait for processing like Shorts: finished unless a test says otherwise
+    monkeypatch.setattr(ye, "processing_status", lambda vid: {"processingStatus": "succeeded"})
 
 
 def _cfg(**changes):
@@ -233,13 +235,14 @@ def test_a_processed_short_gets_its_thumbnail(tmp_path, monkeypatch):
     assert thumbnail.run(_task(tmp_path, "short")).status == optional.DONE
 
 
-def test_403_skips_and_blocks_thumbnails_for_a_day(tmp_path, monkeypatch):
+def test_403_retries_in_a_day_and_blocks_thumbnails_for_a_day(tmp_path, monkeypatch):
     def refuse(*a):
         raise FakeHttpError(403, "forbidden")
 
     monkeypatch.setattr(ye, "set_thumbnail", refuse)
     out = thumbnail.run(_task(tmp_path))
-    assert out.status == optional.SKIPPED and "verifying in Studio" in out.reason
+    assert out.status == optional.RETRY and "verifying in Studio" in out.reason
+    assert timedelta(hours=23) < out.retry_at - datetime.now(UTC) <= timedelta(hours=24)
     state = extras._read()
     until = extras._parse(state["blocked"]["thumbnail"])
     assert timedelta(hours=23) < until - datetime.now(UTC) <= timedelta(hours=24)
@@ -276,7 +279,7 @@ def test_a_refused_picture_is_recorded_as_custom_failed_then_custom_when_it_land
     monkeypatch.setattr(ye, "set_thumbnail", refuse)
     task = _task(tmp_path)
     task.video_id = upload.video_id
-    assert thumbnail.run(task).status == optional.SKIPPED
+    assert thumbnail.run(task).status == optional.RETRY
     assert _arm_rows(upload.video_id) == ["custom", "custom_failed"]
     monkeypatch.setattr(ye, "set_thumbnail", lambda *a: {})
     assert thumbnail.run(task).status == optional.DONE
@@ -291,8 +294,8 @@ def test_a_picture_that_cannot_be_made_is_recorded_as_custom_failed(tmp_path, mo
         raise RuntimeError("bad base frame")
 
     monkeypatch.setattr(thumbnail, "compose", broken)
-    with pytest.raises(RuntimeError):
-        thumbnail.build(job, item, upload, video_kind="full", index=None, cfg=_cfg(thumbnail_mode="custom"))
+    task = thumbnail.build(job, item, upload, video_kind="full", index=None, cfg=_cfg(thumbnail_mode="custom"))
+    assert task.state == extras.SKIPPED and "could not be made" in task.reason  # a visible failed task, no raise
     assert _arm_rows(upload.video_id) == ["custom", "custom_failed"]
 
 
@@ -693,23 +696,24 @@ def test_card_only_ignores_a_good_frame(tmp_path, design_ai):
     assert task.data["card"] is True and task.data["design"] == "ai"
 
 
-def test_no_safe_words_means_no_custom_thumbnail_never_an_empty_card(tmp_path, design_ai):
+def test_no_safe_words_gives_the_neutral_team_card_never_an_empty_one(tmp_path, design_ai):
     titles = ("", "Investor update for the board | FloLabs Space", "日本語のタイトル | FloLabs Space")
     for n, title in enumerate(titles, start=10):
         task = _build(tmp_path, _cfg(thumbnail_mode="custom", thumbnail_ai=False), title=title, n=n)
-        assert task.state == extras.SKIPPED and task.file is None, title
-        assert task.reason == thumbnail.NO_PICTURE_TEXT
+        assert task.state == extras.WAITING and Path(task.file).is_file(), title
+        assert task.data["card"] is True and task.data["design"] == "neutral"
+        assert _jpeg_size(task.file) == (1280, 720)
 
 
-def test_the_label_setting_off_means_no_card(tmp_path, design_ai):
+def test_the_label_setting_off_gives_the_neutral_card(tmp_path, design_ai):
     task = _build(tmp_path, _cfg(thumbnail_mode="custom", thumbnail_label=False))
-    assert task.state == extras.SKIPPED and task.file is None
+    assert task.state == extras.WAITING and task.data["design"] == "neutral"
 
 
-def test_a_title_too_long_to_draw_loses_words_and_a_single_huge_word_is_skipped(tmp_path, design_ai):
+def test_a_title_too_long_to_draw_loses_words_and_a_single_huge_word_gets_the_neutral_card(tmp_path, design_ai):
     task = _build(tmp_path, _cfg(thumbnail_mode="custom", thumbnail_ai=False),
                      title="Pneumonoultramicroscopicsilicovolcanoconiosis | FloLabs Space", n=3)
-    assert task.state == extras.SKIPPED and task.file is None
+    assert task.state == extras.WAITING and task.data["design"] == "neutral"
 
 
 def test_test_mode_still_gives_half_the_videos_ours_and_half_youtubes(tmp_path, design_ai):
@@ -765,11 +769,11 @@ def test_a_card_with_a_label_or_not_posted_by_the_app_is_left_alone(tmp_path, de
     assert design_ai.sent == []
 
 
-def test_a_video_the_ai_cannot_label_is_marked_and_not_retried(tmp_path, design_ai):
+def test_a_video_with_no_safe_words_is_redone_with_the_neutral_card(tmp_path, design_ai):
     task_id, _i, _u = _old_empty_card_task(1, title="Investor update | FloLabs Space")
     assert thumbnail.redo_empty_cards() is True
     task = extras._get(task_id)
-    assert task.state == extras.DONE and task.data["redo"] == "no picture"
+    assert task.state == extras.WAITING and task.data["redo"] is True and task.data["design"] == "neutral"
 
 
 def test_a_picture_that_cannot_be_made_is_tried_again_next_time(tmp_path, design_ai, monkeypatch):

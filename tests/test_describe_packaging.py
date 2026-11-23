@@ -81,9 +81,16 @@ def test_grounded_title_is_kept_and_no_text_is_trusted():
     assert describe.full_title(_job(rows=rows)).startswith("Moving the session store to Redis | ")
 
 
-def test_with_no_usable_moment_the_title_is_todays():
+def test_with_no_usable_moment_a_chapter_title_leads():
+    # a chapter about a real subject beats "<meeting> — <day>", which nobody searches for
     rows = [_row(1, text="nothing related whatsoever here")]
-    assert describe.full_title(_job(rows=rows)) == "Multi-modal perception team meeting — 2026-11-04"
+    want = "Session store on Redis | FloLabs Multi-modal perception — 2026-11-04"
+    assert describe.full_title(_job(rows=rows)) == want
+    assert describe.full_title(_job(rows=[])) == want
+
+
+def test_with_no_moment_and_only_generic_chapters_the_title_is_todays(monkeypatch):
+    monkeypatch.setattr(describe, "_chapter_entries", lambda job: ["Intro", "Team updates"])
     assert describe.full_title(_job(rows=[])) == "Multi-modal perception team meeting — 2026-11-04"
 
 

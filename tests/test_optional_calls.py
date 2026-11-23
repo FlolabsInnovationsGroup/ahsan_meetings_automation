@@ -69,7 +69,7 @@ def _raiser(exc):
     (TimeoutError("slow"), "retry"),
     (ServerNotFoundError("Unable to find the server"), "retry"),
     (TransportError("cannot reach the token endpoint"), "retry"),
-    (ValueError("a bug in the call"), "skipped"),
+    (ValueError("a bug in the call"), "retry"),
 ])
 def test_google_answers_map_to_the_right_status(exc, status):
     outcome = optional.call("captions", 50, _raiser(exc))
@@ -132,7 +132,7 @@ def test_units_are_spent_once_on_success_and_on_failure():
 
 
 def test_nothing_escapes_but_keyboard_interrupt_and_system_exit(monkeypatch):
-    assert optional.call("captions", 1, _raiser(RuntimeError("x"))).status == "skipped"
+    assert optional.call("captions", 1, _raiser(RuntimeError("x"))).status == "retry"
     with pytest.raises(KeyboardInterrupt):
         optional.call("captions", 1, _raiser(KeyboardInterrupt()))
     with pytest.raises(SystemExit):

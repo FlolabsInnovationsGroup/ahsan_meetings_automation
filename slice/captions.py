@@ -38,10 +38,14 @@ def caption_cues(
     max_words: int = 6,
     max_pause_s: float = 0.8,
     bridge_s: float = 0.5,
+    word_times: dict[int, list[tuple[float, float]]] | None = None,
 ) -> list[Cue]:
     """Short caption cues for [clip_start, clip_end) (source seconds) on the
     clip timeline (0 = clip start). A word belongs to the clip if its
-    estimated midpoint is inside it."""
+    estimated midpoint is inside it. `word_times` maps id(item) to the
+    aligned (start, end) of each of the item's words (source seconds, from
+    slice.align); an item without an entry (or with the wrong word count)
+    has its words spread across its time by character weight."""
     tokens: list[tuple[float, float, str]] = []
     cursor = float("-inf")
     for item in sorted(items, key=lambda w: w.start):
@@ -53,6 +57,15 @@ def caption_cues(
         # a line never starts before the previous one ends: rolling/overlapping
         # transcript cues otherwise interleave their words and put two
         # captions on screen at once
+        exact = (word_times or {}).get(id(item))
+        if exact is not None and len(exact) == len(words):
+            for w, (w0, w1) in zip(words, exact, strict=True):
+                w0 = max(w0, cursor)
+                w1 = max(w1, w0 + 0.02)
+                cursor = w1
+                if clip_start <= (w0 + w1) / 2 < clip_end:
+                    tokens.append((max(w0, clip_start), min(w1, clip_end), w))
+            continue
         begin = max(item.start, cursor)
         end = max(item.end, begin + 0.25 * len(words))
         cursor = end
@@ -254,10 +267,11 @@ def _fit_text(text: str, *, width: int, size_px: float, margin_px: float, char_e
 
 
 def ass_document_new(cues: list[Cue], *, hook: str, title: str, end_line: str, duration_s: float, look,
-                     font_family: str, width: int, height: int) -> str:
+                     font_family: str, width: int, height: int, card_s: float = 0.0) -> str:
     """New-style Shorts subtitles, designed at 1080x1920 and scaled: captions with their bottom edge at
     y=1330, a large hook card from the first frame, a small title for the rest, an end line over the
-    last 2.5 s (the title stops when it starts). Nothing above y=192 or below y=1330."""
+    last 2.5 s (the title stops when it starts). With an end card (`card_s` > 0, included in `duration_s`)
+    the end line sits on the card instead, for its whole length. Nothing above y=192 or below y=1330."""
     k = height / 1920
     kx = width / 1080
     char_em = 0.6 if "dejavu" in font_family.lower() else 0.56
@@ -302,7 +316,9 @@ def ass_document_new(cues: list[Cue], *, hook: str, title: str, end_line: str, d
     if hook_s > 0:
         lines.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(hook_s)},Hook,,0,0,0,,"
                      f"{{\\fad(0,250)}}{card(hook, hook_px)}")
-    end_start = max(0.0, duration_s - END_LINE_S) if end_line.strip() else duration_s
+    end_start = max(0.0, duration_s - (card_s if card_s > 0 else END_LINE_S)) if end_line.strip() else duration_s
+    if card_s > 0 and not end_line.strip():
+        end_start = max(0.0, duration_s - card_s)  # the title stops where the card starts
     if look.top_text != "none" and title.strip() and end_start > hook_s:
         lines.append(f"Dialogue: 1,{_ass_time(hook_s)},{_ass_time(end_start)},Title,,0,0,0,,"
                      f"{card(title, title_px)}")

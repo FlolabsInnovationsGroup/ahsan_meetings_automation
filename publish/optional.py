@@ -42,6 +42,10 @@ _SCOPE_REASONS = {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}
 _DUPLICATE_REASONS = {"captionExists", "duplicate", "playlistItemDuplicate", "videoAlreadyInPlaylist"}
 _NOT_FOUND_REASONS = {"videoNotFound", "playlistNotFound", "notFound", "captionNotFound"}
 _NETWORK_CLASS_NAMES = {"HttpLib2Error", "TransportError"}
+# With retry_unknown (thumbnails, which run right after an upload while YouTube
+# may still be processing the video): a 400, 404 or other unexpected answer is
+# tried again this many times before it is final.
+UNKNOWN_RETRIES = 3
 
 
 @dataclass(frozen=True)
@@ -89,7 +93,7 @@ def _error_parts(exc: BaseException) -> tuple[int | None, str, str]:
     return status, reason, message
 
 
-def _map_error(exc: BaseException, attempt: int, forbidden_reason: str) -> Outcome:
+def _map_error(exc: BaseException, attempt: int, forbidden_reason: str, retry_unknown: bool = False) -> Outcome:
     if type(exc).__name__ == "RefreshError":
         return Outcome(STOP_ALL, reason="Reconnect the channel")
     if isinstance(exc, youtube.YoutubeNotConnectedError):
@@ -105,7 +109,10 @@ def _map_error(exc: BaseException, attempt: int, forbidden_reason: str) -> Outco
         if isinstance(exc, ConnectionError | TimeoutError | OSError) or any(
                 c.__name__ in _NETWORK_CLASS_NAMES for c in type(exc).__mro__):
             return Outcome(RETRY, reason="Network problem; trying again later", retry_at=_backoff(attempt))
-        return Outcome(SKIPPED, reason=f"The call failed: {text[:200]}")
+        # a token read glitch or a library error: often passes by itself, so back off and
+        # try again; the queue gives up (GIVEN_UP) when its retry window ends
+        return Outcome(RETRY, reason=f"The call failed; trying again later: {text[:150]}",
+                       retry_at=_backoff(attempt))
     if reason in _SCOPE_REASONS:
         return Outcome(NEEDS_RECONNECT, reason="Google says the permission is missing; reconnect the channel")
     if status == 403 and reason in ("quotaExceeded", "dailyLimitExceeded"):
@@ -114,23 +121,40 @@ def _map_error(exc: BaseException, attempt: int, forbidden_reason: str) -> Outco
     if status == 403 and reason in _RATE_REASONS:
         return Outcome(RETRY, reason="YouTube asked us to slow down", retry_at=_backoff(attempt))
     if status == 403:
+        if retry_unknown:
+            return Outcome(RETRY, reason=forbidden_reason or "YouTube refused this (forbidden)",
+                           retry_at=_backoff(attempt))
         return Outcome(SKIPPED, reason=forbidden_reason or "YouTube refused this (forbidden)")
     if status == 429 or reason in _RATE_REASONS or status >= 500:
         return Outcome(RETRY, reason="YouTube is busy or slow; trying again later", retry_at=_backoff(attempt))
     if status == 409 or reason in _DUPLICATE_REASONS:
         return Outcome(DONE, reason="Already there")
+    early = retry_unknown and attempt < UNKNOWN_RETRIES
     if status == 404 or reason in _NOT_FOUND_REASONS:
+        if early:  # a video can be unknown to the API for a moment after its upload
+            return Outcome(RETRY, reason="The video is not visible yet; trying again later",
+                           retry_at=_backoff(attempt))
         return Outcome(SKIPPED, reason="The video or playlist is gone")
     if status == 400:
-        return Outcome(SKIPPED, reason=(message or reason or "YouTube refused the request")[:200])
-    return Outcome(SKIPPED, reason=(message or reason or text)[:200])
+        text400 = (message or reason or "YouTube refused the request")[:200]
+        if early:
+            return Outcome(RETRY, reason=text400, retry_at=_backoff(attempt))
+        return Outcome(SKIPPED, reason=text400)
+    other = (message or reason or text)[:200]
+    if early:
+        return Outcome(RETRY, reason=other, retry_at=_backoff(attempt))
+    return Outcome(SKIPPED, reason=other)
 
 
-def call(feature: str, units: int, fn, *, attempt: int = 0, forbidden_reason: str = "") -> Outcome:
+def call(feature: str, units: int, fn, *, attempt: int = 0, forbidden_reason: str = "",
+         retry_unknown: bool = False) -> Outcome:
     """Run `fn()` as an optional call of `feature` costing `units` quota.
     `attempt` is how many times it has failed before (picks the back-off);
     `forbidden_reason` is what a plain 403 means for this feature. Never
-    raises, except KeyboardInterrupt and SystemExit."""
+    raises, except KeyboardInterrupt and SystemExit. `retry_unknown` turns a
+    refusal (403), a 404, a 400 and other unexpected answers into RETRY (with
+    back-off) instead of SKIPPED, for calls made while a video may still be
+    processing."""
     try:
         scope = youtube.FEATURE_SCOPES.get(feature)
         if scope is not None and not youtube.has_scope(scope):
@@ -143,7 +167,7 @@ def call(feature: str, units: int, fn, *, attempt: int = 0, forbidden_reason: st
             raise
         except BaseException as exc:  # noqa: BLE001 - mapped below; nothing escapes
             quota.spend(units, feature)
-            outcome = _map_error(exc, attempt, forbidden_reason)
+            outcome = _map_error(exc, attempt, forbidden_reason, retry_unknown)
             logger.warning("optional %s call: %s (%s)", feature, outcome.status, outcome.reason)
             return outcome
         quota.spend(units, feature)

@@ -2814,6 +2814,10 @@ const PUB_GROUPS = [
     ["shorts_hd", "check", "High-quality Shorts", "About 1.5x the render time, still about a minute per Short (new style)."],
     ["shorts_trim_pauses", "check", "Shorten pauses", "Shorten pauses inside a Short (new style)."],
     ["shorts_max_pause_s", "number", "Longest pause (seconds)", "A pause longer than this (0.3-2) is shortened to 0.2 s (new style)."],
+    ["shorts_long", "check", "Longer Shorts", "Let a high-quality moment (score 8+, stands alone 8+) that needs more than 60 s run as a long Short. Everything else stays within 60 s."],
+    ["shorts_long_max_seconds", "number", "Longest long Short (seconds)", "End card included (61-180)."],
+    ["shorts_end_card", "check", "End card", "Close each Short (new style) with a card pointing to the full meeting video. Counts against the Shorts maximum length."],
+    ["shorts_end_card_seconds", "number", "End card seconds", "How long the end card shows (0-6)."],
   ]],
   ["Sound", [
     ["shorts_loudness", "check", "Level the sound of Shorts", "Level each Short's sound to the loudness target (new style)."],
@@ -3316,6 +3320,12 @@ function renderPosted(data) {
       const li = sideEl("li");
       li.append(`Short ${s.short}: `);
       sideLink(li, s.url, s.title || "short");
+      // YouTube's API can't set a Short's clickable "Related video": open its Studio page to set it
+      const shortId = typeof s.url === "string" ? (s.url.match(/(?:shorts\/|youtu\.be\/|v=)([\w-]{11})/) || [])[1] : null;
+      if (shortId) {
+        li.append(" · ");
+        sideLink(li, `https://studio.youtube.com/video/${shortId}/edit`, "Set related video");
+      }
       addScheduledNote(li, s);
       addFollowUpLines(li, s.url);
       list.appendChild(li);

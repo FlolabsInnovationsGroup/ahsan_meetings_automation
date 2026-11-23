@@ -186,3 +186,13 @@ def test_the_release_plan_page_carries_the_last_round(channel):
     repack.pull_forward()
     body = client.get("/publishing/schedule").json()
     assert body["pull_forward"]["moved"] == 1
+
+
+def test_a_saved_thumbnail_test_mode_gives_way_to_ours_on_every_video():
+    files.write_json(files.state_dir() / "prefs.json", {"publishing": {
+        "thumbnail_mode": "test", "min_gap_hours": 3.0, "_rules_version": 3}})
+    p = pub_settings.current()
+    assert p.thumbnail_mode == "custom"
+    assert p.min_gap_hours == 3.0  # chosen under the rules of version 3: kept
+    pub_settings.save({"thumbnail_mode": "test"})
+    assert pub_settings.current().thumbnail_mode == "test"  # a choice made now stays

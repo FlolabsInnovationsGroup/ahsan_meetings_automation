@@ -47,6 +47,8 @@ _run_lock = threading.Lock()  # one run_due at a time
 _builders: dict[str, Callable] = {}
 _runners: dict[str, Callable] = {}
 _once: list[tuple[str, str, Callable]] = []  # (kind, name, pass): one-time clean-ups, see register_once
+_daily: list[tuple[str, str, Callable]] = []  # (kind, name, pass): once a day, see register_daily
+DAILY_EVERY = timedelta(hours=24)
 _loaded = False
 
 
@@ -113,7 +115,8 @@ def _read() -> dict:
             tasks.append({k: v for k, v in raw.items() if k in names})
     blocked = data.get("blocked") if isinstance(data.get("blocked"), dict) else {}
     once = data.get("once") if isinstance(data.get("once"), dict) else {}
-    return {"tasks": tasks, "blocked": blocked, "once": once}
+    daily = data.get("daily") if isinstance(data.get("daily"), dict) else {}
+    return {"tasks": tasks, "blocked": blocked, "once": once, "daily": daily}
 
 
 def _write(state: dict) -> None:
@@ -203,6 +206,35 @@ def _once_passes() -> None:
                 _write(state)
 
 
+def register_daily(kind: str, name: str, fn: Callable) -> None:
+    """A pass that runs at most once every 24 hours (while `kind` has a runner),
+    the first time the queue runs after the day is up. The time of its last
+    successful run is kept in the saved state under `name`. `fn()` returns False
+    when it should be tried again on the next run."""
+    _daily[:] = [row for row in _daily if row[1] != name]
+    _daily.append((kind, name, fn))
+
+
+def _daily_passes(now: datetime) -> None:
+    for kind, name, fn in _daily:
+        if kind not in _runners:
+            continue
+        with _lock:
+            last = _parse(_read()["daily"].get(name))
+        if last is not None and now - last < DAILY_EVERY:
+            continue
+        try:
+            finished = fn() is not False
+        except Exception:
+            logger.exception("daily follow-up pass %s failed", name)
+            continue
+        if finished:
+            with _lock:
+                state = _read()
+                state["daily"][name] = _iso(now)
+                _write(state)
+
+
 def replace_picture(task_id: str, source: Path | str, data: dict) -> bool:
     """Put a task back in the queue, due now, with a new picture and new data
     (its retry window starts over). False when the id is unknown."""
@@ -283,7 +315,11 @@ def _add(task: Task, job, item, posted, video_kind: str, index: int | None) -> N
     with _lock:
         state = _read()
         for raw in state["tasks"]:
-            if raw["kind"] == task.kind and raw.get("item_key") == task.item_key and raw.get("state") != GIVEN_UP:
+            # the same video (a re-upload of an item gets a new video id and so a new task);
+            # without a video id, the same item
+            same = (raw.get("video_id") == task.video_id) if task.video_id else (
+                raw.get("item_key") == task.item_key)
+            if raw["kind"] == task.kind and same and raw.get("state") != GIVEN_UP:
                 _remove_file(task)  # the same follow-up is already queued
                 return
         state["tasks"].append(asdict(task))
@@ -322,6 +358,13 @@ def _blocked_kinds(state: dict, now: datetime) -> set[str]:
     return out
 
 
+def _blocked_until(kind: str, now: datetime) -> datetime | None:
+    """When a held-back kind may run again, or None when it is not held back."""
+    with _lock:
+        until = _parse((_read().get("blocked") or {}).get(kind))
+    return until if until is not None and until > now else None
+
+
 def block_kind(kind: str, hours: float) -> None:
     """Hold back a kind of task for a while (thumbnails after a 403, so the
     quota is not wasted on calls that will be refused again)."""
@@ -331,8 +374,13 @@ def block_kind(kind: str, hours: float) -> None:
         _write(state)
 
 
+_KIND_ORDER = {"thumbnail": 0, "playlist": 1, "captions": 2}
+
+
 def _order(task: Task):
-    return (0 if task.video_kind == "full" else 1, task.created_at)
+    # cheap calls first (a thumbnail is 50 units, a caption track 400), so a thin
+    # quota day still gets every thumbnail; full videos before the rest
+    return (_KIND_ORDER.get(task.kind, 1), 0 if task.video_kind == "full" else 1, task.created_at)
 
 
 def run_due(now: datetime | None = None) -> int:
@@ -378,6 +426,7 @@ def _run(now: datetime) -> int:
 
     _load_features()
     _once_passes()
+    _daily_passes(now)
     _expire(now)
     with _lock:
         state = _read()
@@ -393,6 +442,10 @@ def _run(now: datetime) -> int:
         why = _never_post(task)
         if why:
             _finish(task, SKIPPED, why)
+            continue
+        held = _blocked_until(task.kind, now)  # a refusal earlier in this very run holds the rest back
+        if held is not None:
+            _update(task.id, not_before=_iso(held), reason=task.reason or "held back after a refusal")
             continue
         if not _still_published(task):
             _finish(task, SKIPPED, "the video is no longer listed as posted")

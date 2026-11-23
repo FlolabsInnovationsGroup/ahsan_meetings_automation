@@ -86,7 +86,7 @@ def _render(tmp_path, synthetic, **kw):
 
 
 def _new_look(**changes):
-    return dataclasses.replace(pub_settings.looks().shorts, hd=False, loudness=True, **changes)
+    return dataclasses.replace(pub_settings.looks().shorts, hd=False, loudness=True, **{"end_card": False, **changes})
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="needs ffmpeg/ffprobe on PATH")

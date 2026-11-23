@@ -145,18 +145,18 @@ def test_shorts_prefer_learning_moments_then_fill_and_never_overlap():
         _m(3, js[3].start, js[4].end, 8, "insight", True, 3, 4),  # overlaps short 0... picked first (8 > 7)
         _m(4, js[40].start, js[41].end, 9, "concept", False, 40, 41),  # not short-worthy
     ]
-    shorts = select_shorts(moments, js, count=3, min_s=20, max_s=60)
+    shorts = select_shorts(moments, js, count=3, min_s=20, max_s=60, tail_pad_s=0)
     assert [s.moment_id for s in shorts] == [3, 2, 1]  # learning ones first (best first), then funny
     assert [s.index for s in shorts] == [1, 2, 3]
     assert all(20 <= s.end - s.start <= 60 for s in shorts)
-    assert [s.moment_id for s in select_shorts(moments, js, count=2, min_s=20, max_s=60)] == [3, 2]
+    assert [s.moment_id for s in select_shorts(moments, js, count=2, min_s=20, max_s=60, tail_pad_s=0)] == [3, 2]
 
 
 def test_short_windows_keep_the_core_and_snap_to_sentences():
     js = [_j(i, length=9.0) for i in range(30)]
     tiny = _m(0, js[10].start, js[10].end, 9, "funny", True, 10, 10, peak=10)
     huge = _m(1, js[15].start, js[29].end, 9, "funny", True, 15, 29, peak=27)
-    shorts = select_shorts([tiny, huge], js, count=2, min_s=20, max_s=60)
+    shorts = select_shorts([tiny, huge], js, count=2, min_s=20, max_s=60, tail_pad_s=0)
     starts, ends = {j.start for j in js}, {j.end for j in js}
     for s in shorts:
         assert s.start in starts and s.end in ends and 20 <= s.end - s.start <= 60
@@ -168,16 +168,16 @@ def test_trailing_filler_is_dropped_from_shorts():
     js = [_j(i, length=9.0) for i in range(10)]
     js[5] = _j(5, length=9.0, decision="remove", removal="filler", text="okay okay")
     short = _m(0, js[2].start, js[5].end, 9, "funny", True, 2, 5)
-    (s,) = select_shorts([short], js, count=1, min_s=20, max_s=60)
+    (s,) = select_shorts([short], js, count=1, min_s=20, max_s=60, tail_pad_s=0)
     assert s.end == js[4].end
 
 
 def test_shorts_fall_back_to_categories_when_the_rerank_failed():
     js = [_j(i, length=9.0) for i in range(10)]
     moment = _m(0, js[2].start, js[3].end, 7, "concept", short=False, first=2, last=3, reranked=False)
-    assert len(select_shorts([moment], js, count=2, min_s=20, max_s=60)) == 1
+    assert len(select_shorts([moment], js, count=2, min_s=20, max_s=60, tail_pad_s=0)) == 1
     joke = moment.model_copy(update={"category": "funny"})
-    assert select_shorts([joke], js, count=2, min_s=20, max_s=60) == []  # not a learning moment
+    assert select_shorts([joke], js, count=2, min_s=20, max_s=60, tail_pad_s=0) == []  # not a learning moment
 
 
 def test_no_shorts_requested_or_available():
@@ -217,7 +217,7 @@ def test_removed_filler_at_either_end_of_a_short_is_dropped():
     js = [_j(i, length=9.0) for i in range(10)]
     js[2] = _j(2, length=9.0, decision="remove", removal="housekeeping", text="sorry, one second")
     short = _m(0, js[2].start, js[5].end, 9, "concept", True, 2, 5, peak=4)
-    (s,) = select_shorts([short], js, count=1, min_s=20, max_s=60)
+    (s,) = select_shorts([short], js, count=1, min_s=20, max_s=60, tail_pad_s=0)
     assert (s.start, s.end) == (js[3].start, js[5].end)
 
 

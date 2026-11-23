@@ -96,6 +96,7 @@ class Item:
     # Never part of `key`: a re-render must not upload the same Short again.
     style: str | None = None
     layout: str | None = None
+    length_type: str | None = None  # "standard" or "long" (Shorts), for the views comparison
 
 
 @dataclass
@@ -124,6 +125,7 @@ class Upload:
     notify: bool | None = None
     style: str | None = None
     layout: str | None = None
+    length_type: str | None = None
     # Not saved: set on the record upload_once returns when YouTube's answer
     # about a new upload differs from what was asked (publish/once.py).
     warning: str | None = None
@@ -161,12 +163,13 @@ def full_item(job: JobRecord) -> Item:
 
 
 def short_item(job: JobRecord, index: int, start: float | None = None, end: float | None = None,
-               style: str | None = None, layout: str | None = None) -> Item:
+               style: str | None = None, layout: str | None = None,
+               length_type: str | None = None) -> Item:
     source = source_of(job)
     clip = (float(start), float(end)) if start is not None and end is not None else None
     topic, meeting_id = _zoom_names(job)
     return Item(f"{source}|short|{job.job_id}|{index}", source, "short", job.job_id, job.title, job.meeting_date,
-                index, clip, topic, meeting_id, style, layout)
+                index, clip, topic, meeting_id, style, layout, length_type)
 
 
 def topic_item(job: JobRecord, index: int, start: float | None = None, end: float | None = None) -> Item:
@@ -254,6 +257,7 @@ class Ledger:
                 by=event.get("by") or "", updated_at=at,
                 publish_at=event.get("publish_at"), notify=event.get("notify"),
                 style=event.get("style"), layout=event.get("layout"),
+                length_type=event.get("length_type"),
             )
             return
         upload = self._uploads.get(key)
@@ -399,6 +403,7 @@ class Ledger:
             "publish_at": publish_at, "notify": notify,
             **({"style": item.style} if item.style else {}),
             **({"layout": item.layout} if item.layout else {}),
+            **({"length_type": item.length_type} if item.length_type else {}),
         })
         self._apply(record)
 
@@ -525,6 +530,7 @@ def _posted_line(upload: Upload) -> dict:
         "notify": upload.notify,
         **({"style": upload.style} if upload.style else {}),
         **({"layout": upload.layout} if upload.layout else {}),
+        **({"length_type": upload.length_type} if upload.length_type else {}),
     }
 
 
@@ -539,6 +545,7 @@ def _from_posted(line: dict) -> Upload:
         updated_at=line.get("posted_at") or "",
         publish_at=line.get("publish_at"), notify=line.get("notify"),
         style=line.get("style"), layout=line.get("layout"),
+        length_type=line.get("length_type"),
     )
 
 

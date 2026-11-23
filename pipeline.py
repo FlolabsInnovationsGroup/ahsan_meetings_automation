@@ -466,20 +466,24 @@ def _select(job, job_dir, judgments, moments, words, media, fade, duration, opts
 
     cap = publishing().shorts_per_meeting
     asked = opts.shorts_count
+    # the end card counts against the Shorts maximum: speech gets the rest
+    card_s = publishing().shorts_end_card_seconds if publishing().shorts_end_card else 0.0
     count = cap if asked is None else min(asked, cap)
     shorts = select_shorts(
         moments,
         judgments,
         count=count,
         min_s=settings.shorts_min_s,
-        max_s=settings.shorts_max_s,
+        max_s=max(settings.shorts_min_s, settings.shorts_max_s - card_s),
+        long_max_s=(publishing().shorts_long_max_seconds - card_s) if publishing().shorts_long else None,
         preferred_categories=settings.shorts_categories,
     )
     if asked and len(shorts) < count:
         job.warnings.append(f"found {len(shorts)} short-worthy moment(s), {count} requested")
     if silences:
         shorts = [s.model_copy(update=dict(zip(("start", "end"), trim_to_speech(
-            s.start, s.end, silences, settings.silence_pad_after_s, settings.silence_pad_before_s), strict=True)))
+            s.start, s.end, silences, settings.silence_pad_after_s, settings.silence_pad_before_s,
+            min_end=s.end), strict=True)))
             for s in shorts]
 
     reel_ids = {m.id for m in reel}

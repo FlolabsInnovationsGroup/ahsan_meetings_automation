@@ -118,6 +118,22 @@ class RenderOutputs:
     full_hd: bool = False
 
 
+def _card_picture(job_dir: Path, source: Path, clip, work: Path) -> Path | None:
+    """A picture of the meeting for the Short's end card: the full video's
+    thumbnail frame when one was already made (thumbnails/base_full_*.jpg),
+    else a frame from the middle of the Short. None (text-only card) when
+    neither can be had."""
+    try:
+        found = sorted((job_dir / "thumbnails").glob("base_full*.jpg"))
+        if found:
+            return found[0]
+        from publish.thumbframes import extract
+
+        return extract(source, (clip.start + clip.end) / 2, None, work / f"card_frame_{clip.index:02d}.jpg")
+    except Exception:  # noqa: BLE001 - the card is only decoration
+        return None
+
+
 def short_name(index: int) -> str:
     return f"shorts/short_{index:02d}.mp4"
 
@@ -327,7 +343,8 @@ def render_outputs(inp: RenderInputs, *, set_status: StatusFn, on_progress: Prog
                         burn_captions=settings.shorts_burn_captions,
                         style=pick_style(looks.shorts.style, inp.job_id, clip.index), look=looks.shorts,
                         recording_type=inp.recording_type, job_id=inp.job_id, index=clip.index,
-                        silences=silences,
+                        silences=silences, card_title=inp.title,
+                        card_picture=_card_picture(job_dir, inp.source, clip, work) if looks.shorts.end_card else None,
                     )
                     analysis_s += result.analysis_s
                     out.shorts.append(result)

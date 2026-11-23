@@ -61,6 +61,7 @@ class ShortInfo:
     style: str = "classic"
     layout: str = ""
     screen_hook_shown: bool = False
+    length_type: str = "standard"
 
 
 @dataclass(frozen=True)
@@ -169,7 +170,8 @@ def load_shorts(job: JobRecord) -> list[ShortInfo]:
                                     str(row.get("hook") or ""), start, end, at_s,
                                     str(row.get("text") or ""),
                                     str(row.get("style") or "classic"), str(row.get("layout") or ""),
-                                    bool(row.get("screen_hook_shown"))))
+                                    bool(row.get("screen_hook_shown")),
+                                    str(row.get("length_type") or "standard")))
         except (KeyError, TypeError, ValueError):
             logger.warning("job %s: skipping an unreadable shorts row in manifest.json: %r", job.job_id, row)
     return sorted(shorts, key=lambda s: s.index)
@@ -462,6 +464,41 @@ def _speaker_names(job: JobRecord) -> set[str]:
     return parts
 
 
+# Chapter titles that say nothing about the subject.
+_GENERIC_CHAPTER = re.compile(
+    r"^(?:(?:the\s+)?(?:intro(?:duction)?s?|welcome|opening|kick-?off|agenda|wrap(?:-?up)?|closing|outro|"
+    r"q\s*&\s*a|questions|next steps|action items|misc(?:ellaneous)?|other|updates?|status(?: updates?)?|"
+    r"round-?robin|team updates?|recap|summary|break|housekeeping)\b|.*\b(?:team|weekly) (?:updates?|sync)$)",
+    re.IGNORECASE)
+
+
+def _chapter_fallback(titles: list[str], names: set[str], room: int) -> str:
+    """The first chapter title that can stand as a video title: about a subject
+    (not "Intro" or "Team updates"), at least three words, no person's name and
+    nothing from the never-post list. "" when there is none."""
+    if room < 15:
+        return ""
+    try:
+        from autopilot import never_post
+
+        listed = never_post.entries()
+    except Exception:  # noqa: BLE001 - a title fallback must not stop a publish
+        listed = None
+    for raw in titles:
+        title = one_line(raw or "", room)
+        if (len(title.split()) < 3 or _GENERIC_CHAPTER.match(title) or _names_someone(title, names)
+                or listed is None or never_post_match(title, listed)):
+            continue
+        return title
+    return ""
+
+
+def never_post_match(text: str, listed: list[str]) -> bool:
+    from autopilot import never_post
+
+    return never_post.match_words(text, listed) is not None
+
+
 def _names_someone(title: str, names: set[str]) -> bool:
     """Whether a title names one of `names`: a capitalised word that is a part of
     a speaker's name ("Ahsan explains the cache")."""
@@ -524,12 +561,16 @@ def _title_candidates(job: JobRecord, label: str | None = None) -> list[str]:
     The day is always there; only the moment is shortened to fit TITLE_LIMIT."""
     label = label or series_label(job)
     room = TITLE_LIMIT - len(label) - 3
-    moment, _ = _best_moment(job)
-    if not moment or room < 15:
-        return []
     day = meeting_date(job)
     room -= len(day) + 3  # " — <day>"
     if room < 15:
+        return []
+    moment, _ = _best_moment(job)
+    if not moment:
+        # no moment passed the checks: a chapter title about a real subject
+        # beats "<meeting> — <day>", which nobody searches for
+        moment = _chapter_fallback(_chapter_entries(job), _speaker_names(job), room)
+    if not moment:
         return []
     return [f"{one_line(moment, room)} | {label} — {day}"]
 
@@ -874,7 +915,12 @@ def topic_title(info: TopicInfo, job: JobRecord) -> str:
         if title and room >= 15 and _grounded(title, info.text) and not _names_someone(title, names):
             candidates.append(title)
     if not candidates:
-        return one_line(f"{_topic(job) or 'Meeting'} — topic {info.index}")
+        # a title that tells a viewer nothing ("<meeting> — topic 1") gets no clicks:
+        # the cut's own chapter titles (written from what was said) come first
+        fallback = _chapter_fallback([t for _, t in info.chapters], names, room)
+        if not fallback:
+            return one_line(f"{_topic(job) or 'Meeting'} — topic {info.index}")
+        candidates.append(fallback)
     moment = candidates[0]
     posted = _posted_titles() | {full_title(job).lower()}
     plain = f"{moment} | {label}"

@@ -54,5 +54,9 @@ def _isolated_settings(tmp_path, monkeypatch):
     from publish import run as publish_run
 
     monkeypatch.setattr(publish_run, "_start_extras_worker", lambda: None)
+    # the daily follow-up passes (the thumbnail sweep) run only in the tests that ask for them
+    from publish import extras as follow_ups
+
+    monkeypatch.setattr(follow_ups, "_daily", [])
     yield
     get_settings.cache_clear()
