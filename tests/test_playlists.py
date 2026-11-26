@@ -259,3 +259,93 @@ def test_units_when_a_playlist_is_created(api):
     before = quota.today()["used"]
     playlists._runner(_task())
     assert quota.today()["used"] - before == 1 + 1 + 50 + 1 + 50
+
+
+# ------------------------------------------------------------------ backfill
+
+
+def _listing(monkeypatch, videos):
+    from publish import channel_check
+
+    monkeypatch.setattr(channel_check, "_build_service", lambda: None)
+    monkeypatch.setattr(channel_check, "_videos", lambda service: (videos, False))
+
+
+def _video(n, title, privacy="public", duration=1800):
+    return {"id": f"old{n:08d}", "title": title, "privacy": privacy, "publish_at": None,
+            "published_at": f"2025-01-{n:02d}T10:00:00Z", "duration": duration}
+
+
+def _backfill_tasks():
+    return [t for t in extras.all_tasks() if t.data.get("backfill")]
+
+
+def test_backfill_queues_past_public_videos_per_team(api, monkeypatch):
+    series.set_row("ai", label="AI", tier="public")
+    _listing(monkeypatch, [_video(1, "Space Meeting (2025-01-01)"), _video(2, "AI Meeting (2025-01-02)"),
+                           _video(3, "Space Meeting (2025-01-03)", duration=40)])
+    assert playlists.playlist_backfill() is True
+    by_id = {t.video_id: t for t in _backfill_tasks()}
+    assert by_id["old00000001"].series_key == "space" and by_id["old00000001"].data["which"] == "full"
+    assert by_id["old00000002"].series_key == "ai"
+    assert by_id["old00000003"].data["which"] == "shorts"
+    assert playlists.backfill_status()["added"] == 3
+    # and the same runner adds it, with no ledger record needed
+    monkeypatch.setattr(youtube, "youtube_status", lambda: {"connected": True})
+    _public(api, "old00000001")
+    assert extras.run_due() >= 1
+    assert any(v == "old00000001" for _p, v in api.items)
+
+
+def test_backfill_skips_unlisted_never_and_unmatched(api, monkeypatch):
+    _listing(monkeypatch, [
+        _video(1, "Space Meeting (2025-01-01)", privacy="unlisted"),
+        _video(2, "Space Meeting (2025-01-02)", privacy="private"),
+        _video(3, "Space HR Meeting (2025-01-03)"),
+        _video(4, "Random Chat Yesterday"),
+        _video(5, "Space Meeting (2025-01-05)")])
+    playlists.playlist_backfill()
+    assert [t.video_id for t in _backfill_tasks()] == ["old00000005"]
+    status = playlists.backfill_status()
+    assert status["skipped_not_public"] == 2 and status["skipped_never"] == 1 and status["skipped_no_team"] == 1
+
+
+def test_backfill_skips_teams_set_to_archive(api, monkeypatch):
+    series.set_row("old", label="Old", tier="archive")
+    _listing(monkeypatch, [_video(1, "Old Meeting (2025-01-01)")])
+    playlists.playlist_backfill()
+    assert _backfill_tasks() == [] and playlists.backfill_status()["skipped_never"] == 1
+
+
+def test_backfill_per_day_cap_newest_first(api, monkeypatch):
+    monkeypatch.setattr(playlists, "PLAYLIST_BACKFILL_PER_DAY", 2)
+    _listing(monkeypatch, [_video(n, f"Space Meeting (2025-01-{n:02d})") for n in range(1, 6)])
+    playlists.playlist_backfill()
+    assert sorted(t.video_id for t in _backfill_tasks()) == ["old00000004", "old00000005"]
+    assert playlists.backfill_status()["left_for_tomorrow"] == 3
+    playlists.playlist_backfill()  # the next day: the rest, not the same ones again
+    assert len(_backfill_tasks()) == 4
+
+
+def test_backfill_does_not_requeue_added_videos(api, monkeypatch):
+    _listing(monkeypatch, [_video(1, "Space Meeting (2025-01-01)")])
+    playlists.playlist_backfill()
+    playlists.playlist_backfill()
+    assert len(_backfill_tasks()) == 1
+    assert playlists.backfill_status()["added"] == 0
+
+
+def test_backfill_does_nothing_without_permission(api, monkeypatch):
+    monkeypatch.setattr(youtube, "has_scope", lambda scope: False)
+    _listing(monkeypatch, [_video(1, "Space Meeting (2025-01-01)")])
+    assert playlists.playlist_backfill() is False
+    assert _backfill_tasks() == []
+    assert "Reconnect YouTube" in playlists.backfill_status()["note"]
+
+
+def test_backfill_does_nothing_when_playlists_off(api, monkeypatch):
+    monkeypatch.setattr(playlists.publishing_settings, "current", lambda: SimpleNamespace(
+        playlists=False, playlist_shorts=True, playlist_cuts=True))
+    _listing(monkeypatch, [_video(1, "Space Meeting (2025-01-01)")])
+    assert playlists.playlist_backfill() is False
+    assert _backfill_tasks() == []

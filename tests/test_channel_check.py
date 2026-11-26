@@ -46,7 +46,7 @@ class FakeService:
             if index + 1 < len(self.pages):
                 page["nextPageToken"] = str(index + 1)
             return _Call(lambda: page)
-        assert part == "snippet,status" and len(kw["id"].split(",")) <= 50
+        assert part == "snippet,status,contentDetails" and len(kw["id"].split(",")) <= 50
         found = [self.videos_by_id[i] for i in kw["id"].split(",")]
         return _Call(lambda: {"items": [
             {"id": v["id"], "snippet": {"title": v["title"], "publishedAt": "2026-11-01T10:00:00Z"},

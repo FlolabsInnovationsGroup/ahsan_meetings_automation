@@ -966,9 +966,9 @@ def get_youtube_quota() -> dict:
 def get_follow_ups() -> dict:
     """Thumbnails, caption tracks and playlist adds that run after an upload,
     one plain line per video (publish/extras.py)."""
-    from publish import extras
+    from publish import extras, playlists
 
-    return {"videos": extras.tasks_for_page()}
+    return {"videos": extras.tasks_for_page(), "playlist_backfill": playlists.backfill_status()}
 
 
 @app.post("/publishing/extras/{task_id}/retry")

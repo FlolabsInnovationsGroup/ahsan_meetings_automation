@@ -146,10 +146,29 @@ def set_entries(raw: list[str]) -> list[str]:
     return cleaned
 
 
+# Zoom's default names for a meeting nobody named: "<Name>'s Zoom Meeting", a
+# personal meeting room. Never a team meeting (owner, 2026-11-27: "Flo Labs's
+# Zoom Meeting" went public as if it were a team). Built in, not on the editable
+# list, so it can't be removed by accident.
+_PERSONAL_ROOM = (" zoom meeting ", " personal meeting room ", " personal room ")
+
+
+def personal_room(topic: str | None) -> str | None:
+    """Why a title is a personal meeting room (never posted), or None."""
+    title = f" {_words(topic or '')} "
+    for phrase in _PERSONAL_ROOM:
+        if phrase in title:
+            return f'its title "{" ".join((topic or "").split())[:80]}" is a Zoom personal meeting room, never a team meeting'
+    return None
+
+
 def match(topic: str | None, meeting_id: object = None, listed: list[str] | None = None) -> str | None:
     """Why this meeting must not be posted, or None. `listed` saves reading
     the saved list again when many meetings are checked in a row."""
     title = f" {_words(topic or '')} "
+    personal = personal_room(topic)
+    if personal is not None:
+        return personal
     wanted_id = str(meeting_id).replace(" ", "") if meeting_id else ""
     for entry in entries() if listed is None else listed:
         zoom_id = _as_zoom_id(entry)

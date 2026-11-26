@@ -65,6 +65,20 @@ main() {
   after="$(git rev-parse --short HEAD)"
   echo "$before -> $after"
 
+  # Every build leaves layers in Docker's build cache, and the image is large
+  # (torch, WhisperX): the cache filled the disk once (2026-11-24, "no space
+  # left on device" mid-build). Below MIN_FREE_GB free, clear old images and
+  # the whole build cache first; the build is slower, but it finishes.
+  local free_gb
+  free_gb="$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc '0-9')"
+  if [[ -n "$free_gb" ]] && (( free_gb < ${MIN_FREE_GB:-15} )); then
+    echo "==> Only ${free_gb} GB free: clearing old images and the build cache"
+    docker image prune -af >/dev/null || true
+    docker builder prune -af >/dev/null || true
+    free_gb="$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc '0-9')"
+    echo "Now ${free_gb:-?} GB free"
+  fi
+
   echo "==> Rebuilding"
   docker compose up -d --build --remove-orphans
   # Caddy reads its config from a mounted file and compose doesn't notice a
@@ -84,6 +98,8 @@ main() {
     if docker compose ps app 2>/dev/null | grep -q "(healthy)"; then
       echo "Healthy after ~$((i * 5))s"
       docker image prune -f >/dev/null
+      # keep the cache of the last few days (fast rebuilds), drop the rest
+      docker builder prune -f --filter until=72h >/dev/null || true
       echo "=== done: $after"
       return 0
     fi

@@ -115,6 +115,7 @@ def _round(now: datetime) -> dict:
                 "slots.") if waiting else ""
         return {"moved": 0, "note": note}
     ledger = get_ledger()
+    pulled = pull_back_listed(now)
     moved = 0
     for booking in schedule.upcoming(now):
         if moved >= MAX_MOVES:
@@ -143,7 +144,52 @@ def _round(now: datetime) -> dict:
         ledger.rescheduled(booking.key, when)
         moved += 1
         logger.info("brought %s forward: %s -> %s", booking.key, schedule.rfc3339(old.at), when)
-    return {"moved": moved, "note": ""}
+    return {"moved": moved, "note": "", **({"pulled_back": pulled} if pulled else {})}
+
+
+# How far back the pull-back looks at what the app posted.
+PULL_BACK_DAYS = 30
+_pulled: set[str] = set()  # video ids already made private by this process
+
+
+def pull_back_listed(now: datetime) -> int:
+    """Make private every video the app posted in the last PULL_BACK_DAYS
+    whose meeting is now on the never-post list (or is a personal meeting
+    room), scheduled ones too, and free their release slots. Returns how many
+    were changed. Needs the edit permission (checked by the caller)."""
+    from autopilot import never_post
+
+    cutoff = now - timedelta(days=PULL_BACK_DAYS)
+    changed = 0
+    for upload in get_ledger().posted():
+        if not upload.video_id or upload.video_id in _pulled:
+            continue
+        try:
+            posted_at = datetime.fromisoformat(upload.posted_at) if upload.posted_at else None
+        except ValueError:
+            posted_at = None
+        if posted_at is not None and (posted_at if posted_at.tzinfo else posted_at.replace(tzinfo=UTC)) < cutoff:
+            continue
+        why = _blocked(upload) or never_post.personal_room(upload.meeting)
+        if why is None:
+            continue
+        outcome = optional.call("edit", UNITS, lambda vid=upload.video_id: _make_private(vid))
+        if outcome.status != optional.DONE:
+            if outcome.status in (optional.STOP_ALL, optional.NEEDS_RECONNECT):
+                break
+            continue
+        _pulled.add(upload.video_id)
+        schedule.release(upload.key)
+        if outcome.value:
+            changed += 1
+            logger.warning("made %s (%s) private: %s", upload.video_id, upload.key, why)
+    return changed
+
+
+def _make_private(video_id: str) -> bool:
+    from . import youtube_extra
+
+    return youtube_extra.make_private(video_id)
 
 
 def youtube_set(video_id: str, when: str) -> bool:

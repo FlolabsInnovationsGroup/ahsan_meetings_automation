@@ -78,6 +78,23 @@ def set_publish_at(video_id: str, publish_at: str) -> bool:
     return True
 
 
+def make_private(video_id: str) -> bool:
+    """Set a video to private and drop any time it was to go public. Returns
+    False when the video is not found or already private and unscheduled.
+    Costs 1 + 50 quota units. Needs the youtube.force-ssl permission."""
+    service = _service()
+    items = service.videos().list(part="status", id=video_id).execute().get("items", [])
+    if not items:
+        return False
+    status = items[0].get("status") or {}
+    if status.get("privacyStatus") == "private" and not status.get("publishAt"):
+        return False
+    body = {k: status[k] for k in _STATUS_WRITABLE if k in status}
+    body["privacyStatus"] = "private"  # no publishAt: it stays private
+    service.videos().update(part="status", body={"id": video_id, "status": body}).execute()
+    return True
+
+
 def insert_caption(video_id: str, srt_path: Path | str, language: str, name: str) -> dict:
     """Add a published (not draft) caption track from a subtitle file."""
     from googleapiclient.http import MediaFileUpload

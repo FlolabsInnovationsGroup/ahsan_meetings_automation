@@ -44,7 +44,9 @@ def _gets(world: World):
 def test_an_unknown_team_is_held_at_first_sight(world):
     m = _arrive(world)
     assert m.state == "needs_attention" and m.series_hold and m.series_key == KEY
-    assert m.error == f'Held for a person: "{TOPIC}" is a new team. Post this series from now on, or Skip.'
+    lines = m.error.splitlines()
+    assert lines[0] == f'Held for a person: "{TOPIC}" is a new team.'
+    assert lines[1].startswith(f'Meeting: "{TOPIC}"') and "Why:" in m.error and "Post this series" in m.error
     world.step(minutes=5)
     assert world.submitted == [] and world.channel.videos == {}
     assert series.lookup(TOPIC).seen == 1  # counted once, not once a check
@@ -77,7 +79,8 @@ def test_the_never_tier_skips_without_asking_zoom(world):
     m = _arrive(world)
     assert m.state == "skipped" and not m.series_hold
     label = series.lookup(TOPIC).label
-    assert m.error == f'Never posted: the team "{label}" is set to never in the Teams list.'
+    assert m.error.splitlines()[0] == f'Never posted: the team "{label}" is set to never in the Teams list.'
+    assert "What to do:" in m.error
     assert _gets(world) == [] and world.submitted == []
 
 
@@ -95,7 +98,8 @@ def test_never_post_beats_a_public_team(world):
     never_post.set_entries([KEY])
     m = _arrive(world)
     assert m.state == "skipped" and m.error.startswith("Never posted: ")
-    assert "team" not in m.error  # the never-post list answered, not the Teams list
+    assert "never-post list" in m.error.splitlines()[0]  # the never-post list answered, not the Teams list
+    assert "Teams list" not in m.error
     assert world.submitted == []
 
 
@@ -119,7 +123,8 @@ def test_post_it_after_all_does_not_bypass_a_series_hold(world):
 def test_a_name_with_no_team_in_it_is_held_too(world):
     m = _arrive(world, topic="Weekly Team Sync")
     assert m.state == "needs_attention" and m.series_hold and not m.series_key
-    assert m.error == "Held for a person: this meeting's name has no team in it. Post it after all, or Skip."
+    assert m.error.splitlines()[0] == "Held for a person: this meeting's name has no team in it."
+    assert "Post it after all" in m.error
     world.step(minutes=5)
     assert world.submitted == [] and world.channel.videos == {}
 
@@ -167,7 +172,7 @@ def test_archive_set_to_skip_is_not_posted(world):
     settings.save({"series_archive_privacy": "skip"})
     series.set_row(KEY, tier="archive")
     m = _arrive(world)
-    assert m.state == "skipped" and m.error == f'Not posted: "{series.lookup(TOPIC).label}" is an archive team.'
+    assert m.state == "skipped" and m.error.splitlines()[0] == f'Not posted: "{series.lookup(TOPIC).label}" is an archive team.'
 
 
 def test_allow_all_changes_nothing(world):

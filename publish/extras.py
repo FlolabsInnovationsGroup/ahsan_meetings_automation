@@ -342,6 +342,8 @@ def _never_post(task: Task) -> str | None:
 
 
 def _still_published(task: Task) -> bool:
+    if (task.data or {}).get("backfill"):  # a past video found on the channel; the runner checks it is public
+        return bool(task.video_id)
     from ledger.uploads import get_ledger
 
     upload = get_ledger().get(task.item_key)

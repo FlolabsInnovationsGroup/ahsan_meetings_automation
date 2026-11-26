@@ -196,3 +196,27 @@ def test_a_saved_thumbnail_test_mode_gives_way_to_ours_on_every_video():
     assert p.min_gap_hours == 3.0  # chosen under the rules of version 3: kept
     pub_settings.save({"thumbnail_mode": "test"})
     assert pub_settings.current().thumbnail_mode == "test"  # a choice made now stays
+
+
+# ------------------------------------------------------------- pulling back
+
+
+def test_a_personal_meeting_room_is_never_a_team_meeting():
+    from autopilot import never_post
+
+    for title in ("Flo Labs's Zoom Meeting", "Ahsan Yasin’s Zoom Meeting", "Zoom Meeting", "Personal Meeting Room"):
+        assert never_post.match(title) is not None, title
+    assert never_post.match("Internet of Things Meeting") is None
+    assert never_post.match("Robotics and Dev Meeting") is None
+
+
+def test_a_posted_personal_room_video_is_made_private_and_its_slot_freed(monkeypatch, channel):
+    made = []
+    monkeypatch.setattr(repack, "_make_private", lambda vid: made.append(vid) or True)
+    _posted("leak", "full", "zoom:p1", at(19, 12), title="Coach mode: stopwatch and attendance",
+            meeting="Flo Labs's Zoom Meeting")
+    _posted("ok", "full", "zoom:m1", at(19, 15))
+    result = repack.pull_forward(NOW)
+    assert made == ["vid-leak"] and result["pulled_back"] == 1
+    assert "leak" not in _times()
+    assert repack.pull_forward(NOW).get("pulled_back") is None  # done once, not every round

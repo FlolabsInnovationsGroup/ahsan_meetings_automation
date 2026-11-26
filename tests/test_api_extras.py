@@ -50,7 +50,7 @@ def test_quota_answers_with_an_empty_state(client):
 
 
 def test_extras_answers_with_an_empty_state(client):
-    assert client.get("/publishing/extras").json() == {"videos": []}
+    assert client.get("/publishing/extras").json() == {"videos": [], "playlist_backfill": {"at": None}}
 
 
 def test_retry_of_an_unknown_follow_up_is_404(client):

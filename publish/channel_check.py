@@ -17,6 +17,8 @@ connected, network, quota) are raised; the caller turns them into a message.
 
 from __future__ import annotations
 
+import re
+
 from autopilot import never_post
 from core.logging import get_logger
 from ledger import files
@@ -57,6 +59,15 @@ def _spend(units: int, kind: str) -> None:
         logger.warning("could not count %d quota unit(s) for %s: %s", units, kind, exc)
 
 
+def _seconds(text: str | None) -> int | None:
+    """Seconds in an ISO 8601 duration like PT1H2M3S; None when unreadable."""
+    found = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", text or "")
+    if not found or not any(found.groups()):
+        return None
+    d, h, m, sec = (int(g or 0) for g in found.groups())
+    return ((d * 24 + h) * 60 + m) * 60 + sec
+
+
 def _videos(service) -> tuple[list[dict], bool]:
     """Every upload of the channel (the newest 2000 at most), and whether the
     scan stopped at that cap with more still left."""
@@ -76,7 +87,7 @@ def _videos(service) -> tuple[list[dict], bool]:
         ids = [item["contentDetails"]["videoId"] for item in page.get("items", [])]
         if ids:
             _spend(1, "videos.list")
-            listing = service.videos().list(part="snippet,status", id=",".join(ids)).execute()
+            listing = service.videos().list(part="snippet,status,contentDetails", id=",".join(ids)).execute()
             for video in listing.get("items", []):
                 snippet, status = video.get("snippet") or {}, video.get("status") or {}
                 found.append({
@@ -85,6 +96,7 @@ def _videos(service) -> tuple[list[dict], bool]:
                     "privacy": status.get("privacyStatus") or "",
                     "publish_at": status.get("publishAt"),
                     "published_at": snippet.get("publishedAt"),
+                    "duration": _seconds((video.get("contentDetails") or {}).get("duration")),
                 })
         token = page.get("nextPageToken")
         if not token:

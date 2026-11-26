@@ -116,6 +116,27 @@ def _zoom_id(value: object) -> str | None:
     return str(value) if value else None
 
 
+ERROR_LIMIT = 2000  # characters kept of a meeting's explanation
+
+
+def explain(m: Meeting, headline: str, *, why: str = "", done: str = "", todo: str = "") -> str:
+    """A full explanation for the page: the short headline first (what the list
+    shows), then which meeting, why, what the app did and what to do now."""
+    parts = [headline.rstrip(".") + "."]
+    meeting = f'Meeting: "{m.topic or "(no title)"}"'
+    if m.start_time:
+        meeting += f", recorded {m.start_time[:16].replace('T', ' ')} UTC"
+    if m.meeting_id:
+        meeting += f", Zoom meeting ID {m.meeting_id}"
+    if m.host_email:
+        meeting += f", from the Zoom account {m.host_email}"
+    parts.append(meeting + ".")
+    for label, text in (("Why", why), ("What the app did", done), ("What to do", todo)):
+        if text:
+            parts.append(f"{label}: {text.rstrip('.')}.")
+    return "\n".join(parts)[:ERROR_LIMIT]
+
+
 def _stop_if_listed(m: Meeting, now: datetime, listed: list[str]) -> bool:
     """Skip a meeting on the never-post list, saying why. Its job, if one is
     running, may finish, but nothing of it is posted."""
@@ -123,7 +144,12 @@ def _stop_if_listed(m: Meeting, now: datetime, listed: list[str]) -> bool:
     if why is None:
         return False
     logger.warning("autopilot: %r (%s) will not be posted: %s", m.topic, m.uuid, why)
-    m.state, m.error, m.next_try_at, m.not_found_since = "skipped", f"Never posted: {why}.", None, None
+    m.state, m.next_try_at, m.not_found_since = "skipped", None, None
+    m.error = explain(m, f"Never posted: {why}",
+                      why=f"{why}; never-post meetings are internal and must not reach the channel",
+                      done="nothing was downloaded, cut or uploaded from it",
+                      todo="nothing, unless it is a real team meeting: then take the matching entry off the never-post "
+                           "list (a Zoom personal meeting room can't be taken off) and press Retry")
     m.updated_at = iso(now)
     return True
 
@@ -140,21 +166,40 @@ def _series_verdict(m: Meeting, tier: str, now: datetime) -> bool:
     label = (row.label if row else "") or m.topic or "this team"
     if tier == "never":
         logger.warning("autopilot: %r (%s) is a never-tier team: not posted", m.topic, m.uuid)
-        m.state, m.error, m.next_try_at, m.not_found_since = (
-            "skipped", f'Never posted: the team "{label}" is set to never in the Teams list.', None, None)
+        m.state, m.next_try_at, m.not_found_since = "skipped", None, None
+        m.error = explain(m, f'Never posted: the team "{label}" is set to never in the Teams list',
+                          why=f'the Teams list says "{label}" never goes on the channel',
+                          done="nothing was downloaded, cut or uploaded",
+                          todo=f'nothing; to post this team from now on, set "{label}" to public in the Teams panel')
         m.series_hold = False
     elif tier == "archive" and cfg.series_archive_privacy == "skip":
-        m.state, m.error, m.next_try_at, m.not_found_since = (
-            "skipped", f'Not posted: "{label}" is an archive team.', None, None)
+        m.state, m.next_try_at, m.not_found_since = "skipped", None, None
+        m.error = explain(m, f'Not posted: "{label}" is an archive team',
+                          why="archive teams are skipped under the current Publishing setting",
+                          done="nothing was uploaded",
+                          todo=f'set "{label}" to public in the Teams panel to post it, or change the archive setting')
         m.series_hold = False
     elif tier == "unknown" and cfg.series_mode == "allow_list" and not (m.series_cleared and not m.series_key):
         # a name with no team left in it (e.g. "Weekly Team Sync") is unknown too; a person who
         # pressed "Post it after all" on it (series_cleared) has decided that one meeting
         logger.info("autopilot: %r (%s) is held: %s", m.topic, m.uuid, "a new team" if m.series_key else "no team in its name")
         m.state, m.next_try_at, m.series_hold = "needs_attention", None, True
-        m.error = (f'Held for a person: "{label}" is a new team. Post this series from now on, or Skip.'
-                   if m.series_key else
-                   "Held for a person: this meeting's name has no team in it. Post it after all, or Skip.")
+        if m.series_key:
+            m.error = explain(
+                m, f'Held for a person: "{label}" is a new team',
+                why=f'"{label}" is not in the Teams list yet, and only approved teams go on the channel '
+                    "(a new team could be a private or internal meeting)",
+                done="nothing was downloaded, cut or uploaded; it waits for you",
+                todo=f'if "{label}" is a real team whose meetings should be public, press "Post this series"; if it is '
+                     "private (a 1-to-1, a client call, a personal room), press Skip and set the team to never in the "
+                     "Teams panel so it is never asked again")
+        else:
+            m.error = explain(
+                m, "Held for a person: this meeting's name has no team in it",
+                why='the title names no team (for example "Weekly Sync"), so the app can\'t tell whether it is public',
+                done="nothing was downloaded, cut or uploaded; it waits for you",
+                todo='press "Post it after all" if it is a team meeting that should go up, otherwise Skip; renaming the '
+                     "Zoom meeting to include the team name avoids this next time")
     else:
         return False
     m.updated_at = iso(now)
@@ -333,14 +378,20 @@ class Engine:
 
     def _failed(self, m: Meeting, now: datetime, error: str) -> None:
         """Process it again after a wait, or (out of retries) wait for a person."""
-        m.error = error[:500]
         m.job_id, m.by_hand = None, False
         retries = get_settings().autopilot_max_retries
         if m.attempts <= retries:
             wait = RETRY_WAITS[min(max(m.attempts - 1, 0), len(RETRY_WAITS) - 1)]
             m.state, m.next_try_at = "ready", iso(now + wait)
+            m.error = explain(m, error, why=error,
+                              done=f"attempt {m.attempts} of {retries + 1} failed; the autopilot tries again at "
+                                   f"{iso(now + wait)[:16].replace('T', ' ')} UTC",
+                              todo="nothing yet; if it keeps failing, open its job's log for the full error")
         else:
             m.state = "needs_attention"
+            m.error = explain(m, error, why=error,
+                              done=f"all {retries + 1} attempts failed, so the autopilot stopped trying",
+                              todo="open its job's log for the full error; press Retry once the cause is fixed, or Skip")
 
     # ------------------------------------------------------------- 2. posting
     def _start_posting(self, now: datetime) -> None:
@@ -406,7 +457,12 @@ class Engine:
             if why is None:
                 return False
             logger.warning("autopilot: not posting %r (%s): %s", m.topic, uuid, why)
-            m.state, m.error, m.next_try_at = "skipped", f"Never posted: {why}.", None
+            m.state, m.next_try_at = "skipped", None
+            m.error = explain(m, f"Never posted: {why}", why=f"{why}, found in the last check right before upload",
+                              done="it was processed, but none of its videos were uploaded; its files stay on the "
+                                   "server until the retention hours are up",
+                              todo="nothing, unless it is a real team meeting: then take the entry off the never-post "
+                                   "list and press Retry")
             m.updated_at = iso(self.clock())
             return True
 
@@ -447,7 +503,10 @@ class Engine:
                 return False
             logger.warning("autopilot: holding %r (%s): %s", m.topic, uuid, why)
             m.state, m.next_try_at = "needs_attention", None
-            m.error = f'Held for a person: {why}. Use "Post it after all" if it should go up.'
+            m.error = explain(m, f"Held for a person: {why}",
+                              why=f"{why}; unusual meetings wait so a mistake doesn't go on the channel",
+                              done="the videos are made but nothing was uploaded",
+                              todo='check the job\'s videos; press "Post it after all" if they should go up, otherwise Skip')
             m.updated_at = iso(self.clock())
             return True
 
