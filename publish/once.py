@@ -34,19 +34,20 @@ TAG_COUNT = 12
 
 
 def tag_list(marker: str, extra: Sequence[str] = ()) -> list[str]:
-    """The upload's hidden tags: the marker first and always (it finds the video
-    again when the upload link is lost), then the search tags that fit: at most
-    TAG_COUNT tags and TAG_CHARS characters in all (a tag with a space counts 2
-    more, for the quotes YouTube adds), no exact repeats, no < or >."""
-    tags = [marker]
+    """The upload's tags: the search tags that fit (topic first), then the hidden
+    marker LAST. The marker is always there (it finds the video again when the
+    upload link is lost): room for it is kept, so at most TAG_COUNT tags and
+    TAG_CHARS characters in all (a tag with a space counts 2 more, for the quotes
+    YouTube adds), no exact repeats, no < or >."""
+    tags: list[str] = []
     total = len(marker)
     for raw in extra:
         tag = " ".join(str(raw).replace("<", " ").replace(">", " ").split())[:100]
         cost = len(tag) + (2 if " " in tag else 0)
-        if tag and tag not in tags and len(tags) < TAG_COUNT and total + cost <= TAG_CHARS:
+        if tag and tag != marker and tag not in tags and len(tags) < TAG_COUNT - 1 and total + cost <= TAG_CHARS:
             tags.append(tag)
             total += cost
-    return tags
+    return [*tags, marker]
 
 
 class NeverPost(Exception):

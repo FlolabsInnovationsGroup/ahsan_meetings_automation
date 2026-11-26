@@ -72,13 +72,13 @@ def test_release_numbers_saved_under_old_rules_give_way_to_todays_defaults():
     assert (p.review_hours, p.min_gap_hours, p.max_per_day) == (0.0, 1.0, 24)
     assert (p.window_start_hour, p.window_end_hour, p.shorts_after_full_hours) == (0, 24, 1.0)
     assert p.shorts_per_meeting == pub_settings.DEFAULTS.shorts_per_meeting
-    assert p.hashtags_max == 5  # not a release number: kept
+    assert p.hashtags_max == 5  # a saved 8 from before rules version 5 gives way to the default 5
 
 
 def test_a_save_keeps_only_what_differs_and_survives_a_rules_change():
     pub_settings.save({"min_gap_hours": 3, "hashtags_max": 5})
     stored = files.read_json(files.state_dir() / "prefs.json", {})["publishing"]
-    assert stored == {"min_gap_hours": 3.0, "hashtags_max": 5, "_rules_version": pub_settings.RULES_VERSION}
+    assert stored == {"min_gap_hours": 3.0, "_rules_version": pub_settings.RULES_VERSION}  # 5 is the default now
     assert pub_settings.current().min_gap_hours == 3.0  # a choice made under today's rules stays
 
 
@@ -220,3 +220,12 @@ def test_a_posted_personal_room_video_is_made_private_and_its_slot_freed(monkeyp
     assert made == ["vid-leak"] and result["pulled_back"] == 1
     assert "leak" not in _times()
     assert repack.pull_forward(NOW).get("pulled_back") is None  # done once, not every round
+
+
+def test_a_saved_eight_hashtags_gives_way_to_five_but_a_newer_save_stays():
+    files.write_json(files.state_dir() / "prefs.json", {"publishing": {"hashtags_max": 8}})
+    assert pub_settings.current().hashtags_max == 5
+    files.write_json(files.state_dir() / "prefs.json", {"publishing": {"hashtags_max": 8, "_rules_version": 4}})
+    assert pub_settings.current().hashtags_max == 5
+    pub_settings.save({"hashtags_max": 3})
+    assert pub_settings.current().hashtags_max == 3

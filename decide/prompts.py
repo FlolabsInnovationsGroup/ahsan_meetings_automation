@@ -180,8 +180,15 @@ design does and why, a lesson learned, a take on a new or trending idea in tech,
 science — so a viewer comes away knowing something new; a line \
 of setup inside the clip is fine. n for plain status ("I finished X, next I will do Y"), lists \
 of tasks, logistics, or a moment that only makes sense with the rest of the meeting
-- title: at most 60 characters, specific ("Moving the session store to Redis"), no "|", \
-and no people's names (say what is explained, not who said it)
+- title: at most 60 characters, written like what a stranger types into YouTube search \
+("How to cut Claude token costs with local models", "Why AI-coded front ends collapse", \
+"Moving the session store to Redis"): the subject first, only words actually said in the clip, \
+no "|", no people's names (say what is explained, not who said it), no clickbait
+- Would a stranger care? Rank LOW (1-3) and answer n for a moment that only matters inside the \
+company: internal logistics, who does which task, an intern's setup, Notion or task-tracker \
+admin, budgets, money amounts, credits, API keys, passwords, access or permissions, hiring, \
+client names. A moment about how a tool or technique works stays outsider-worthy even when it \
+came up in a work update: rank it on what it teaches
 - why: one sentence (at most 140 characters) on why it is worth watching, no "|"
 - hook: the words a Short of this moment shows on screen in its first seconds: at most 6 words \
 and 40 characters, made only of words and numbers actually said in the clip, no clickbait, \

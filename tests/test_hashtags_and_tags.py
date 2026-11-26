@@ -51,21 +51,21 @@ def _short_tags(job, n=1) -> list[str]:
 # ------------------------------------------------------- order, count, shape
 
 
-def test_order_is_brand_then_team_then_field_then_named_tools():
+def test_order_is_named_tools_then_field_then_team_with_the_brand_last():
     job = _job(rows=[_row(1)])
-    assert _full_tags(job) == ["#FloLabs", "#RoboticsAndDev", "#Robotics", "#Engineering", "#Redis"]
+    assert _full_tags(job) == ["#Redis", "#Robotics", "#Engineering", "#RoboticsAndDev", "#FloLabs"]
 
 
-def test_default_is_eight_and_the_line_never_passes_the_setting():
-    assert pub_settings.DEFAULTS.hashtags_max == 8
+def test_default_is_five_and_the_line_never_passes_the_setting():
+    assert pub_settings.DEFAULTS.hashtags_max == 5
     row = _row(1, title="Moving ESP32 and FloBrain from Redis to Kafka with Docker", hook="Why Postgres and Grafana beat Nginx with Celery, Pytest and Vite.")
     tags = _short_tags(_job(rows=[row]))
-    assert len(tags) == 8 and tags[:4] == ["#FloLabs", "#RoboticsAndDev", "#Robotics", "#Engineering"]
+    assert len(tags) == 5 and tags[-1] == "#FloLabs" and tags[0] == "#ESP32"
 
 
-def test_the_first_three_are_brand_team_and_one_field_word():
+def test_three_hashtags_are_two_topic_ones_and_the_brand_last():
     pub_settings.save({"hashtags_max": 3})
-    assert _full_tags(_job(rows=[_row(1)])) == ["#FloLabs", "#RoboticsAndDev", "#Robotics"]
+    assert _full_tags(_job(rows=[_row(1)])) == ["#Redis", "#Robotics", "#FloLabs"]
 
 
 def test_max_15_caps_a_long_list():
@@ -74,7 +74,7 @@ def test_max_15_caps_a_long_list():
     series.set_row("robotics and dev", hashtags=["#RoboLab", "#Builders"])
     pub_settings.save({"hashtags_max": 15})
     tags = _short_tags(_job(rows=[_row(1, title="Moving ESP32 and FloBrain from Redis to Kafka with Docker", hook="Why Postgres and Grafana beat Nginx with Celery, Pytest and Vite.")]))
-    assert len(tags) == 15  # brand, 2 team, 2 field and the ten names the finder keeps
+    assert len(tags) == 15 and tags[-1] == "#FloLabs"  # the ten names the finder keeps, 2 field, 2 team, the brand
     assert len({t.lower() for t in tags}) == len(tags)
     pub_settings.save({"hashtags_max": 6})
     assert len(_short_tags(_job(rows=[_row(1, title="Moving ESP32 and FloBrain from Redis to Kafka with Docker", hook="Why Postgres and Grafana beat Nginx with Celery, Pytest and Vite.")]))) == 6
@@ -202,7 +202,7 @@ def test_the_full_video_takes_names_from_its_title_hook_and_chapter_titles():
     job = _job(rows=[_row(1, hook="Why FloBrain timed out.")],
                chapters=[*CHAPTERS, (900, "Moving to Grafana")])
     tags = _full_tags(job)
-    assert tags[-3:] == ["#Redis", "#FloBrain", "#Grafana"]
+    assert tags[:3] == ["#Redis", "#FloBrain", "#Grafana"] and tags[-1] == "#FloLabs"
 
 
 def test_the_full_video_checks_title_words_against_the_shorts_text_but_trusts_its_chapters():
@@ -218,16 +218,16 @@ def test_a_topic_cut_and_a_short_get_hashtags_too():
     job = job_with_topics()
     info = describe.load_topics(job)[0]
     last = describe.topic_description(info, job).splitlines()[-1]
-    assert last.startswith("#FloLabs ") and "#Redis" in last.split()
+    assert last.endswith(" #FloLabs") and "#Redis" in last.split()
     short = describe.load_shorts(job)[0]
-    assert describe.short_description(short, job).splitlines()[-1].startswith("#FloLabs ")
+    assert describe.short_description(short, job).splitlines()[-1].endswith(" #FloLabs")
 
 
-def test_a_registry_team_keeps_its_own_hashtags_in_second_place():
+def test_a_registry_team_keeps_its_own_hashtags_after_the_field_and_the_brand_last():
     from publish import series
 
     series.set_row("robotics and dev", hashtags=["#RoboLab", "#Builders"])
-    assert _short_tags(_job(rows=[_row(1)]))[:5] == ["#FloLabs", "#RoboLab", "#Builders", "#Robotics", "#Engineering"]
+    assert _short_tags(_job(rows=[_row(1)])) == ["#Redis", "#Robotics", "#Engineering", "#RoboLab", "#FloLabs"]
 
 
 # ------------------------------------------------------ description limits
@@ -239,7 +239,7 @@ def test_descriptions_stay_within_youtubes_limits_with_15_hashtags():
     full = describe.full_description(job)
     assert describe.description_problem(full) is None
     assert len(full.encode("utf-8")) <= describe.DESCRIPTION_LIMIT - describe.SHORTS_ROOM
-    assert full.splitlines()[-1].startswith("#FloLabs ")
+    assert full.splitlines()[-1].endswith(" #FloLabs") and full.splitlines()[-1].startswith("#ESP32 ")
     shorts = [(i, "A reasonably long short title about " + "x" * 40, "https://youtu.be/abcdefghijk") for i in range(4)]
     combined, kept = describe.with_shorts_block(full, shorts)
     assert describe.description_problem(combined) is None and kept == [0, 1, 2, 3]
@@ -252,19 +252,19 @@ def test_hashtags_give_way_last_when_the_chapters_fill_the_room(monkeypatch):
     long_chapters = [(i * 30, f"Chapter number {i} about boards") for i in range(12)]
     text = describe.full_description(_job(rows=[_row(1)], chapters=long_chapters))
     assert text.startswith("00:00") and "05:30 Chapter number 11 about boards" in text  # never cut
-    assert text.splitlines()[-1] == "#FloLabs"  # the chapters fill the room: the other hashtags went first
+    assert text.splitlines()[-1] == "#FloLabs"  # the chapters fill the room: the topic hashtags went first, the brand stays
 
 
 # ------------------------------------------------------ hidden search tags
 
 
-def test_search_tags_are_brand_team_field_and_names_with_the_marker_kept_first():
+def test_search_tags_are_topic_first_with_one_brand_tag_and_the_marker_last():
     job = _job(rows=[_row(1)])
     extra = describe.search_tags(job, "full")
-    assert extra[:4] == ["FloLabs", "Flolabs", "FloLabs Innovations", "Flomad Labs"]
-    assert extra[4:] == ["Robotics and Dev", "Robotics", "Engineering", "Redis"]
+    assert extra == ["Redis", "Robotics", "Engineering", "Robotics and Dev", "FloLabs"]
+    assert not {"Flolabs", "FloLabs Innovations", "Flomad Labs"} & set(extra)
     tags = once.tag_list("hcabc123", extra)
-    assert tags[0] == "hcabc123" and tags[1:] == extra
+    assert tags[-1] == "hcabc123" and tags[:-1] == extra
     assert len(tags) <= 12
 
 
@@ -281,7 +281,7 @@ def test_search_tags_still_come_when_hashtags_are_off():
 
 def test_search_tags_are_at_most_eleven_beside_the_marker():
     extra = describe.search_tags(_job(rows=[_row(1, title="Moving ESP32 and FloBrain from Redis to Kafka with Docker", hook="Why Postgres and Grafana beat Nginx with Celery, Pytest and Vite.")]), "short", 1)
-    assert len(extra) == 11
+    assert len(extra) == 11 and extra[-1] == "FloLabs"
     assert len(once.tag_list("hcabc123", extra)) == 12
 
 
@@ -289,13 +289,13 @@ def test_the_tag_text_is_capped_at_450_characters_and_the_marker_stays():
     marker = "hc0123456789ab"
     many = [f"word{i:03d}" + "x" * 40 for i in range(40)]
     tags = once.tag_list(marker, many)
-    assert tags[0] == marker
+    assert tags[-1] == marker
     assert sum(len(t) for t in tags) <= 450 and len(tags) <= 12
     long_ones = ["y" * 100] * 3 + ["short one", "z" * 90, "w" * 90, "v" * 90]
     tags = once.tag_list(marker, long_ones)
-    assert tags[0] == marker and sum(len(t) + (2 if " " in t else 0) for t in tags) <= 450
+    assert tags[-1] == marker and sum(len(t) + (2 if " " in t else 0) for t in tags) <= 450
     assert once.tag_list(marker, []) == [marker]
-    assert once.tag_list(marker, ["a", "a", "<b>"]) == [marker, "a", "b"]
+    assert once.tag_list(marker, ["a", "a", "<b>"]) == ["a", "b", marker]
 
 
 def test_the_upload_carries_the_search_tags_to_upload_once():
@@ -309,3 +309,26 @@ def test_plain_capitalised_words_are_never_names():
                  "How We Cut Costs", "A Tour of Our New Lab", "Fixing the Camera Lag"]:
         assert describe._names_in(text) == []
     assert describe._names_in("Waiting on Sarah for the PCB") == ["PCB"]
+
+
+# ----------------------------------------------- multi-word names, fragments
+
+
+def test_a_name_of_two_words_stays_together():
+    assert describe._names_in("We run Claude Code on a Raspberry Pi 5 with Redis") == ["Claude Code", "Raspberry Pi", "Redis"]
+    row = _row(1, title="Remote access to a Raspberry Pi", hook="How the Raspberry Pi runs Claude Code.",
+               text="the raspberry pi runs claude code remotely")
+    job = _job(rows=[row])
+    assert "#RaspberryPi" in _short_tags(job) and "#Raspberry" not in _short_tags(job)
+    assert "Raspberry Pi" in describe.search_tags(job, "short", 1)
+
+
+def test_fragments_are_never_names_unless_said_as_an_acronym():
+    assert describe._names_in("the IoC container and IoT nodes") == ["IoT"]
+    assert describe._names_in("the IOC container") == ["IOC"]
+
+
+def test_only_one_brand_tag_is_public():
+    job = _job(rows=[_row(1)])
+    tags = describe.search_tags(job, "full")
+    assert [t for t in tags if "flolabs" in t.lower() or "flomad" in t.lower()] == ["FloLabs"]

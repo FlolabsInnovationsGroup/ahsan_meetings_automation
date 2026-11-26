@@ -472,10 +472,16 @@ _GENERIC_CHAPTER = re.compile(
     re.IGNORECASE)
 
 
-def _chapter_fallback(titles: list[str], names: set[str], room: int) -> str:
+def _norm_moment(text: str) -> str:
+    """A title's moment part, for comparing titles across formats."""
+    return " ".join(one_line(text or "").lower().split())
+
+
+def _chapter_fallback(titles: list[str], names: set[str], room: int, exclude: set[str] | None = None) -> str:
     """The first chapter title that can stand as a video title: about a subject
     (not "Intro" or "Team updates"), at least three words, no person's name and
-    nothing from the never-post list. "" when there is none."""
+    nothing from the never-post list, and not one of `exclude` (lower-cased
+    titles another video of the meeting already has). "" when there is none."""
     if room < 15:
         return ""
     try:
@@ -487,6 +493,7 @@ def _chapter_fallback(titles: list[str], names: set[str], room: int) -> str:
     for raw in titles:
         title = one_line(raw or "", room)
         if (len(title.split()) < 3 or _GENERIC_CHAPTER.match(title) or _names_someone(title, names)
+                or _norm_moment(title) in (exclude or ()) or _leaks(title)
                 or listed is None or never_post_match(title, listed)):
             continue
         return title
@@ -546,6 +553,40 @@ def _best_moment_full(job: JobRecord) -> tuple[str, str, tuple[float, float] | N
     return "", "", None
 
 
+def _short_titles(job: JobRecord) -> set[str]:
+    return {_norm_moment(s.title) for s in load_shorts(job) if s.title}
+
+
+def _taken_titles(job: JobRecord) -> set[str]:
+    """The moments this meeting's Shorts and topic cuts already carry as titles."""
+    return _short_titles(job) | {_norm_moment(t.title) for t in load_topics(job) if t.title}
+
+
+def _full_moment(job: JobRecord, room: int = TITLE_LIMIT) -> str:
+    """The moment part of the full video's title, never one that a Short or a
+    topic cut of this meeting carries: the next highlight of the reel that no
+    Short took, else a chapter title about a real subject. "" when none is left."""
+    taken = _taken_titles(job)
+    names = _speaker_names(job)
+    data = _read_json(get_settings().jobs_dir / job.job_id / "manifest.json")
+    rows = data.get("highlights") if isinstance(data, dict) else None
+    if isinstance(rows, list):
+        for row in rows:
+            title = one_line(row.get("title") or "") if isinstance(row, dict) else ""
+            if title and _norm_moment(title) not in taken and not _names_someone(title, names) and not _leaks(title):
+                return title
+    chapter = _chapter_fallback(_chapter_entries(job), names, room, taken)
+    if chapter:
+        return chapter
+    # every good moment went to a Short or a cut: "Full meeting: <the best one>"
+    # still says what it is about, and is not the Short's own title
+    best, _ = _best_moment(job)
+    if (best and len(best.split()) >= 3 and not _GENERIC_CHAPTER.match(best) and not _leaks(best)
+            and room >= len("Full meeting: ") + 15):
+        return f"Full meeting: {one_line(best, room - len('Full meeting: '))}"
+    return ""
+
+
 def _posted_titles() -> set[str]:
     try:
         # imported here because the ledger sits beside this package
@@ -558,18 +599,17 @@ def _posted_titles() -> set[str]:
 
 def _title_candidates(job: JobRecord, label: str | None = None) -> list[str]:
     """The topic-first title this meeting gets: "<moment> | FloLabs <Series> — <day>".
-    The day is always there; only the moment is shortened to fit TITLE_LIMIT."""
+    The moment differs from every Short and topic title of the meeting. The day
+    is always there; only the moment is shortened to fit TITLE_LIMIT."""
     label = label or series_label(job)
     room = TITLE_LIMIT - len(label) - 3
     day = meeting_date(job)
     room -= len(day) + 3  # " — <day>"
     if room < 15:
         return []
-    moment, _ = _best_moment(job)
-    if not moment:
-        # no moment passed the checks: a chapter title about a real subject
-        # beats "<meeting> — <day>", which nobody searches for
-        moment = _chapter_fallback(_chapter_entries(job), _speaker_names(job), room)
+    # never the title of one of this meeting's Shorts or topic cuts; when no
+    # other moment is left the caller falls back to "<meeting> — <day>"
+    moment = _full_moment(job, room)
     if not moment:
         return []
     return [f"{one_line(moment, room)} | {label} — {day}"]
@@ -588,7 +628,7 @@ def title_variants(job: JobRecord) -> set[str]:
 
 
 def full_title(job: JobRecord) -> str:
-    """The full video's title: "<best moment> | FloLabs <Series> — <day>" (topic_first),
+    """The full video's title: "<a moment no Short or topic has> | FloLabs <Series> — <day>" (topic_first),
     or the meeting's name and day (meeting_date)."""
     if pub_settings.current().title_style != "topic_first":
         return _title_meeting_date(job)
@@ -631,7 +671,7 @@ _FIELD_RULES: tuple[tuple[tuple[str, ...], tuple[tuple[str, str], ...]], ...] = 
     (("frontend",), (("#WebDevelopment", "Web Development"),)),
     (("ai",), (("#AI", "AI"), ("#MachineLearning", "Machine Learning"))),
 )
-_BRAND_SPELLINGS = ("FloLabs", "Flolabs", "FloLabs Innovations", "Flomad Labs")
+_BRAND_WORD = "FloLabs"  # the one public brand tag; other spellings are not tagged
 _FIELD_UNKNOWN =(("#Tech", "Tech"), ("#Innovation", "Innovation"))
 _HASHTAG_SHAPE = re.compile(r"#[A-Za-z0-9]{1,29}")
 _NAME_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*")
@@ -666,7 +706,12 @@ _KNOWN_TOOLS = {
     "tensorflow", "numpy", "pandas", "fastapi", "django", "flask", "react", "vue", "angular", "svelte",
     "mongodb", "sqlite", "mysql", "rabbitmq", "terraform", "ansible", "jenkins", "github", "gitlab",
     "zoom", "youtube", "whisper", "whisperx", "ffmpeg", "unity", "unreal", "blender", "gazebo", "esp",
+    "claude", "anthropic", "openai", "chatgpt", "gemini", "ollama", "llama", "cursor", "copilot", "langchain",
 }
+# Words that finish a known tool's name ("Raspberry Pi", "Claude Code"): kept together with it.
+_NAME_PARTNERS = {"pi", "code", "compose", "studio", "desktop", "assistant", "pico", "nano", "orin"}
+# Short CamelCase words that are real names; any other ("IoC") is a fragment, taken only said in capitals.
+_SHORT_CAMEL = {"iot", "ios", "ipad", "imac", "tvos", "ipfs"}
 _NOT_ACRONYMS = {"ok", "us", "uk", "it", "vs", "pm", "am", "and", "the", "not", "why", "how", "faq", "tbd", "eta", "fyi"}
 
 
@@ -679,6 +724,8 @@ def _said(word: str, tokens: set[str], compact: str) -> bool:
     """Whether a name is spoken in the clip: as a word, as a close stem of one, or
     (for names with digits, "ESP 32") with the spaces taken out."""
     low = word.lower()
+    if " " in low:  # a name of several words: every part has to be said
+        return all(_said(part, tokens, compact) for part in low.split())
     if low in tokens:
         return True
     if len(low) >= 5 and low.isalpha() and low[:5] in {t[:5] for t in tokens if len(t) >= 5}:
@@ -695,7 +742,7 @@ def _name_like(word: str) -> str | None:
     if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9]*", word) and not _ORDINAL.fullmatch(word):
         return "digit" if len(word) >= 3 else None
     if re.search(r"[a-z][A-Z]", word):
-        return "camel"
+        return "camel" if len(word) >= 5 or word.lower() in _SHORT_CAMEL else None
     if re.fullmatch(r"[A-Z]{2,6}", word):
         return None if word.lower() in _NOT_ACRONYMS else "acronym"
     if re.fullmatch(r"[A-Z][a-z]{2,}", word) and word.lower() in _KNOWN_TOOLS:
@@ -710,10 +757,19 @@ def _names_in(text: str) -> list[str]:
     people or Title Case)."""
     found: list[str] = []
     for sentence in _SENTENCE_BREAK.split(text):
-        for raw in sentence.split():
-            word = raw.strip(_EDGE_PUNCT)
-            if _name_like(word) is not None and word.lower() not in _NOT_NAMES:
-                found.append(word)
+        words = [raw.strip(_EDGE_PUNCT) for raw in sentence.split()]
+        skip = False
+        for i, word in enumerate(words):
+            if skip:  # the second word of a name already taken ("Pi")
+                skip = False
+                continue
+            kind = _name_like(word)
+            if kind is None or word.lower() in _NOT_NAMES:
+                continue
+            nxt = words[i + 1] if i + 1 < len(words) else ""
+            if kind == "tool" and nxt[:1].isupper() and nxt.lower() in _NAME_PARTNERS:
+                word, skip = f"{word} {nxt}", True  # "Raspberry Pi" stays one name
+            found.append(word)
     return found
 
 
@@ -784,49 +840,90 @@ def _valid_hashtag(tag: str) -> bool:
 
 
 def _hashtags(job: JobRecord, extra: str | list[str] | tuple[str, ...] = ()) -> str:
-    """Up to the owner's hashtags_max hashtags, space-separated, in this order:
-    #FloLabs, the team, the team's field, then `extra` (the tools and topics said
-    in the video, each "#Name"). Each is letters and digits only, at most 30
-    characters, never #shorts, and appears once (any case). YouTube shows the
-    first three above the title and ignores them all past 60."""
+    """Up to the owner's hashtags_max hashtags, space-separated, topic first: the
+    `extra` tools and topics said in the video (each "#Name"), the team's field,
+    the team's own tags, and #FloLabs always last. Each is letters and digits
+    only, at most 30 characters, never #shorts, and appears once (any case).
+    YouTube shows the first three above the title and ignores them all past 60."""
     limit = pub_settings.current().hashtags_max
     if limit <= 0:
         return ""
     if isinstance(extra, str):
         extra = extra.split()
     tags: list[str] = []
-    seen: set[str] = set()
-    for tag in (_BRAND_TAG, *_series_tag(job).split(), *(h for h, _ in _field_pairs(job)), *extra):
+    seen: set[str] = {_BRAND_TAG.lower()}
+    for tag in (*extra, *(h for h, _ in _field_pairs(job)), *_series_tag(job).split()):
         if tag and _valid_hashtag(tag) and tag.lower() not in seen:
             seen.add(tag.lower())
             tags.append(tag)
-    return " ".join(tags[:limit])
+    return " ".join([*tags[:limit - 1], _BRAND_TAG])
 
 
 def named_hashtags(job: JobRecord, kind: str, index: int | None = None) -> list[str]:
     """"#Redis", "#ESP32" ... the names said in a full video (kind "full"), a topic
     cut ("topic") or a Short ("short", with its number)."""
-    return [f"#{w}" for w in _named_words(job, kind, index)]
+    return [f"#{w.replace(' ', '')}" for w in _named_words(job, kind, index)]
 
 
 def search_tags(job: JobRecord, kind: str = "full", index: int | None = None, limit: int = 11) -> list[str]:
     """The hidden search tags (snippet.tags) beside the upload's own marker, as
-    plain words: the brand's spellings, the team, its field and the names said in
-    the video. At most `limit`, no repeats (any case), none with a never-post word."""
+    plain words, topic first: the names said in the video, the team's field and
+    the team, then the one brand tag "FloLabs" last. At most `limit`, no repeats
+    (any case), none with a never-post word."""
     try:
         from autopilot import never_post
 
-        found = list(_BRAND_SPELLINGS)  # the spellings people type, kept as they are
-        words = [_team_name(job), *(plain for _, plain in _field_pairs(job)), *_named_words(job, kind, index)]
+        found: list[str] = []
+        words = [*_named_words(job, kind, index), *(plain for _, plain in _field_pairs(job)), _team_name(job)]
         for word in words:
             word = one_line(word, 100)
-            if word and word.lower() not in {t.lower() for t in found} and word.lower() != "shorts" \
-                    and never_post.match_words(word) is None:
+            if (word and word.lower() not in {t.lower() for t in found} and word.lower() not in ("shorts", _BRAND_WORD.lower())
+                    and never_post.match_words(word) is None):
                 found.append(word)
-        return found[:limit]
+        return [*found[:max(limit - 1, 0)], _BRAND_WORD][:limit]
     except Exception:  # a tag nicety must never stop a publish
         logger.warning("could not build search tags for job %s", getattr(job, "job_id", "?"), exc_info=True)
         return []
+
+
+# What stays inside the company: money, credentials and who may get into what.
+# "token costs" or "tokens" as AI usage is fine; only credential-like tokens count.
+_LEAK = re.compile(
+    r"[$€£]|\busd\b|\bdollars?\b|\bbudgets?\b|\bsalar(?:y|ies)\b|\binvoices?\b|\bcredits?\b"
+    r"|\bpass(?:words?|codes?)\b|\bsecrets?\b|\bcredentials?\b"
+    r"|\b(?:api|access|auth|private|ssh|login|bearer)\s+(?:keys?|tokens?)\b"
+    r"|\b(?:keys?|tokens?)\s+(?:leak\w*|expir\w*|rotat\w*)"
+    r"|\baccess\s+(?:to|rights|control|requests?|permissions?)\b|\baccount\s+access\b"
+    r"|\b(?:give|gave|giving|grant|granted|granting|get|got|need|needs)\s+(?:\w+\s+)?access\b|\bpermissions?\b"
+    r"|\b\d[\d,.]*\s?(?:usd|dollars?|rupees|pkr|eur|euros?|gbp)\b",
+    re.IGNORECASE)
+
+
+def _leaks(text: str) -> bool:
+    """Whether a line of a public description would give away money amounts,
+    API keys, passwords or who has access to what."""
+    return _LEAK.search(text or "") is not None
+
+
+def _redacted_chapters(text: str) -> str:
+    """The chapter lines with every chapter whose title leaks internals dropped
+    (the timestamps of the others stay). A leaking first chapter is renamed, not
+    dropped: the list must start at 0:00. When fewer than 3 chapters remain after
+    a drop the list is left out."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    kept: list[str] = []
+    changed = False
+    for n, line in enumerate(lines):
+        m = _CHAPTER_LINE.match(line)
+        if m and _leaks(m[1]):
+            changed = True
+            if n == 0:
+                kept.append(line[:m.start(1)] + "Introduction")
+            continue
+        kept.append(line)
+    if not changed:
+        return text
+    return "\n".join(kept) if len(kept) >= 3 else ""
 
 
 def _no_times(text: str) -> str:
@@ -840,9 +937,9 @@ def _summary_lines(job: JobRecord) -> list[str]:
     YouTube's chapter list."""
     lines = []
     _, why = _best_moment(job)
-    if why:
+    if why and not _leaks(why):
         lines.append(_no_times(why))
-    titles = [_no_times(t) for t in _chapter_entries(job)[1:] if t]
+    titles = [_no_times(t) for t in _chapter_entries(job)[1:] if t and not _leaks(t)]
     if titles:
         lines.append(one_line("Also in this meeting: " + ", ".join(titles[:3]), 250))
     series = _registry_name(job) or series_of(job.title or "")
@@ -866,7 +963,7 @@ def full_description(job: JobRecord) -> str:
     are never cut; extras give way so the text, plus the shorts list run.py
     adds later, stays within YouTube's 5000 bytes."""
     cfg = pub_settings.current()
-    chapters = _chapters_text(job)
+    chapters = _redacted_chapters(_chapters_text(job))
     summary = "\n".join(_summary_lines(job)) if cfg.title_style == "topic_first" else ""
     tags = _hashtags(job, named_hashtags(job, "full")) if cfg.hashtags else ""
     links = cfg.links_text.strip()
@@ -887,7 +984,7 @@ def full_description(job: JobRecord) -> str:
         text = build("", "")
     if len(text.encode("utf-8")) > budget and tags:  # the chapters are never cut: hashtags give way last
         for keep in range(len(tags.split()) - 1, 0, -1):
-            tags = " ".join(tags.split()[:keep])
+            tags = " ".join([*tags.split()[:keep - 1], _BRAND_TAG])  # topic tags give way first, #FloLabs stays last
             text = build("", "")
             if len(text.encode("utf-8")) <= budget:
                 break
@@ -898,30 +995,46 @@ def _team_name(job: JobRecord) -> str:
     return _registry_name(job) or series_of(job.title or "")
 
 
-def topic_title(info: TopicInfo, job: JobRecord) -> str:
-    """The topic cut's title: "<the cut's best moment> | FloLabs <Team>". The
-    moment's title must be about the cut's own words (_grounded: half its main
-    words and every number it states were said), must not name a person, and
-    gets the day added when that title is already on the channel (or is the full
-    video's). A title that fails falls back to the cut's first chapter title,
-    then to the meeting's name."""
-    label = series_label(job)
-    room = TITLE_LIMIT - len(label) - 3
+NO_TITLE_HELD = "no title passed the checks, so it is held for a person: publish it by hand with a title."
+
+
+def _topic_moment(info: TopicInfo, job: JobRecord) -> str | None:
+    """The moment a topic cut's title is made of, or None when only the meeting's
+    generic name is left. It must be about the cut's own words (_grounded: half its
+    main words and every number it states were said), must not name a person, and
+    must differ from every Short title and from the full video's moment."""
+    room = TITLE_LIMIT - len(series_label(job)) - 3
     names = _speaker_names(job)
+    avoid = _short_titles(job) | {_norm_moment(_full_moment(job, room))}
+    avoid.discard("")
     first_chapter = info.chapters[0][1] if info.chapters else ""
-    candidates = []
     for text in (info.title, first_chapter):
         title = one_line(text, room)
-        if title and room >= 15 and _grounded(title, info.text) and not _names_someone(title, names):
-            candidates.append(title)
-    if not candidates:
-        # a title that tells a viewer nothing ("<meeting> — topic 1") gets no clicks:
-        # the cut's own chapter titles (written from what was said) come first
-        fallback = _chapter_fallback([t for _, t in info.chapters], names, room)
-        if not fallback:
-            return one_line(f"{_topic(job) or 'Meeting'} — topic {info.index}")
-        candidates.append(fallback)
-    moment = candidates[0]
+        if (title and room >= 15 and _grounded(title, info.text) and not _names_someone(title, names)
+                and _norm_moment(title) not in avoid):
+            return title
+    # a title that tells a viewer nothing ("<meeting> — topic 1") gets no clicks:
+    # the cut's own chapter titles (written from what was said) come next
+    return _chapter_fallback([t for _, t in info.chapters], names, room, avoid) or None
+
+
+def topic_held(info: TopicInfo, job: JobRecord) -> str | None:
+    """Why a topic cut is not posted by itself: only the generic fallback title
+    is left. None when it has a real title."""
+    return None if _topic_moment(info, job) else NO_TITLE_HELD
+
+
+def topic_title(info: TopicInfo, job: JobRecord) -> str:
+    """The topic cut's title: "<the cut's moment> | FloLabs <Team>", with the day
+    added when that title is already on the channel (or is the full video's).
+    Never the title of a Short or of the full video's moment. When no moment
+    passes, the generic "<meeting> — topic N" (the cut is then held for a person,
+    see topic_held)."""
+    label = series_label(job)
+    room = TITLE_LIMIT - len(label) - 3
+    moment = _topic_moment(info, job)
+    if moment is None:
+        return one_line(f"{_topic(job) or 'Meeting'} — topic {info.index}")
     posted = _posted_titles() | {full_title(job).lower()}
     plain = f"{moment} | {label}"
     if plain.lower() not in posted:
@@ -966,13 +1079,13 @@ def topic_description(info: TopicInfo, job: JobRecord, full_url: str | None = No
     except ValueError:
         day = ""
     where = f"From the {team} team meeting" if team else "From the team meeting"
-    hook = _no_times(one_line(info.hook, 300))
+    hook = "" if _leaks(info.hook) else _no_times(one_line(info.hook, 300))
     rest = [f"{where} of {day}." if day else f"{where}.", ORG_LINE]
     if full_url:
         at = full_at_s if full_at_s is not None else info.at_s
         rest.append(f"Full meeting: {full_url}?t={at}" if at else f"Full meeting: {full_url}")
     intro = "\n\n".join(p for p in (hook, "\n".join(rest)) if p)
-    chapters = "\n".join(f"{fmt_clock(t)} {title}" for t, title in topic_chapters(info))
+    chapters = _redacted_chapters("\n".join(f"{fmt_clock(t)} {title}" for t, title in topic_chapters(info)))
     tags = _hashtags(job, named_hashtags(job, "topic", info.index)) if cfg.hashtags else ""
     links = cfg.links_text.strip()
 
@@ -994,6 +1107,12 @@ def short_title(info: ShortInfo, job: JobRecord) -> str:
     return one_line(info.title) or one_line(f"{_topic(job) or 'Meeting'} — clip {info.index}")
 
 
+def short_held(info: ShortInfo, job: JobRecord) -> str | None:
+    """Why a Short is not posted by itself: it has no title of its own, only the
+    generic "<meeting> — clip N". None when it has one."""
+    return None if one_line(info.title) else NO_TITLE_HELD
+
+
 def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = None,
                       cut_url: str | None = None, cut_at_s: int | None = None) -> str:
     """The hook, then where the clip comes from. `full_url` (the full video's
@@ -1005,7 +1124,7 @@ def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = No
     if cut_url:
         return _short_description_cut(info, job, cut_url, cut_at_s)
     lines: list[str] = []
-    hook = one_line(info.hook, 300)
+    hook = "" if _leaks(info.hook) else one_line(info.hook, 300)
     if hook:
         lines += [hook, ""]
     topic = _topic(job)
@@ -1026,7 +1145,7 @@ def short_description(info: ShortInfo, job: JobRecord, full_url: str | None = No
 
 def _short_description_cut(info: ShortInfo, job: JobRecord, cut_url: str, cut_at_s: int | None) -> str:
     lines: list[str] = []
-    hook = one_line(info.hook, 300)
+    hook = "" if _leaks(info.hook) else one_line(info.hook, 300)
     if hook:
         lines += [hook, ""]
     topic = _topic(job)

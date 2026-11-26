@@ -25,6 +25,9 @@ GOOD_MOMENT_SCORE = 5.0  # "worth watching" for the coverage share
 OPEN_MIN_S = 15.0
 OPEN_TARGET_S = 30.0
 OPEN_MAX_S = 40.0
+OPEN_PAYOFF_S = 15.0  # the open's best moment plays within this many seconds of its first frame
+# A moment the re-rank marked "not for a stranger" (n) is not a topic unless it scored this high.
+OUTSIDER_MIN_SCORE = 8.0
 
 
 @dataclass
@@ -199,6 +202,10 @@ def qualify(
         return None
     if m.stands_alone is not None and m.stands_alone < MIN_STANDS_ALONE:
         return None
+    # the re-rank gives moments that only matter inside the company (tasks, budgets,
+    # access, clients) a low score and "n"; such a moment can't carry a topic video
+    if m.reranked and not m.short_worthy and _score(m) < OUTSIDER_MIN_SCORE:
+        return None
     if any(match_words(title, never_words) for title in cand.titles):
         return None
     good = sorted(
@@ -247,6 +254,9 @@ def cold_open(m: Moment, lo: float, hi: float, segments=None) -> tuple[float, fl
         return None
     length = min(OPEN_TARGET_S, hi - lo)
     start = m.short_start if m.short_start is not None else _peak_s(m, segments) - length / 2
+    peak = _peak_s(m, segments)
+    if peak - start > OPEN_PAYOFF_S:  # the payoff must play within the first 15 s
+        start = peak - OPEN_PAYOFF_S
     start = min(max(start, lo), hi - length)
     end = start + length
     starts, ends = _segment_edges(segments)
@@ -254,6 +264,10 @@ def cold_open(m: Moment, lo: float, hi: float, segments=None) -> tuple[float, fl
         i = bisect.bisect_right(starts, start + 1e-6) - 1  # the segment that holds `start`
         if i >= 0 and starts[i] >= lo - 1e-6:
             start = starts[i]
+        if peak - start > OPEN_PAYOFF_S:  # snapping back pushed the payoff late: start at the next edge
+            later = bisect.bisect_left(starts, peak - OPEN_PAYOFF_S - 1e-6)
+            start = starts[later] if later < len(starts) and starts[later] <= peak else peak - OPEN_PAYOFF_S
+            end = min(hi, start + length)
         j = bisect.bisect_left(ends, end - 1e-6)  # the segment that holds `end`
         if j < len(ends) and ends[j] <= hi + 1e-6:
             end = ends[j]

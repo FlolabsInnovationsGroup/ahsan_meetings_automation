@@ -97,9 +97,12 @@ main() {
   for i in $(seq 1 60); do
     if docker compose ps app 2>/dev/null | grep -q "(healthy)"; then
       echo "Healthy after ~$((i * 5))s"
-      docker image prune -f >/dev/null
-      # keep the cache of the last few days (fast rebuilds), drop the rest
-      docker builder prune -f --filter until=72h >/dev/null || true
+      # owner, 2026-11-27: after a good update, keep only the running image:
+      # every older image and the whole build cache go (the next build is
+      # slower, but the disk never fills up again)
+      docker image prune -af >/dev/null || true
+      docker builder prune -af >/dev/null || true
+      echo "$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc '0-9') GB free after cleanup"
       echo "=== done: $after"
       return 0
     fi

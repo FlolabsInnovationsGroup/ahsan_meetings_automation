@@ -2170,7 +2170,7 @@ function buildPublish(jobId) {
       // everything left is ticked; never what the posted list blocks
       // (a Short the release plan skipped stays unticked: a person chooses it)
       r.check.checked = !!r.item.available && r.item.status !== "published" && r.item.status !== "skipped"
-        && !r.item.blocked && r.item.ok !== false; // a cut whose suggested words fail a check starts unticked
+        && !r.item.blocked && r.item.ok !== false && !r.item.held; // a cut whose suggested words fail a check starts unticked
     }
   });
 
@@ -2369,7 +2369,8 @@ function setChip(r, item) {
   r.err.textContent = item.status !== "published" && item.blocked ? item.blocked
     : item.status === "failed" && item.error ? item.error
     : item.status === "skipped" ? `Skipped: ${(item.error || "no free release slot.").replace(/^Not posted:\s*/, "")} You can still publish it.`
-    : item.status === "published" && item.error ? item.error : "";
+    : item.status === "published" && item.error ? item.error
+    : !item.status && item.held ? `Held: ${item.held}` : "";
   r.err.hidden = !r.err.textContent;
 }
 
@@ -2789,7 +2790,7 @@ const PUB_GROUPS = [
     ["title_style", "select", "Title style", "How each video is named.",
       [["topic_first", "Topic first, then the team (recommended)"], ["meeting_date", "Meeting name and date"]]],
     ["hashtags", "check", "Add hashtags", "Hashtags at the end of each description."],
-    ["hashtags_max", "number", "Most hashtags per video", "0-15; 0 = none. The brand, the team and the field come first, then tools named in the video. YouTube shows the first 3 above the title."],
+    ["hashtags_max", "number", "Most hashtags per video", "0-15, default 5; 0 = none. Tools and the field named in the video come first, #FloLabs is always last. YouTube shows the first 3 above the title."],
     ["links_text", "area", "Links added to every full video's description", "Your website or socials. No < or > signs."],
   ]],
   ["Upload fields", [

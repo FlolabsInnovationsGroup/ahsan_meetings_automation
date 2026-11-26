@@ -460,13 +460,13 @@ def test_publish_uploads_the_full_video_then_removes_the_files(monkeypatch, clie
     assert res.status_code == 200
     # the hidden tag finds the video on the channel if its upload link is ever lost
     marker = uploads.marker_for(f"job:{job.job_id}|full")
-    # ... and it stays the first tag, ahead of the search tags (brand spellings, team, field)
+    # ... and it is the last tag, after the search tags (topic, field, team, the one brand tag)
     assert len(fake.uploads) == 1
     sent = fake.uploads[0]
     assert {k: v for k, v in sent.items() if k != "tags"} == {
         "bytes": b"full-video", "title": "Weekly sync", "description": "notes", "privacy": "unlisted"}
-    assert sent["tags"][0] == marker
-    assert {"FloLabs", "Flolabs", "FloLabs Innovations", "Flomad Labs"} <= set(sent["tags"])
+    assert sent["tags"][-1] == marker
+    assert "FloLabs" in sent["tags"] and not {"Flolabs", "FloLabs Innovations", "Flomad Labs"} & set(sent["tags"])
 
     reread = _reread(job.job_id)
     assert reread.youtube_status == "published"

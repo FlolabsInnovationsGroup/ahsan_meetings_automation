@@ -131,6 +131,20 @@ def test_prompts_put_learning_first_and_keep_jokes_for_really_good_ones():
     assert "can learn from" in s.shorts_criteria and s.shorts_categories[0] == "concept"
 
 
+def test_rerank_prompt_asks_for_search_phrase_titles_and_a_stranger_filter():
+    from core.config import get_settings
+    from decide.prompts import rerank_prompt
+
+    s = get_settings()
+    rerank = rerank_prompt(s.highlights_criteria, s.shorts_criteria)
+    assert "types into YouTube search" in rerank and "How to cut Claude token costs with local models" in rerank
+    assert "at most 60 characters" in rerank and "no clickbait" in rerank
+    assert "Would a stranger care?" in rerank
+    for internal in ("logistics", "budgets", "API keys", "passwords", "hiring", "client names"):
+        assert internal in rerank
+    assert "how a tool or technique works" in rerank  # outsider-worthy even inside a work update
+
+
 def test_prompt_is_compact_text_with_criteria_and_speaker_changes(monkeypatch):
     seen = {}
 

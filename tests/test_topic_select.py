@@ -213,9 +213,9 @@ def test_cold_open_is_inside_the_cut_and_15_to_40_seconds():
 
 
 def test_cold_open_uses_short_start():
-    mo = moment(0, 400, 1000, peak_index=120, short_start=404.0)
+    mo = moment(0, 400, 1000, peak_index=120, short_start=468.0)
     a, b = run([mo], segments=segs())[0].open_span
-    assert a == 404.0 and 15 <= b - a <= 40
+    assert a == 468.0 and 15 <= b - a <= 40
 
 
 def test_cold_open_never_replays_the_first_seconds_of_the_cut():
@@ -231,6 +231,23 @@ def test_cold_open_never_replays_the_first_seconds_of_the_cut():
     # a peak well inside the cut still opens on the peak
     inside = moment(0, 100, 900, peak_index=120, short_start=520.0)
     assert topics.cold_open(inside, 400.0, 700.0, segs())[0] == 520.0
+
+
+def test_cold_open_plays_its_payoff_within_the_first_15_seconds():
+    # short_start far before the peak: the open is moved up so the peak plays by second 15
+    mo = moment(0, 400, 1000, peak_index=150, short_start=420.0)  # peak segment at 600 s
+    a, b = topics.cold_open(mo, 0.0, 1100.0, segs())
+    assert 600.0 - a <= topics.OPEN_PAYOFF_S and a <= 600.0 and 15 <= b - a <= 40
+
+
+def test_a_moment_the_rerank_marked_internal_is_not_a_topic():
+    # reranked, not short-worthy and under 8: an internal moment (tasks, budgets, access)
+    internal = moment(0, 400, 1000, raw=7.5, reranked=True, short_worthy=False)
+    assert run([internal]) == []
+    stranger = moment(0, 400, 1000, raw=7.5, reranked=True, short_worthy=True)
+    assert len(run([stranger])) == 1
+    strong = moment(0, 400, 1000, raw=9.0, reranked=True, short_worthy=False)
+    assert len(run([strong])) == 1
 
 
 def test_cold_open_absent_when_off_or_moment_is_short():

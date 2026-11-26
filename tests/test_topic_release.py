@@ -3,6 +3,7 @@ subscribers, the full video follows quietly but is uploaded first), the release 
 the never-post checks, and the verdicts. A fake YouTube; synthetic data only."""
 
 import dataclasses
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -444,3 +445,31 @@ def test_the_words_the_page_sends_back_unchanged_still_get_the_links(channel):
     assert f"Full meeting: https://youtu.be/{full_id}?t=100" in cut["description"]
     inside = _by_title(channel, "Why we moved to Postgres")
     assert f"https://youtu.be/{cut_id}?t=34" in inside["description"]
+
+
+def test_a_cut_with_no_real_title_is_held_and_the_rest_still_goes_up():
+    from tests.test_topic_packaging import topic_row
+
+    job = _cut_job([topic_row(title="Quarterly budget planning", chapters=[{"t": 0, "title": "Intro"}])])
+    plan = publish_run.plan_everything(job, "public", "autopilot")
+    assert plan is not None and plan.full is not None and plan.topics == ()
+    held = job.youtube_topics[1]
+    assert held.status == "skipped" and "title" in (held.error or "")
+    again = publish_run.plan_everything(job, "public", "autopilot")
+    assert again is None or again.topics == ()  # a held cut is never retried
+    assert publish_run.posting_verdict(job) in ("left", "done")  # never "missing" or "check"
+
+
+def test_a_short_with_no_title_is_held_and_the_rest_still_goes_up():
+    job = _cut_job()
+    manifest_path = get_settings().jobs_dir / job.job_id / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["shorts"], "the finished job has shorts"
+    manifest["shorts"][0]["title"] = ""
+    manifest_path.write_text(json.dumps(manifest))
+    plan = publish_run.plan_everything(job, "public", "autopilot")
+    assert 1 not in [s.index for s in plan.shorts] or all(s.title for s in plan.shorts)
+    first = describe.load_shorts(job)[0]
+    held = job.youtube_shorts[first.index]
+    assert held.status == "skipped" and "title" in (held.error or "")
+    assert plan.full is not None

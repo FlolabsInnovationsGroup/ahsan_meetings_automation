@@ -89,7 +89,7 @@ class Publishing:
     hashtags: bool = True
     # The most hashtags on one video (0 = none). YouTube shows the first 3 above
     # the title and ignores all of them past 60.
-    hashtags_max: int = 8
+    hashtags_max: int = 5
     # Added at the end of every full video's description (website, socials).
     links_text: str = ""
 
@@ -374,15 +374,15 @@ def _without_main_language(values: dict) -> None:
 # behind. Those saved release numbers are dropped once, in favour of today's
 # defaults; a save from now on keeps only what differs from the defaults, so
 # a later change of the rules reaches every server.
-RULES_VERSION = 4
+RULES_VERSION = 5
 _RULES_KEY = "_rules_version"
 RELEASE_FIELDS = (
     "review_hours", "min_gap_hours", "max_per_day", "shorts_per_day", "full_per_day", "topic_per_day",
     "window_start_hour", "window_end_hour", "shorts_after_full_hours", "max_days_ahead", "shorts_per_meeting",
 )
 # field -> the rules version that reset it: a value saved before that version
-# is dropped once (version 4: thumbnails went from the A/B test to ours on all).
-_RESET_AT = {**dict.fromkeys(RELEASE_FIELDS, 3), "thumbnail_mode": 4}
+# is dropped once (version 4: thumbnails went from the A/B test to ours on all; version 5: hashtags_max 8 -> 5).
+_RESET_AT = {**dict.fromkeys(RELEASE_FIELDS, 3), "thumbnail_mode": 4, "hashtags_max": 5}
 
 
 def _saved() -> dict:

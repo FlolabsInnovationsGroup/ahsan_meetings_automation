@@ -349,3 +349,48 @@ def test_a_job_file_from_before_topic_cuts_loads():
     job = JobRecord.model_validate({"job_id": "old"})
     assert job.youtube_topics == {}
     assert job.youtube_busy is False
+
+
+# ------------------------------------------------ never reuse a title across formats
+
+
+def test_a_topic_never_takes_a_short_title_of_the_same_meeting():
+    job = job_with_topics()
+    short_title = describe.load_shorts(job)[0].title
+    cut = _info(job, title=short_title)
+    title = describe.topic_title(cut, job)
+    assert title.split(" | ")[0].lower() != short_title.lower()
+    assert title == "Why the old store failed | FloLabs"  # the cut's first chapter instead
+
+
+def test_a_topic_title_differs_in_capitals_only_still_counts_as_the_same():
+    job = job_with_topics()
+    short_title = describe.load_shorts(job)[0].title
+    cut = _info(job, title=short_title.upper())
+    assert describe.topic_title(cut, job).split(" | ")[0].lower() != short_title.lower()
+
+
+def test_a_topic_with_only_a_generic_title_is_held_for_a_person():
+    row = topic_row(title="Quarterly budget planning", chapters=[{"t": 0, "title": "Intro"}])
+    job = job_with_topics([row])
+    cut = _info(job)
+    assert "title" in describe.topic_held(cut, job)
+    assert describe.topic_held(_info(job, title="Moving the session store to Redis"), job) is None
+
+
+def test_a_held_topic_still_publishes_by_hand_with_a_typed_title():
+    row = topic_row(title="Quarterly budget planning", chapters=[{"t": 0, "title": "Intro"}])
+    job = job_with_topics([row])
+    cut = _info(job)
+    assert describe.title_problem("How to cut Claude token costs with local models") is None
+    assert describe.title_problem(describe.topic_title(cut, job)) is None  # the generic title is valid too
+
+
+def test_topic_description_drops_a_hook_and_chapter_that_leak():
+    row = topic_row(hook="We pay 400 USD a month for credits.",
+                    chapters=[{"t": 0, "title": "Why the old store failed"}, {"t": 30, "title": "API key budget"},
+                              {"t": 55, "title": "Moving to Redis"}, {"t": 80, "title": "Rollout risks"}])
+    job = job_with_topics([row])
+    text = describe.topic_description(_info(job), job)
+    assert "USD" not in text and "API key" not in text and "credits" not in text
+    assert "Moving to Redis" in text and "Rollout risks" in text

@@ -388,6 +388,11 @@ def plan_everything(
             continue
         if ledger.blocker(_short_item(job, info)) is not None:
             continue
+        held = describe.short_held(info, job)
+        if held:  # only the generic "<meeting> — clip N" is left: a person publishes it with a title
+            _hold(job.youtube_shorts, info.index, held)
+            logger.warning("job %s: short %d held for a person: %s", job.job_id, info.index, held)
+            continue
         title, text = describe.short_title(info, job), describe.short_description(info, job, full_url)
         if describe.title_problem(title) or describe.description_problem(text):
             logger.warning("job %s: short %d has no usable suggested words; left out", job.job_id, info.index)
@@ -405,6 +410,14 @@ def plan_everything(
     return PublishPlan(privacy, tuple(shorts), full, delete_after=False, by=by, topics=tuple(cuts))
 
 
+def _hold(states: dict[int, YoutubeUpload], index: int, reason: str) -> None:
+    """Leave a Short or topic cut for a person (shown as "skipped" with the reason; the
+    autopilot never retries it, its files are kept, and Publish with a typed title works)."""
+    state = states.get(index)
+    if state is None or state.status in ("queued", "failed"):
+        states[index] = YoutubeUpload(status="skipped", error=f"Not posted: {reason}")
+
+
 def _suggested_topics(job: JobRecord, ledger, full_url: str | None) -> list[TopicPlan]:
     """The job's topic cuts that may still go up, with the suggested words. Only for
     a public team with topic cuts on (never an archive team's)."""
@@ -419,6 +432,11 @@ def _suggested_topics(job: JobRecord, ledger, full_url: str | None) -> list[Topi
         if (state is not None and state.status in ("published", "skipped")) or info.file not in on_hand:
             continue
         if ledger.blocker(_topic_item(job, info)) is not None:
+            continue
+        held = describe.topic_held(info, job)
+        if held:  # only the generic "<meeting> — topic N" is left: a person publishes it with a title
+            _hold(job.youtube_topics, info.index, held)
+            logger.warning("job %s: topic cut %d held for a person: %s", job.job_id, info.index, held)
             continue
         title, text = describe.topic_title(info, job), describe.topic_description(info, job, full_url)
         if describe.title_problem(title) or describe.description_problem(text):
@@ -446,7 +464,10 @@ def posting_verdict(job: JobRecord) -> str:
             continue
         info = infos.get(index)
         item = _short_item(job, info) if info is not None else uploads.short_item(job, index)
-        verdicts.append(_item_verdict(ledger, item, info is not None and info.file in on_hand))
+        verdict = _item_verdict(ledger, item, info is not None and info.file in on_hand)
+        if verdict == "left" and info is not None and describe.short_held(info, job):
+            verdict = "done"  # held for a person: no title passed the checks
+        verdicts.append(verdict)
     if _topics_apply(job):
         cuts = {t.index: t for t in describe.load_topics(job)}
         cut_files = media.available(job, [t.file for t in cuts.values()])
@@ -457,7 +478,10 @@ def posting_verdict(job: JobRecord) -> str:
                 continue
             cut = cuts.get(index)
             item = _topic_item(job, cut) if cut is not None else uploads.topic_item(job, index)
-            verdicts.append(_item_verdict(ledger, item, cut is not None and cut.file in cut_files))
+            verdict = _item_verdict(ledger, item, cut is not None and cut.file in cut_files)
+            if verdict == "left" and cut is not None and describe.topic_held(cut, job):
+                verdict = "done"  # held for a person: no title passed the checks
+            verdicts.append(verdict)
     for verdict in ("check", "left", "missing"):
         if verdict in verdicts:
             return verdict
@@ -1172,6 +1196,8 @@ def _short_row(
         "error": state.error if state else None,
         "blocked": None,
         "publish_at": state.publish_at if state else None,
+        # why it is not ticked: no title passed the checks (a typed title still publishes it)
+        "held": describe.short_held(info, job) if info is not None else None,
     }
     if info is not None and (state is None or state.status != "published"):
         _apply_ledger(row, _short_item(job, info), f"Short {index}")
@@ -1200,7 +1226,8 @@ def _topic_row(job: JobRecord, info: describe.TopicInfo | None, available: bool,
         "duration_s": round(info.duration_s) if info is not None else None,
         "score": info.best_score if info is not None else None,
         "ok": info is not None and not describe.title_problem(title) and not describe.description_problem(description)
-              and listed_words(title, description) is None,
+              and listed_words(title, description) is None and not describe.topic_held(info, job),
+        "held": describe.topic_held(info, job) if info is not None else None,
         "front_door": bool(first and cfg.topic_front_door and cfg.scheduled),
         "status": state.status if state else None,
         "progress": state.progress if state else 0,
