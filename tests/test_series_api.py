@@ -156,6 +156,24 @@ def test_merge_folds_one_spelling_into_the_other(client):
     assert client.post("/series/merge", json={"alias": "nobody", "into": keep}).status_code == 400
 
 
+def test_merge_answers_with_a_note_about_the_moved_videos(client, monkeypatch):
+    from publish import playlists
+
+    keep = _team("Gadget Review", tier="public")
+    other = _team("Gadgets Review Group")
+    seen = {}
+
+    def fake(alias_keys, into_key, old_playlists=None, old_label=""):
+        seen.update(alias_keys=alias_keys, into=into_key)
+        return {"queued": 12, "label": "Gadget Review", "old_playlists": [{"id": "PLx", "title": "Old list"}]}
+
+    monkeypatch.setattr(playlists, "move_team", fake)
+    body = client.post("/series/merge", json={"alias": other, "into": keep}).json()
+    assert seen["into"] == keep and other in seen["alias_keys"]
+    assert body["moved"] == 12 and "12 videos will move to Gadget Review's playlists" in body["note"]
+    assert "'Old list'" in body["note"]
+
+
 def test_the_autopilot_rows_carry_their_team(client):
     key = _held("m1", "Gadget Review")
     series.set_row(key, label="Gadget Club")
@@ -200,7 +218,7 @@ def test_the_page_has_one_of_each_id_and_a_teams_section():
 def test_the_teams_panel_builds_with_text_only():
     panel = next(s for s in _scripts() if 'getElementById("seriesSection")' in s)
     assert "innerHTML" not in panel and "insertAdjacentHTML" not in panel
-    for words in ("Post this series from now on", "Never post this team", "Same team as",
+    for words in ("Never post this team", "Put this team's videos in",
                   "On the never-post list: never posted"):
         assert words in panel
 

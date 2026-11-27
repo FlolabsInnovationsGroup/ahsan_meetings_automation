@@ -369,6 +369,10 @@ class Engine:
                 elif job.status == JobStatus.SKIPPED_EMPTY:
                     # no one speaks in it: never posted, never retried (kept on the server)
                     m.state, m.error = "skipped", job.error or "No meeting in it: nothing to post."
+                elif job.status == JobStatus.CANCELLED and _stopped_by_all(job.error):
+                    # a person pressed Stop everything (e.g. before an update): not a
+                    # failure; it starts again from the start once the autopilot resumes
+                    _ready_again(m, now)
                 elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                     self._failed(m, now, job.error or f"The job ended: {job.status.value}.")
                 elif job.status == JobStatus.DECIDED:
@@ -951,9 +955,35 @@ class Engine:
     def set_paused(self, paused: bool) -> None:
         with self.store.editing() as state:
             state.paused = paused
+            if not paused:
+                # resuming after Stop everything: what it stopped starts again, also
+                # meetings an older version left waiting with that job's error
+                now = self.clock()
+                for m in state.meetings.values():
+                    if m.state in ("ready", "needs_attention") and _stopped_by_all(m.error) and not m.series_hold:
+                        _ready_again(m, now)
 
 
 # ------------------------------------------------------------------ helpers
+
+# How api/main.py's Stop everything words a job it cancelled, and the headline
+# a meeting it stopped carries.
+_STOPPED_BY_ALL = ("Cancelled by Stop everything", "Stopped by Stop everything")
+
+
+def _stopped_by_all(error: str | None) -> bool:
+    return bool(error) and any(marker in error for marker in _STOPPED_BY_ALL)
+
+
+def _ready_again(m: Meeting, now: datetime) -> None:
+    """A meeting whose job Stop everything cancelled: back to ready, from the
+    start, without counting it as a failed attempt."""
+    m.state, m.job_id, m.next_try_at, m.by_hand = "ready", None, None, False
+    m.attempts = max(0, m.attempts - 1)
+    m.error = explain(m, "Stopped by Stop everything",
+                      done="its job was cancelled before anything of it was posted",
+                      todo="nothing: it starts again from the beginning when the autopilot is resumed")
+    m.updated_at = iso(now)
 
 
 def _first_day(now: datetime) -> datetime:

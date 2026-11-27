@@ -60,6 +60,16 @@ class Api:
         self.items.add((playlist_id, video_id))
         return "item"
 
+    def playlist_item_id(self, playlist_id, video_id):
+        self._hit("item", playlist_id, video_id)
+        return f"item-{playlist_id}-{video_id}" if (playlist_id, video_id) in self.items else None
+
+    def remove_from_playlist(self, item_id):
+        self._hit("remove", item_id)
+        for pair in list(self.items):
+            if item_id == f"item-{pair[0]}-{pair[1]}":
+                self.items.discard(pair)
+
     def names(self):
         return [c[0] for c in self.calls]
 
@@ -67,7 +77,8 @@ class Api:
 @pytest.fixture
 def api(monkeypatch):
     fake = Api()
-    for name in ("find_playlist", "create_playlist", "video_privacy", "playlist_has_video", "add_to_playlist"):
+    for name in ("find_playlist", "create_playlist", "video_privacy", "playlist_has_video", "add_to_playlist",
+                 "playlist_item_id", "remove_from_playlist"):
         monkeypatch.setattr(youtube_extra, name, getattr(fake, name))
     monkeypatch.setattr(youtube, "has_scope", lambda scope: True)
     monkeypatch.setattr(extras, "_builders", {"playlist": playlists._builder})
@@ -349,3 +360,71 @@ def test_backfill_does_nothing_when_playlists_off(api, monkeypatch):
     _listing(monkeypatch, [_video(1, "Space Meeting (2025-01-01)")])
     assert playlists.playlist_backfill() is False
     assert _backfill_tasks() == []
+
+
+# ------------------------------------------------------------------ moving a merged team
+
+
+def _two_teams(api):
+    series.set_row("neuro", label="Neuroscience", tier="public",
+                   playlists={"full": "PLneuro0000001", "cuts": "", "shorts": ""})
+    series.set_row("neuro bio", label="Neuroscience and Biomedical", tier="public",
+                   playlists={"full": "PLoldbio000001", "cuts": "", "shorts": ""})
+
+
+def test_merge_moves_posted_videos_into_the_target_playlists(api, monkeypatch):
+    _two_teams(api)
+    item, posted = _upload("Neuro Bio Meeting (2026-11-03)", n=1)
+    _s, short = _upload("Neuro Bio Meeting (2026-11-03)", kind="short", n=2)
+    _o, other = _upload("Space Meeting (2026-11-03)", n=3)
+    _p, private = _upload("Neuro Bio Meeting (2026-11-04)", privacy="private", n=4)
+    _n, never = _upload("Operations Meeting (2026-11-04)", n=5)
+    api.items.add(("PLoldbio000001", posted.video_id))
+    _enqueue(item, posted)  # it had a playlist task before: it went to the old playlist
+    src = series.lookup_key("neuro bio")
+    series.merge("neuro bio", "neuro")
+    out = playlists.move_team([src.key, *src.aliases], "neuro", src.playlists, src.label)
+    assert out["queued"] == 2 and out["label"] == "Neuroscience"
+    moves = [t for t in extras.all_tasks() if t.data.get("move")]
+    assert {t.video_id for t in moves} == {posted.video_id, short.video_id}
+    assert {t.data["which"] for t in moves} == {"full", "shorts"}
+    assert all(t.series_key == "neuro" for t in moves)
+    assert out["old_playlists"] == [{"id": "PLoldbio000001", "title": playlists.title_for(src.label, "full")}]
+    assert not any(t.video_id in (other.video_id, private.video_id, never.video_id) and t.data.get("move")
+                   for t in extras.all_tasks())
+    # running them: added to the new playlist, taken out of the old one
+    monkeypatch.setattr(youtube, "youtube_status", lambda: {"connected": True})
+    _public(api, posted.video_id)
+    for _ in range(4):
+        extras.run_due()
+    assert ("PLneuro0000001", posted.video_id) in api.items
+    assert ("PLoldbio000001", posted.video_id) not in api.items
+    assert "remove" in api.names()
+
+
+def test_a_second_move_for_the_same_video_is_not_queued_twice(api):
+    _two_teams(api)
+    _upload("Neuro Bio Meeting (2026-11-03)", n=1)
+    src = series.lookup_key("neuro bio")
+    series.merge("neuro bio", "neuro")
+    playlists.move_team([src.key], "neuro", src.playlists, src.label)
+    playlists.move_team([src.key], "neuro", src.playlists, src.label)
+    assert len([t for t in extras.all_tasks() if t.data.get("move")]) == 1
+
+
+def test_move_clears_the_backfill_memory_and_takes_backfilled_videos(api, monkeypatch):
+    _two_teams(api)
+    _listing(monkeypatch, [_video(1, "Neuro Bio Meeting (2025-01-01)")])
+    assert playlists.playlist_backfill() is True
+    assert "old00000001" in files_read_queued()
+    src = series.lookup_key("neuro bio")
+    series.merge("neuro bio", "neuro")
+    out = playlists.move_team([src.key], "neuro", src.playlists, src.label)
+    assert out["queued"] == 1
+    assert "old00000001" not in files_read_queued()
+
+
+def files_read_queued():
+    from ledger import files
+
+    return files.read_json(playlists._backfill_path(), {}).get("queued", {})

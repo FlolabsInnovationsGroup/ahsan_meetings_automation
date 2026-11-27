@@ -2629,7 +2629,55 @@ async function sideAction(path, payload) {
     return;
   }
   if (!res.ok) showError(detailText(body) || "That didn't work.");
+  else if (body && body.note) window.alert(body.note); // e.g. "12 videos will move to ..."
   loadSide();
+}
+
+// The teams for the "Playlists:" choice on a new team's row: fetched once per
+// render of the autopilot list (apTeamsPromise is reset by renderAutopilot).
+let apTeamsPromise = null;
+function apTeams() {
+  if (!apTeamsPromise) {
+    apTeamsPromise = fetch("/series").then((r) => (r.ok ? r.json() : { rows: [] }))
+      .then((d) => d.rows || []).catch(() => []);
+  }
+  return apTeamsPromise;
+}
+
+// "Playlists:" select for a new team: its own playlists (a new team), or
+// join an existing public team (its videos and playlists).
+function playlistChoice(parent, m) {
+  const wrap = sideEl("label", "team-field");
+  wrap.appendChild(sideEl("span", "team-field-label", "Playlists:"));
+  const pick = sideEl("select");
+  const name = m.series_label || m.topic || "this team";
+  const first = sideEl("option", "", "Choose...");
+  first.value = "";
+  const own = sideEl("option", "", `New team: ${name} (its own playlists)`);
+  own.value = "__new__";
+  pick.append(first, own);
+  wrap.appendChild(pick);
+  parent.appendChild(wrap);
+  const labels = {};
+  apTeams().then((rows) => {
+    rows.filter((t) => t.tier === "public" && t.key !== m.series_key).forEach((t) => {
+      labels[t.key] = t.label;
+      const opt = sideEl("option", "", `Add to ${t.label}`);
+      opt.value = t.key;
+      pick.appendChild(opt);
+    });
+  });
+  pick.addEventListener("change", () => {
+    const value = pick.value;
+    if (!value) return;
+    if (value === "__new__") {
+      if (window.confirm(`Post "${name}" from now on as its own team, with its own playlists?`)) {
+        sideAction("/series/allow", { key: m.series_key });
+      } else pick.value = "";
+    } else if (window.confirm(`Post "${name}" from now on as part of "${labels[value] || value}"? Its videos go in that team's playlists.`)) {
+      sideAction("/series/merge", { alias: m.series_key, into: value });
+    } else pick.value = "";
+  });
 }
 
 function sideButton(parent, label, onClick) {
@@ -3086,6 +3134,7 @@ if (releaseSection.open) loadRelease();
 setInterval(() => { if (releaseSection.open) loadRelease(); }, 60000);
 
 function renderAutopilot(ap) {
+  apTeamsPromise = null;
   renderNeverPost(ap.never_post);
   apStatus.textContent = "";
   const head = sideEl("div");
@@ -3156,7 +3205,7 @@ function renderAutopilot(ap) {
     // nothing on the never-post list can go up with one click: take it off the list first
     if (m.series_hold && m.series_key && m.state === "needs_attention" && !m.never_post) {
       // a new team: the decision is about the team, not this one meeting
-      sideButton(acts, "Post this series from now on", () => sideAction("/series/allow", { key: m.series_key }));
+      playlistChoice(acts, m);
       sideButton(acts, "Never post this team", () => {
         if (window.confirm(`Never post the team "${m.series_label || m.topic || "this team"}"? Its waiting meetings are skipped.`)) {
           sideAction("/series/never", { key: m.series_key });
@@ -3920,6 +3969,7 @@ loadSide();
 
   async function act(path, payload) {
     const body = await call(path, payload);
+    if (body && body.note) window.alert(body.note);
     if (body) editing = false;
     if (body) render(body);
     loadSide();
@@ -4012,18 +4062,19 @@ loadSide();
     field(card, "Hashtags", tags);
 
     const same = sideEl("select");
-    same.appendChild(option("(not a spelling of another team)", ""));
+    same.appendChild(option("(its own playlists)", ""));
     all.filter((other) => other.key !== row.key).forEach((other) => same.appendChild(option(other.label, other.key)));
     same.addEventListener("change", () => {
       if (!same.value) return;
       const target = all.find((other) => other.key === same.value);
-      if (window.confirm(`Treat "${row.label}" as the same team as "${target ? target.label : same.value}"? The two lists become one.`)) {
+      const into = target ? target.label : same.value;
+      if (window.confirm(`Put "${row.label}" in "${into}"? The two lists become one, and the videos already posted for "${row.label}" move into the playlists of "${into}" over the next hours.`)) {
         act("/series/merge", { alias: row.key, into: same.value });
       } else {
         same.value = "";
       }
     });
-    field(card, "Same team as", same);
+    field(card, "Put this team's videos in", same);
 
     card.appendChild(sideEl("div", "when",
       `Seen ${row.seen} time${row.seen === 1 ? "" : "s"}` + (row.last_seen ? `, last ${sideTime(row.last_seen)}` : "")));

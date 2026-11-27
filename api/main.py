@@ -1209,15 +1209,35 @@ def never_series(body: SeriesKeyRequest) -> dict:
 @app.post("/series/merge")
 def merge_series(body: SeriesMergeRequest) -> dict:
     """Two spellings of one team: the first becomes a name of the second."""
+    from publish import playlists
     from publish import series as team_series
 
+    src = team_series.lookup_key(body.alias)
     try:
         into = team_series.merge(body.alias, body.into)
         _settle_held(into.key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=_series_plain(exc)) from exc
+    moved = {"queued": 0, "label": into.label, "old_playlists": []}
+    if src is not None:
+        try:
+            moved = playlists.move_team([src.key, *src.aliases], into.key, src.playlists, src.label)
+        except Exception as exc:  # noqa: BLE001 - the merge is done; moving videos is best effort
+            logger.warning("could not queue the playlist moves for %s: %s", src.key, exc)
     autopilot_loop.wake()
-    return get_series()
+    result = get_series()
+    note = ""
+    if moved["queued"]:
+        n = moved["queued"]
+        note = (f"{n} video{'s' if n != 1 else ''} will move to {moved['label'] or into.label}'s "
+                "playlists over the next hours.")
+        old = moved["old_playlists"]
+        if old:
+            note += " Once they are gone from it, the old playlist " + ", ".join(
+                f"'{o['title']}'" for o in old) + " can be deleted in YouTube Studio."
+    result["note"] = note
+    result["moved"] = moved["queued"]
+    return result
 
 
 # ------------------------------------------------------------------ the posted list

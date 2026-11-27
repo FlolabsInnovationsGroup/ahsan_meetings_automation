@@ -139,3 +139,15 @@ def add_to_playlist(playlist_id: str, video_id: str) -> str:
     """Put a video in a playlist; returns the new playlist item's id."""
     body = {"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
     return _service().playlistItems().insert(part="snippet", body=body).execute().get("id", "")
+
+
+def playlist_item_id(playlist_id: str, video_id: str) -> str | None:
+    """The id of the playlist item holding this video in this playlist, or None."""
+    items = _service().playlistItems().list(
+        part="id", playlistId=playlist_id, videoId=video_id, maxResults=1).execute().get("items", [])
+    return items[0]["id"] if items else None
+
+
+def remove_from_playlist(playlist_item: str) -> None:
+    """Take a video out of a playlist (playlistItems.delete, 50 quota units)."""
+    _service().playlistItems().delete(id=playlist_item).execute()

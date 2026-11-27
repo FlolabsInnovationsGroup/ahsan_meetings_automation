@@ -145,14 +145,38 @@ def _runner(task: extras.Task) -> optional.Outcome:
     if has.status != optional.DONE:
         return has
     if has.value:
-        return optional.Outcome(optional.DONE, reason="Already in the playlist")
+        removed = _leave_old(task, playlist_id, attempt)
+        return removed or optional.Outcome(optional.DONE, reason="Already in the playlist")
 
     # 4. add it
     added, gone = _call_watching(
         youtube_extra.UNITS_INSERT, lambda: youtube_extra.add_to_playlist(playlist_id, task.video_id), attempt)
     if gone:
         return _forget(task, which)
-    return added
+    if added.status != optional.DONE:
+        return added
+    return _leave_old(task, playlist_id, attempt) or added
+
+
+def _leave_old(task: extras.Task, new_id: str, attempt: int) -> optional.Outcome | None:
+    """For a moved video: take it out of its old team's playlist. None when
+    there is nothing (more) to do; an Outcome to return when it must be retried."""
+    old = (task.data or {}).get("old_playlist") or ""
+    if not old or old == new_id:
+        return None
+    found, gone = _call_watching(
+        youtube_extra.UNITS_LIST, lambda: youtube_extra.playlist_item_id(old, task.video_id), attempt)
+    if gone or found.status == optional.SKIPPED:
+        return None  # the old playlist is already gone
+    if found.status != optional.DONE:
+        return found
+    if not found.value:
+        return None  # not in the old playlist (any more)
+    removed, gone = _call_watching(
+        youtube_extra.UNITS_INSERT, lambda: youtube_extra.remove_from_playlist(found.value), attempt)
+    if gone or removed.status == optional.SKIPPED:
+        return None
+    return removed if removed.status != optional.DONE else None
 
 
 def _call_watching(units: int, fn, attempt: int) -> tuple[optional.Outcome, bool]:
@@ -180,6 +204,78 @@ def _forget(task: extras.Task, which: str) -> optional.Outcome:
         logger.warning("could not clear the %s playlist for %s: %s", which, task.series_key, exc)
     return optional.Outcome(optional.RETRY, reason="The playlist was gone; it will be made again",
                             retry_at=datetime.now(UTC) + RECREATE_AFTER)
+
+
+# ------------------------------------------------------------------ moving a merged team
+
+
+def move_team(alias_keys, into_key: str, old_playlists: dict | None = None, old_label: str = "") -> dict:
+    """A team was merged into another: queue every public video it has on the
+    channel (posted by the app, or matched by the backfill) into the target's
+    playlist of the right kind, and out of the old playlist when that id is
+    known. Never-post, unlisted and private videos are left alone. Returns
+    {"queued": n, "label": target label, "old_playlists": [{"id", "title"}]}."""
+    from autopilot import never_post
+    from ledger.uploads import get_ledger
+
+    out = {"queued": 0, "label": "", "old_playlists": []}
+    cfg = publishing_settings.current()
+    target = series.lookup_key(into_key)
+    if target is None or target.tier != "public" or not cfg.playlists:
+        return out
+    out["label"] = target.label
+    names = {never_post._words(a) for a in alias_keys if a}
+    old_playlists = old_playlists or {}
+    listed = never_post.entries()
+    found: dict[str, tuple[str, str, str, str]] = {}  # video -> (kind, meeting, topic, ledger key or "")
+    for u in get_ledger().posted():
+        if not u.video_id or u.privacy != "public" or u.kind not in ("full", "short", "topic"):
+            continue
+        topic = u.meeting or ""
+        if series.series_key(topic) not in names:
+            continue
+        if never_post.match(topic, None, listed) or never_post.match_words(topic, listed):
+            continue
+        found[u.video_id] = (u.kind, u.meeting, topic, u.key)
+    for t in extras.all_tasks():  # public channel videos the backfill matched
+        if t.kind != "playlist" or not t.video_id or t.video_id in found or t.series_key not in names:
+            continue
+        if (t.data or {}).get("move") or not (t.data or {}).get("backfill"):
+            continue
+        if t.video_kind not in ("full", "short", "topic"):
+            continue
+        title = t.topic or t.meeting or ""
+        if never_post.match(title, None, listed) or never_post.match_words(title, listed):
+            continue
+        found[t.video_id] = (t.video_kind, t.meeting, title, "")
+    seen_old: dict[str, str] = {}
+    for vid, (kind, meeting, topic, ledger_key) in found.items():
+        which = which_for(kind, cfg)
+        if which is None:
+            continue
+        old_id = old_playlists.get(which) or ""
+        data = {"which": which, "move": True, "old_playlist": old_id}
+        if not ledger_key:
+            data["backfill"] = True  # a past channel video: no upload record to check
+        task = extras.Task(kind="playlist", video_id=vid, series_key=target.key, video_kind=kind,
+                           meeting=meeting or topic, topic=topic, item_key=ledger_key or f"move:{vid}", data=data)
+        extras._add(task, None, SimpleNamespace(key=task.item_key, topic=topic, meeting=task.meeting, job_id="",
+                                                meeting_id=None), SimpleNamespace(video_id=vid), kind, None)
+        out["queued"] += 1
+        if old_id and old_id != target.playlists.get(which) and old_label:
+            seen_old[old_id] = title_for(old_label, which, cfg)
+    out["old_playlists"] = [{"id": i, "title": t} for i, t in seen_old.items()]
+    _forget_backfilled(found)
+    return out
+
+
+def _forget_backfilled(video_ids) -> None:
+    data = files.read_json(_backfill_path(), None)
+    if not isinstance(data, dict) or not isinstance(data.get("queued"), dict):
+        return
+    kept = {k: v for k, v in data["queued"].items() if k not in video_ids}
+    if len(kept) != len(data["queued"]):
+        files.write_json(_backfill_path(), {**data, "queued": kept})
 
 
 # ------------------------------------------------------------------ backfill

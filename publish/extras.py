@@ -319,6 +319,14 @@ def _add(task: Task, job, item, posted, video_kind: str, index: int | None) -> N
             # without a video id, the same item
             same = (raw.get("video_id") == task.video_id) if task.video_id else (
                 raw.get("item_key") == task.item_key)
+            if task.data.get("move"):
+                # a move (a team merged into another) goes through even when this
+                # video had a playlist task before; only another open move is the same
+                if (raw["kind"] == task.kind and same and (raw.get("data") or {}).get("move")
+                        and raw.get("state") not in (GIVEN_UP, DONE, SKIPPED)):
+                    _remove_file(task)
+                    return
+                continue
             if raw["kind"] == task.kind and same and raw.get("state") != GIVEN_UP:
                 _remove_file(task)  # the same follow-up is already queued
                 return
