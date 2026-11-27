@@ -936,6 +936,17 @@ def test_the_deploy_waits_for_running_and_queued_jobs_but_not_for_a_transcript(t
     assert busy({"status": "queued"}, {"status": "deciding"}) == 2
     assert busy({"status": "done", "youtube_status": "uploading"}) == 1
     assert busy({"status": "done"}, {"status": "cancelled"}) == 0
+    # a job whose record hasn't changed for over 90 minutes is stuck: it doesn't hold the update
+    import os
+    import time
+
+    (tmp_path / "old").mkdir(exist_ok=True)
+    stuck = tmp_path / "old" / "job.json"
+    stuck.write_text(json.dumps({"status": "done", "youtube_status": "uploading"}), encoding="utf-8")
+    two_hours_ago = time.time() - 2 * 3600
+    os.utime(stuck, (two_hours_ago, two_hours_ago))
+    assert busy() == 0
+    assert busy({"status": "rendering"}) == 1
 
 
 def test_the_container_healthcheck_asks_for_a_route_that_exists():

@@ -121,16 +121,23 @@ main() {
 # transcript is not waited for (owner, 2026-11-01): the restart marks it
 # interrupted, to be run again (the autopilot retries its meetings itself).
 busy_jobs() {
-  python3 - "$1" <<'PY'
-import json, pathlib, sys
+  python3 - "$1" "${STALE_MINUTES:-90}" <<'PY'
+import json, pathlib, sys, time
 finished = {"done", "failed", "skipped_desync", "skipped_empty", "cancelled", "decided"}
 not_waited_for = {"waiting_transcript"}
 uploading = {"queued", "uploading"}
+# A job whose record hasn't changed for this long is stuck (a working job
+# writes its progress far more often): it must not block every update
+# (2026-11-27: one stuck job held two deploys for 45 minutes each).
+stale_after = float(sys.argv[2] if len(sys.argv) > 2 else 90) * 60
 count = 0
 for path in pathlib.Path(sys.argv[1]).glob("*/job.json"):
     try:
         job = json.loads(path.read_text())
+        age = time.time() - path.stat().st_mtime
     except (OSError, ValueError):
+        continue
+    if age > stale_after:
         continue
     shorts = job.get("youtube_shorts") or {}
     busy_upload = job.get("youtube_status") in uploading or any(
